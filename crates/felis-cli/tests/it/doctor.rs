@@ -3,22 +3,17 @@
 //! row set, the status vocabulary, the envelope, and the exit codes are
 //! pinned.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use std::process::Command as StdCommand;
 
 use tempfile::TempDir;
 
-#[path = "common/fixtures.rs"]
-mod fixtures;
-#[path = "common/schema.rs"]
-mod schema;
-
 #[cfg(unix)]
-use felis_daemon::serve::DaemonCaps;
+use crate::common::cli::cli_bin;
+use crate::common::{cli::cli_command, fixtures, schema};
+
 use fixtures::private_dir;
 #[cfg(unix)]
-use fixtures::{quiet_factory, spawn_daemon_with_caps};
+use fixtures::{full_daemon, quiet_factory, spawn_daemon};
 
 fn cli(home: &TempDir) -> StdCommand {
     let mut cmd = cli_resolving(home);
@@ -28,10 +23,8 @@ fn cli(home: &TempDir) -> StdCommand {
 
 /// Without `--socket`, so the child resolves the endpoint itself.
 fn cli_resolving(home: &TempDir) -> StdCommand {
-    let bin = std::env::var("CARGO_BIN_EXE_felis").expect("cargo sets CARGO_BIN_EXE_felis");
-    let mut cmd = StdCommand::new(bin);
+    let mut cmd = cli_command();
     cmd.current_dir(home.path());
-    cmd.env_remove("FELIS_SOCKET");
     cmd.env("HOME", home.path());
     cmd.env("XDG_CONFIG_HOME", home.path().join("config"));
     cmd
@@ -47,6 +40,15 @@ fn selected_config(home: &TempDir) -> std::path::PathBuf {
 
 fn write_config(home: &TempDir, text: &str) {
     std::fs::write(selected_config(home), text).unwrap();
+}
+
+fn check_row<'a>(report: &'a serde_json::Value, check: &str) -> &'a serde_json::Value {
+    report["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["check"] == check)
+        .unwrap_or_else(|| panic!("no {check} row in {report}"))
 }
 
 fn cli_with_config(home: &TempDir) -> StdCommand {
@@ -89,13 +91,8 @@ fn the_default_endpoint_is_the_uids_under_every_environment() {
         };
         let out = cmd.args(["doctor", "--format", "json"]).output().unwrap();
 
-        let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-        let daemon = report["checks"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|check| check["check"] == "daemon")
-            .expect("the daemon row is always reported");
+        let report = schema::stdout_object(&out);
+        let daemon = check_row(&report, "daemon");
         let detail = daemon["detail"].as_str().unwrap();
         assert!(
             detail.contains(&expected),
@@ -117,9 +114,7 @@ fn the_checklist_reports_every_row_with_a_known_status() {
         "{:?}",
         out.status.code()
     );
-    let stdout = String::from_utf8(out.stdout).unwrap();
-    let object: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
-    schema::assert_cli_object(&object);
+    let object = schema::stdout_object(&out);
     assert_eq!(object["v"], 1);
 
     let checks = object["checks"].as_array().unwrap();
@@ -158,15 +153,8 @@ fn a_cold_socket_warns_rather_than_failing_the_run() {
         .args(["doctor", "--format", "json"])
         .output()
         .unwrap();
-    let stdout = String::from_utf8(out.stdout).unwrap();
-    let object: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
-    schema::assert_cli_object(&object);
-    let daemon = object["checks"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|c| c["check"] == "daemon")
-        .unwrap();
+    let object = schema::stdout_object(&out);
+    let daemon = check_row(&object, "daemon");
     assert_eq!(daemon["status"], "warn");
     assert!(
         daemon["detail"].as_str().unwrap().contains("not running"),
@@ -180,29 +168,16 @@ fn a_cold_socket_warns_rather_than_failing_the_run() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_daemon_row_names_the_negotiated_minor_as_negotiated() {
     let home = private_dir();
-    let (server, socket, _pool) =
-        spawn_daemon_with_caps(&home, quiet_factory(), DaemonCaps::default());
+    let (server, socket, _pool) = spawn_daemon(&home, quiet_factory());
 
-    let bin = std::env::var("CARGO_BIN_EXE_felis").unwrap();
-    let out = StdCommand::new(bin)
-        .current_dir(home.path())
-        .env_remove("FELIS_SOCKET")
-        .env("HOME", home.path())
-        .env("XDG_CONFIG_HOME", home.path().join("config"))
+    let out = cli_resolving(&home)
         .arg("--socket")
         .arg(&socket)
         .args(["doctor", "--format", "json"])
         .output()
         .unwrap();
-    let stdout = String::from_utf8(out.stdout).unwrap();
-    let object: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
-    schema::assert_cli_object(&object);
-    let daemon = object["checks"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|c| c["check"] == "daemon")
-        .unwrap();
+    let object = schema::stdout_object(&out);
+    let daemon = check_row(&object, "daemon");
     assert_eq!(daemon["status"], "ok", "{daemon}");
     let detail = daemon["detail"].as_str().unwrap();
     assert!(detail.contains("negotiated wire"), "{detail}");
@@ -223,15 +198,8 @@ fn a_broken_config_fails_its_row_and_points_at_config_check() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
-    let stdout = String::from_utf8(out.stdout).unwrap();
-    let object: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
-    schema::assert_cli_object(&object);
-    let config = object["checks"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|c| c["check"] == "config")
-        .unwrap();
+    let object = schema::stdout_object(&out);
+    let config = check_row(&object, "config");
     assert_eq!(config["status"], "fail");
     let detail = config["detail"].as_str().unwrap();
     assert!(detail.contains("felis config check"), "{detail}");
@@ -247,15 +215,8 @@ fn a_missing_selected_file_fails_the_config_row() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
-    let stdout = String::from_utf8(out.stdout).unwrap();
-    let object: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
-    schema::assert_cli_object(&object);
-    let config = object["checks"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|c| c["check"] == "config")
-        .unwrap();
+    let object = schema::stdout_object(&out);
+    let config = check_row(&object, "config");
     assert_eq!(config["status"], "fail", "{config}");
     let detail = config["detail"].as_str().unwrap();
     assert!(
@@ -272,15 +233,8 @@ fn a_config_warning_does_not_fail_its_row() {
         .args(["doctor", "--format", "json"])
         .output()
         .unwrap();
-    let stdout = String::from_utf8(out.stdout).unwrap();
-    let object: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
-    schema::assert_cli_object(&object);
-    let config = object["checks"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|c| c["check"] == "config")
-        .unwrap();
+    let object = schema::stdout_object(&out);
+    let config = check_row(&object, "config");
     assert_eq!(config["status"], "warn");
     assert!(
         config["detail"].as_str().unwrap().contains("warning"),
@@ -315,37 +269,17 @@ fn the_stream_framing_is_a_usage_error() {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_daemon_row_says_at_capacity_rather_than_not_running() {
-    use felis_daemon::serve::ConnectionAdmission;
-
     let home = private_dir();
-    // A cap of zero admits nothing, so the refusal needs no racing
-    // second dial to provoke.
-    let caps = DaemonCaps {
-        admission: ConnectionAdmission::with_refusal_slots(0, 4),
-        ..DaemonCaps::default()
-    };
-    let (server, socket, _pool) = spawn_daemon_with_caps(&home, quiet_factory(), caps);
+    let (server, socket, _pool) = full_daemon(&home);
 
-    let bin = std::env::var("CARGO_BIN_EXE_felis").unwrap();
-    let out = StdCommand::new(bin)
-        .current_dir(home.path())
-        .env_remove("FELIS_SOCKET")
-        .env("HOME", home.path())
-        .env("XDG_CONFIG_HOME", home.path().join("config"))
+    let out = cli_resolving(&home)
         .arg("--socket")
         .arg(&socket)
         .args(["doctor", "--format", "json"])
         .output()
         .unwrap();
-    let stdout = String::from_utf8(out.stdout).unwrap();
-    let object: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
-    schema::assert_cli_object(&object);
-    let daemon = object["checks"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|c| c["check"] == "daemon")
-        .unwrap();
+    let object = schema::stdout_object(&out);
+    let daemon = check_row(&object, "daemon");
     // Warn, not fail: a peer disconnecting fixes it.
     assert_eq!(daemon["status"], "warn", "{daemon}");
     let detail = daemon["detail"].as_str().unwrap();
@@ -357,9 +291,7 @@ async fn the_daemon_row_says_at_capacity_rather_than_not_running() {
 
 fn report_json(cmd: &mut StdCommand) -> (Option<i32>, serde_json::Value) {
     let out = cmd.output().unwrap();
-    let stdout = String::from_utf8(out.stdout).unwrap();
-    let object: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
-    schema::assert_cli_object(&object);
+    let object = schema::stdout_object(&out);
     (out.status.code(), object)
 }
 
@@ -373,12 +305,7 @@ fn the_report_exits_0_with_a_failing_check_in_it() {
         report_json(cli_with_config(&home).args(["doctor", "report", "--format", "json"]));
     assert_eq!(code, Some(0));
     assert_eq!(object["v"], 1);
-    let config_row = object["checks"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|c| c["check"] == "config")
-        .unwrap();
+    let config_row = check_row(&object, "config");
     assert_eq!(config_row["status"], "fail");
     assert!(object["failed"].as_u64().unwrap() >= 1);
     assert_eq!(object["environment"]["config"]["state"], "invalid");
@@ -410,12 +337,7 @@ fn neither_rendering_prints_the_home_directory() {
         object["environment"]["config"]["diff"]["shader"]["post"][0]["file"],
         "~/crt.wgsl"
     );
-    let config_row = object["checks"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|c| c["check"] == "config")
-        .unwrap();
+    let config_row = check_row(&object, "config");
     assert!(
         config_row["detail"]
             .as_str()
@@ -500,7 +422,7 @@ fn a_failure_before_the_report_is_framed_as_json() {
     let script = format!(
         "cd {dir} && rmdir {dir} && exec {felis} --config felis.toml doctor report --format json",
         dir = gone.display(),
-        felis = std::env::var("CARGO_BIN_EXE_felis").unwrap(),
+        felis = cli_bin().display(),
     );
     let out = StdCommand::new("/bin/sh")
         .arg("-c")
@@ -511,9 +433,7 @@ fn a_failure_before_the_report_is_framed_as_json() {
         .unwrap();
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(out.stdout, Vec::<u8>::new());
-    let stderr = String::from_utf8(out.stderr).unwrap();
-    let object: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap();
-    schema::assert_cli_object(&object);
+    let object = schema::stderr_object(&out);
     assert_eq!(object["error"]["kind"], "usage");
 }
 

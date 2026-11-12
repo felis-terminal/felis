@@ -1,14 +1,14 @@
-#![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
-
 #[cfg(unix)]
 use std::sync::Arc;
 #[cfg(unix)]
 use std::time::Duration;
 
 #[cfg(unix)]
+use super::cli::felis_out;
+#[cfg(unix)]
 use felis_daemon::{
     SessionPool,
-    serve::{DaemonCaps, SessionFactory, bind_unix},
+    serve::{ConnectionAdmission, DaemonCaps, SessionFactory, bind_unix},
 };
 #[cfg(unix)]
 use felis_protocol::messages::SpawnArgs;
@@ -31,15 +31,38 @@ pub(crate) fn private_dir() -> TempDir {
     tmp
 }
 
+/// The FHS pair keeps first claim; the runner's own `PATH` is the tail
+/// that lets a host with no FHS `/bin` (NixOS links only `sh` there)
+/// resolve anything. Without it `sh` runs the body with the program
+/// missing and reports nothing, so the test passes having exercised
+/// nothing.
 #[cfg(unix)]
-pub(crate) fn quiet_factory() -> SessionFactory {
-    Arc::new(|_| {
+pub(crate) fn fixture_path() -> std::ffi::OsString {
+    let mut path = std::ffi::OsString::from("/bin:/usr/bin");
+    if let Some(host) = std::env::var_os("PATH") {
+        path.push(":");
+        path.push(host);
+    }
+    path
+}
+
+/// Every session runs `script` as an `sh -c` body in a cleared
+/// environment.
+#[cfg(unix)]
+pub(crate) fn sh_factory(script: impl Into<String>) -> SessionFactory {
+    let script = script.into();
+    Arc::new(move |_| {
         let mut cmd = PtyCommand::new("/bin/sh");
-        cmd.args(["-c", "read x"]);
+        cmd.args(["-c", &script]);
         cmd.env_clear();
-        cmd.env("PATH", "/bin:/usr/bin");
+        cmd.env("PATH", fixture_path());
         cmd
     })
+}
+
+#[cfg(unix)]
+pub(crate) fn quiet_factory() -> SessionFactory {
+    sh_factory("read x")
 }
 
 #[cfg(unix)]
@@ -74,6 +97,23 @@ pub(crate) fn spawn_daemon_with_caps(
     (handle, path, pool)
 }
 
+/// A daemon whose admission cap is zero: the refusal needs no racing
+/// second dial to provoke.
+#[cfg(unix)]
+pub(crate) fn full_daemon(
+    tmp: &TempDir,
+) -> (
+    tokio::task::JoinHandle<()>,
+    std::path::PathBuf,
+    Arc<Mutex<SessionPool>>,
+) {
+    let caps = DaemonCaps {
+        admission: ConnectionAdmission::with_refusal_slots(0, 4),
+        ..DaemonCaps::default()
+    };
+    spawn_daemon_with_caps(tmp, quiet_factory(), caps)
+}
+
 #[cfg(unix)]
 pub(crate) async fn create_and_detach(socket: &std::path::Path) -> u128 {
     use felis_client_core::{Offer, connect};
@@ -103,17 +143,9 @@ pub(crate) async fn create_and_detach(socket: &std::path::Path) -> u128 {
 /// stdout: the parked drain lands a child's output on its own schedule.
 #[cfg(unix)]
 pub(crate) async fn poll_until(socket: &std::path::Path, args: &[&str], needle: &str) -> String {
-    let bin = std::env::var_os("CARGO_BIN_EXE_felis").expect("cargo sets the felis bin path");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
-        let out = std::process::Command::new(&bin)
-            .env_remove("FELIS_SOCKET")
-            .env_remove("RUST_LOG")
-            .arg("--socket")
-            .arg(socket)
-            .args(args)
-            .output()
-            .expect("run felis");
+        let out = felis_out(socket, args);
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
         if stdout.contains(needle) {
             return stdout;

@@ -3,16 +3,12 @@
 //! it prefers over any on `PATH`, so each test picks the frontend's
 //! answer.
 
-#![cfg(unix)]
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 
 use tempfile::TempDir;
 
-#[path = "common/schema.rs"]
-mod schema;
+use crate::common::{cli::felis_command, schema};
 
 const LISTING: &str = r#"{"v":2,"families":[{"name":"DejaVu Sans Mono","monospace":true,"styles":[{"weight":400,"italic":false},{"weight":700,"italic":true}]},{"name":"Noto Color Emoji","monospace":false,"styles":[{"weight":400,"italic":false}]}]}"#;
 
@@ -32,11 +28,10 @@ fn install(frontend: Option<&str>) -> (TempDir, PathBuf) {
 }
 
 fn fonts_list(felis: &Path, extra: &[&str]) -> Output {
-    Command::new(felis)
+    felis_command(felis)
         .args(["fonts", "list"])
         .args(extra)
         .env("PATH", "")
-        .env_remove("FELIS_SOCKET")
         .output()
         .unwrap()
 }
@@ -67,9 +62,7 @@ fn json_output_is_one_point_object() {
     let (_dir, felis) = install(Some(&format!("echo '{LISTING}'")));
     let out = fonts_list(&felis, &["--format", "json"]);
     assert!(out.status.success(), "{out:?}");
-    let object: serde_json::Value =
-        serde_json::from_str(String::from_utf8(out.stdout).unwrap().trim()).unwrap();
-    schema::assert_cli_object(&object);
+    let object = schema::stdout_object(&out);
     assert_eq!(
         object,
         serde_json::json!({"v": 1, "families": [
@@ -112,7 +105,7 @@ fn the_global_carrier_and_config_flags_are_refused() {
         &["--socket", "/nonexistent/felis.sock"],
         &["--config", "/nonexistent/config.toml"],
     ] {
-        let out = Command::new(&felis)
+        let out = felis_command(&felis)
             .args(globals)
             .args(["fonts", "list"])
             .output()

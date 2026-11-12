@@ -1,31 +1,19 @@
 //! `felis daemon` integration tests (docs/reference/cli.md
 //! "Daemon status", "Daemon stop", "Daemon upgrade").
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-#![cfg(unix)]
-
-use std::process::Command as StdCommand;
 use std::time::Duration;
 
 use felis_daemon::serve::DaemonCaps;
 
-#[path = "common/fixtures.rs"]
-mod fixtures;
-#[path = "common/schema.rs"]
-mod schema;
-
-use fixtures::{
-    create_and_detach, private_dir, quiet_factory, spawn_daemon, spawn_daemon_with_caps,
+use crate::common::{
+    cli::{cli_command, cli_on, felis_out},
+    fixtures, schema,
 };
 
-/// `FELIS_SOCKET` is cleared so a run started inside a felis window
-/// cannot address the developer's own daemon.
-fn cli_command() -> StdCommand {
-    let bin = std::env::var("CARGO_BIN_EXE_felis").expect("cargo sets CARGO_BIN_EXE_felis");
-    let mut cmd = StdCommand::new(bin);
-    cmd.env_remove("FELIS_SOCKET");
-    cmd
-}
+use fixtures::{
+    create_and_detach, full_daemon, private_dir, quiet_factory, spawn_daemon,
+    spawn_daemon_with_caps,
+};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn status_json_reports_every_resource_with_limit_and_usage() {
@@ -40,26 +28,19 @@ async fn status_json_reports_every_resource_with_limit_and_usage() {
     );
     create_and_detach(&socket).await;
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["daemon", "status", "--format", "json"])
-        .output()
-        .expect("run felis daemon status");
+    let out = felis_out(&socket, &["daemon", "status", "--format", "json"]);
     assert!(
         out.status.success(),
         "non-zero exit: {:?} stderr={}",
         out.status,
         String::from_utf8_lossy(&out.stderr)
     );
-    let stdout = String::from_utf8(out.stdout).unwrap();
-    let object: serde_json::Value = serde_json::from_str(stdout.trim()).expect("one JSON object");
-    schema::assert_cli_object(&object);
+    let object = schema::stdout_object(&out);
     assert_eq!(object["v"], 1);
     assert_eq!(
         object["version"].as_str(),
         Some(felis_daemon::build_identity().to_string().as_str()),
-        "the report names the build the handshake reported: {stdout}"
+        "the report names the build the handshake reported: {object}"
     );
     assert_eq!(
         object["protocol"]["major"].as_u64(),
@@ -68,18 +49,18 @@ async fn status_json_reports_every_resource_with_limit_and_usage() {
     assert_eq!(
         object["protocol"]["minor"].as_u64(),
         Some(u64::from(felis_protocol::preface::PROTOCOL_MINOR)),
-        "the daemon's own minor, not the connection's effective one: {stdout}"
+        "the daemon's own minor, not the connection's effective one: {object}"
     );
     assert!(
         object["worker_threads"].as_u64().is_some_and(|n| n > 0),
-        "the daemon's worker count must be reported: {stdout}"
+        "the daemon's worker count must be reported: {object}"
     );
 
     let rows = object["resources"].as_array().expect("a resources array");
     let row = |name: &str| {
         rows.iter()
             .find(|r| r["resource"] == name)
-            .unwrap_or_else(|| panic!("no {name} row in {stdout}"))
+            .unwrap_or_else(|| panic!("no {name} row in {object}"))
     };
     for name in [
         "connections",
@@ -119,7 +100,7 @@ async fn status_json_reports_every_resource_with_limit_and_usage() {
     assert!(images["per_subject_limit"].as_u64().is_some());
     assert!(
         images["global_limit"].is_null(),
-        "no daemon-wide image budget exists to report: {stdout}"
+        "no daemon-wide image budget exists to report: {object}"
     );
 
     let outbox = row("subscriber_queue_bytes");
@@ -137,7 +118,7 @@ async fn status_json_reports_every_resource_with_limit_and_usage() {
     );
     assert!(
         input["global_limit"].is_null(),
-        "input is budgeted per session only: {stdout}"
+        "input is budgeted per session only: {object}"
     );
 }
 
@@ -146,12 +127,7 @@ async fn status_human_names_the_build_and_every_row() {
     let tmp = private_dir();
     let (_server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["daemon", "status"])
-        .output()
-        .expect("run felis daemon status");
+    let out = felis_out(&socket, &["daemon", "status"]);
     assert!(out.status.success());
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(stdout.contains("version:"), "{stdout}");
@@ -193,21 +169,10 @@ async fn status_against_no_daemon_exits_two_with_a_typed_error() {
     let tmp = private_dir();
     let socket = tmp.path().join("nothing.sock");
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["daemon", "status", "--format", "json"])
-        .output()
-        .expect("run felis daemon status");
+    let out = felis_out(&socket, &["daemon", "status", "--format", "json"]);
     assert_eq!(out.status.code(), Some(2));
     assert!(out.stdout.is_empty(), "a failure writes no result object");
-    let stderr = String::from_utf8(out.stderr).unwrap();
-    let line = stderr
-        .lines()
-        .find(|l| l.starts_with('{'))
-        .expect("a machine error object");
-    let object: serde_json::Value = serde_json::from_str(line).unwrap();
-    schema::assert_cli_object(&object);
+    let object = schema::stderr_object(&out);
     assert_eq!(object["v"], 1);
     assert_eq!(object["error"]["kind"], "daemon_unreachable");
 }
@@ -230,39 +195,17 @@ fn status_refuses_the_stream_framing_as_a_usage_error() {
 /// the remedy (free a connection, retry) is the caller's to take.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_verb_dialing_a_full_daemon_is_typed_at_capacity() {
-    use felis_daemon::serve::ConnectionAdmission;
-
     let tmp = private_dir();
-    // A cap of zero admits nothing, so the refusal needs no racing
-    // second dial to provoke.
-    let (_server, socket, _pool) = spawn_daemon_with_caps(
-        &tmp,
-        quiet_factory(),
-        DaemonCaps {
-            admission: ConnectionAdmission::with_refusal_slots(0, 4),
-            ..DaemonCaps::default()
-        },
-    );
+    let (_server, socket, _pool) = full_daemon(&tmp);
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["daemon", "status", "--format", "json"])
-        .output()
-        .expect("run felis daemon status");
+    let out = felis_out(&socket, &["daemon", "status", "--format", "json"]);
     assert_eq!(
         out.status.code(),
         Some(1),
         "a full daemon is a refused-but-well-formed request: stderr={}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let stderr = String::from_utf8(out.stderr).unwrap();
-    let line = stderr
-        .lines()
-        .find(|l| l.starts_with('{'))
-        .expect("a machine error object");
-    let object: serde_json::Value = serde_json::from_str(line).unwrap();
-    schema::assert_cli_object(&object);
+    let object = schema::stderr_object(&out);
     assert_eq!(object["error"]["kind"], "at_capacity");
     let message = object["error"]["message"].as_str().unwrap();
     assert!(message.contains("at 0 of 0 connections"), "{message}");
@@ -277,33 +220,19 @@ async fn stop_refuses_while_sessions_remain_and_reports_the_count() {
     let (_server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     create_and_detach(&socket).await;
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["daemon", "stop", "--format", "json"])
-        .output()
-        .expect("run felis daemon stop");
+    let out = felis_out(&socket, &["daemon", "stop", "--format", "json"]);
     assert_eq!(out.status.code(), Some(1), "a typed refusal exits 1");
-    let stderr = String::from_utf8(out.stderr).unwrap();
-    let object: serde_json::Value =
-        serde_json::from_str(stderr.trim()).expect("one JSON error object");
-    schema::assert_cli_object(&object);
+    let object = schema::stderr_object(&out);
     assert_eq!(object["v"], 1);
     assert_eq!(object["error"]["kind"], "refused");
     assert_eq!(
         object["error"]["sessions"], 1,
-        "the count a caller decides --force against: {stderr}"
+        "the count a caller decides --force against: {object}"
     );
 
-    let after = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["daemon", "status", "--format", "json"])
-        .output()
-        .expect("run felis daemon status");
+    let after = felis_out(&socket, &["daemon", "status", "--format", "json"]);
     assert!(after.status.success(), "the refused daemon still answers");
-    let status: serde_json::Value =
-        serde_json::from_slice(after.stdout.trim_ascii()).expect("one JSON object");
+    let status = schema::stdout_object(&after);
     assert_eq!(status["draining"], false, "a refused stop starts no drain");
 }
 
@@ -313,16 +242,9 @@ async fn stop_on_an_empty_daemon_reports_stopping_and_ends_it() {
     let tmp = private_dir();
     let (_server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["daemon", "stop", "--format", "json"])
-        .output()
-        .expect("run felis daemon stop");
+    let out = felis_out(&socket, &["daemon", "stop", "--format", "json"]);
     assert_eq!(out.status.code(), Some(0));
-    let stdout = String::from_utf8(out.stdout).unwrap();
-    let object: serde_json::Value = serde_json::from_str(stdout.trim()).expect("one JSON object");
-    schema::assert_cli_object(&object);
+    let object = schema::stdout_object(&out);
     assert_eq!(object["outcome"], "stopping");
     assert_eq!(object["mode"], "if_empty");
 
@@ -348,12 +270,7 @@ async fn stop_on_an_empty_daemon_reports_stopping_and_ends_it() {
 
     // And a second stop finds nothing to talk to: exit 2, never a
     // daemon started in order to be stopped.
-    let again = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["daemon", "stop", "--format", "json"])
-        .output()
-        .expect("run felis daemon stop");
+    let again = felis_out(&socket, &["daemon", "stop", "--format", "json"]);
     assert_eq!(again.status.code(), Some(2));
     assert_eq!(
         std::os::unix::net::UnixStream::connect(&socket)
@@ -383,39 +300,28 @@ async fn a_refused_upgrade_reports_the_reason_and_leaves_the_daemon_serving() {
     let (_server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     create_and_detach(&socket).await;
 
-    let out = cli_command()
+    let out = cli_on(&socket)
         .env("PATH", path_with_a_successor(&tmp))
-        .arg("--socket")
-        .arg(&socket)
         .args(["daemon", "upgrade", "--format", "json"])
         .output()
         .expect("run felis daemon upgrade");
     assert_eq!(out.status.code(), Some(1), "a typed refusal exits 1");
-    let stderr = String::from_utf8(out.stderr).unwrap();
-    let object: serde_json::Value =
-        serde_json::from_str(stderr.trim()).expect("one JSON error object");
-    schema::assert_cli_object(&object);
+    let object = schema::stderr_object(&out);
     assert_eq!(object["error"]["kind"], "refused");
     assert!(
         object["error"]["reason"].is_string(),
-        "the refusal carries the daemon's reason: {stderr}"
+        "the refusal carries the daemon's reason: {object}"
     );
     assert!(
         object["error"]["message"]
             .as_str()
             .is_some_and(|m| m.contains("felis daemon stop --when-empty")),
-        "the message names the drain-and-restart remedy: {stderr}"
+        "the message names the drain-and-restart remedy: {object}"
     );
 
-    let after = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "list", "--format", "json"])
-        .output()
-        .expect("run felis sessions list");
+    let after = felis_out(&socket, &["sessions", "list", "--format", "json"]);
     assert!(after.status.success(), "the refused daemon still answers");
-    let roster: serde_json::Value =
-        serde_json::from_slice(after.stdout.trim_ascii()).expect("one JSON object");
+    let roster = schema::stdout_object(&after);
     assert_eq!(
         roster["sessions"].as_array().map(Vec::len),
         Some(1),
@@ -430,16 +336,13 @@ async fn an_upgrade_with_no_daemon_running_starts_none() {
     let tmp = private_dir();
     let socket = tmp.path().join("daemon.sock");
 
-    let out = cli_command()
+    let out = cli_on(&socket)
         .env("PATH", path_with_a_successor(&tmp))
-        .arg("--socket")
-        .arg(&socket)
         .args(["daemon", "upgrade", "--format", "json"])
         .output()
         .expect("run felis daemon upgrade");
     assert_eq!(out.status.code(), Some(2));
-    let object: serde_json::Value =
-        serde_json::from_slice(out.stderr.trim_ascii()).expect("one JSON error object");
+    let object = schema::stderr_object(&out);
     assert_eq!(object["error"]["kind"], "daemon_unreachable");
     assert!(
         std::os::unix::net::UnixStream::connect(&socket).is_err(),
@@ -459,8 +362,6 @@ fn an_upgrade_over_host_without_ssh_is_unreachable() {
         .output()
         .expect("run felis daemon upgrade");
     assert_eq!(out.status.code(), Some(2));
-    let object: serde_json::Value =
-        serde_json::from_slice(out.stderr.trim_ascii()).expect("one JSON error object");
-    schema::assert_cli_object(&object);
+    let object = schema::stderr_object(&out);
     assert_eq!(object["error"]["kind"], "daemon_unreachable");
 }

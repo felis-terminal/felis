@@ -3,40 +3,37 @@
 //! depend on the build the suite runs from
 //! (`docs/reference/cli.md` "Version reporting").
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-#![cfg(unix)]
-
 use std::process::{Command as StdCommand, Output};
 
-use felis_daemon::serve::{ConnectionAdmission, DaemonCaps};
 use tempfile::TempDir;
 
-#[path = "common/fixtures.rs"]
-mod fixtures;
-#[path = "common/schema.rs"]
-mod schema;
+use crate::common::{
+    cli::{cli_bin, cli_command, cli_on},
+    fixtures, schema,
+};
 
-use fixtures::{private_dir, quiet_factory, spawn_daemon, spawn_daemon_with_caps};
+use fixtures::{full_daemon, private_dir, quiet_factory, spawn_daemon};
 
-fn felis(home: &TempDir, args: &[&std::ffi::OsStr]) -> Output {
-    let bin = std::env::var("CARGO_BIN_EXE_felis").expect("cargo sets CARGO_BIN_EXE_felis");
-    StdCommand::new(bin)
-        .env_remove("FELIS_SOCKET")
+fn felis(home: &TempDir, args: &[&str]) -> Output {
+    cli_command()
         .env("HOME", home.path())
         .args(args)
         .output()
         .expect("run felis")
 }
 
-fn version_verb(socket: &std::path::Path, home: &TempDir, extra: &[&str]) -> String {
-    let mut args: Vec<&std::ffi::OsStr> =
-        vec!["--socket".as_ref(), socket.as_ref(), "version".as_ref()];
-    args.extend(extra.iter().copied().map(std::ffi::OsStr::new));
-    String::from_utf8(felis(home, &args).stdout).unwrap()
+fn version_verb(socket: &std::path::Path, home: &TempDir, extra: &[&str]) -> Output {
+    cli_on(socket)
+        .env("HOME", home.path())
+        .arg("version")
+        .args(extra)
+        .output()
+        .expect("run felis version")
 }
 
 fn daemon_row(socket: &std::path::Path, home: &TempDir) -> String {
-    version_verb(socket, home, &[])
+    String::from_utf8(version_verb(socket, home, &[]).stdout)
+        .unwrap()
         .lines()
         .find(|l| l.starts_with("daemon"))
         .expect("a daemon row")
@@ -51,11 +48,10 @@ fn daemon_row(socket: &std::path::Path, home: &TempDir) -> String {
 fn the_self_report_needs_no_daemon_no_client_and_no_path() {
     let home = private_dir();
     let socket = home.path().join("cold.sock");
-    let bin = std::env::var("CARGO_BIN_EXE_felis").unwrap();
     // Through the environment stamp rather than `--socket`: the flag
     // is refused beside `--version`, and this test is about what the
     // report touches, not about where the socket was named.
-    let out = StdCommand::new(bin)
+    let out = StdCommand::new(cli_bin())
         .env_clear()
         .env("HOME", home.path())
         .env("PATH", "")
@@ -94,8 +90,7 @@ fn the_self_report_refuses_to_share_the_line_with_a_command() {
         vec!["--version", "sessions", "list"],
         vec!["--version", "--", "htop"],
     ] {
-        let argv: Vec<&std::ffi::OsStr> = args.iter().copied().map(std::ffi::OsStr::new).collect();
-        let out = felis(&home, &argv);
+        let out = felis(&home, &args);
         assert_eq!(out.status.code(), Some(2), "{args:?}");
         assert!(out.stdout.is_empty(), "{args:?}");
         let stderr = String::from_utf8(out.stderr).unwrap();
@@ -122,8 +117,7 @@ fn the_self_report_refuses_the_globals_it_could_not_honor() {
         vec!["--host", "vm", "--ssh-arg=-p", "--version"],
         vec!["--class", "scratch", "--version"],
     ] {
-        let argv: Vec<&std::ffi::OsStr> = args.iter().copied().map(std::ffi::OsStr::new).collect();
-        let out = felis(&home, &argv);
+        let out = felis(&home, &args);
         assert_eq!(out.status.code(), Some(2), "{args:?}");
         assert!(out.stdout.is_empty(), "{args:?}");
         let stderr = String::from_utf8(out.stderr).unwrap();
@@ -146,16 +140,7 @@ async fn the_daemon_row_reads_not_running_only_when_nothing_answers() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_daemon_row_says_at_capacity_rather_than_not_running() {
     let tmp = private_dir();
-    // A cap of zero admits nothing, so the refusal needs no racing
-    // second dial to provoke.
-    let (_server, socket, _pool) = spawn_daemon_with_caps(
-        &tmp,
-        quiet_factory(),
-        DaemonCaps {
-            admission: ConnectionAdmission::with_refusal_slots(0, 4),
-            ..DaemonCaps::default()
-        },
-    );
+    let (_server, socket, _pool) = full_daemon(&tmp);
 
     let home = private_dir();
     let row = daemon_row(&socket, &home);
@@ -171,9 +156,7 @@ async fn the_machine_form_carries_a_typed_identity_per_process() {
     let (_server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let home = private_dir();
 
-    let out = version_verb(&socket, &home, &["--format", "json"]);
-    let json: serde_json::Value = serde_json::from_str(&out).expect("one JSON object");
-    schema::assert_cli_object(&json);
+    let json = schema::stdout_object(&version_verb(&socket, &home, &["--format", "json"]));
     assert_eq!(json["v"], 1);
     assert_eq!(json["cli"]["version"], env!("CARGO_PKG_VERSION"));
     assert!(json["cli"]["revision"].is_string());
@@ -188,8 +171,7 @@ async fn the_machine_form_carries_a_typed_identity_per_process() {
 async fn the_machine_form_reports_an_absent_daemon_as_a_null_row() {
     let home = private_dir();
     let out = version_verb(&home.path().join("cold.sock"), &home, &["--format", "json"]);
-    let json: serde_json::Value = serde_json::from_str(&out).expect("one JSON object");
-    schema::assert_cli_object(&json);
+    let json = schema::stdout_object(&out);
     assert_eq!(json["daemon_status"], "not_running");
     assert!(json["daemon"].is_null());
 }
