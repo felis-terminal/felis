@@ -4,7 +4,6 @@ use super::*;
 ///
 /// Subscriber pull-paces at ~60 Hz like the GUI client to measure throughput.
 /// Run with `FELIS_BENCH_FILE=/path` and `--run-ignored all --no-capture`.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "measurement; needs FELIS_BENCH_FILE, run with --run-ignored all"]
 async fn measure_attached_cat_drain() {
@@ -87,7 +86,6 @@ async fn measure_attached_cat_drain() {
 /// off collapses this to a handful (`docs/explanation/rendering/pipeline.md`).
 /// Run with `cargo nextest run --cargo-profile release -p felis-daemon
 /// --run-ignored all --no-capture measure_pull_cycles_under_flood`.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "measurement; timing-dependent, run with --run-ignored all"]
 async fn measure_pull_cycles_under_flood() {
@@ -197,7 +195,6 @@ async fn measure_pull_cycles_under_flood() {
 /// "Cross-host carrier: SSH stdio"):
 /// byte positions of the first `RowDelta` and first `ImageMsg::Header`,
 /// projected to wall-clock under a 100 ms RTT, 10 Mbps model.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn time_to_first_frame_under_simulated_slow_link() {
     use std::num::NonZeroU16;

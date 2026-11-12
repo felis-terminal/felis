@@ -3,7 +3,6 @@ use super::*;
 /// docs/reference/protocols/kitty-graphics.md: a placement scrolled into
 /// history survives with a non-positive anchor row, and the mirror hears
 /// the move via `PlacementsShifted`.
-#[cfg(unix)]
 #[tokio::test]
 async fn scroll_into_scrollback_retains_placement_and_emits_shift() {
     use crate::graphics::ImageEvent;
@@ -75,7 +74,6 @@ async fn scroll_into_scrollback_retains_placement_and_emits_shift() {
 /// docs/reference/protocols/kitty-graphics.md: a scroll of a DECSTBM
 /// region moves the placements inside it, re-stated one by one, and
 /// leaves the one below it alone.
-#[cfg(unix)]
 #[tokio::test]
 async fn a_region_scroll_moves_the_placements_inside_the_region() {
     use crate::graphics::ImageEvent;
@@ -143,7 +141,6 @@ async fn a_region_scroll_moves_the_placements_inside_the_region() {
 
 /// Header → Chunks → Complete must arrive for every image, each placement
 /// after its image.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn rehydrate_replays_persisted_images_and_placements() {
     use std::num::NonZeroU16;

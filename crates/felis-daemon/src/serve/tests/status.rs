@@ -2,7 +2,6 @@ use super::*;
 
 /// `Ops::Status` carries a row for every accounted resource; a missing row
 /// is the bug.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn status_reports_every_accounted_resource_with_its_limit() {
     use felis_protocol::messages::{ResourceKind, ResourceUnit, SubjectKind};
@@ -116,7 +115,6 @@ async fn status_reports_every_accounted_resource_with_its_limit() {
 /// Drives two samples from opposite ends so a row fed from the wrong source
 /// fails rather than coincidentally agreeing, and holds two sessions of
 /// different sizes so a sum cannot pass for a deepest subject.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn status_samples_what_the_sessions_are_holding() {
     use felis_grid::images::{ImageEntry, ImageFormat, ImageId};
@@ -242,7 +240,6 @@ async fn status_samples_what_the_sessions_are_holding() {
 /// four outboxes of distinct depths spread over two sessions pin the
 /// split: the deepest subject is a single subscriber, never a session's
 /// sum and never the daemon-wide one.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn status_sums_every_subscriber_backlog_and_names_the_deepest() {
     use felis_protocol::messages::ResourceKind;

@@ -2,7 +2,6 @@ use super::*;
 
 /// Returns `(RowDelta frame count, total dirty rows, Scrolled count)` once
 /// `deadline` passes with no new frame.
-#[cfg(unix)]
 async fn drive_and_count_grid_frames(
     body: &'static str,
     deadline: Duration,
@@ -68,7 +67,6 @@ async fn drive_and_count_grid_frames(
 
 /// docs/reference/ipc.md: each diff cycle collapses its dirty rows into one
 /// `RowDelta`.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn row_delta_coalescing_collapses_burst_frames() {
     let body = "printf 'line %s\\n' $(seq 1 120); sleep 0.2";
@@ -89,7 +87,6 @@ async fn row_delta_coalescing_collapses_burst_frames() {
 
 /// Same-user mirroring (session-lifecycle.md): attach is additive, and
 /// input from either fans in to the one PTY.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_subscribers_mirror_one_session() {
     let tmp = private_dir();
@@ -124,7 +121,6 @@ async fn two_subscribers_mirror_one_session() {
 
 /// A late joiner is rehydrated from the current grid while the existing
 /// subscriber stays on incremental diffs.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn late_joiner_rehydrates_output_that_predates_its_attach() {
     let tmp = private_dir();
@@ -146,7 +142,6 @@ async fn late_joiner_rehydrates_output_that_predates_its_attach() {
     );
 }
 
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn detaching_one_mirror_keeps_the_other_streaming() {
     let tmp = private_dir();
@@ -189,7 +184,6 @@ async fn detaching_one_mirror_keeps_the_other_streaming() {
 
 /// The failure unit is the one connection: a refused frame tears down its
 /// sender and nothing else.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_corrupt_frame_kills_its_own_connection_and_nothing_else() {
     let tmp = private_dir();
@@ -254,7 +248,6 @@ async fn a_corrupt_frame_kills_its_own_connection_and_nothing_else() {
 /// `ForceDetach` (docs/explanation/architecture/control-surfaces.md) evicts
 /// every attached client, keeps the session pooled, and reports
 /// `was_attached = true`.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn force_detach_evicts_every_subscriber_and_keeps_the_session() {
     let tmp = private_dir();
@@ -322,7 +315,6 @@ async fn force_detach_evicts_every_subscriber_and_keeps_the_session() {
     assert_eq!(meta.subscribers, 0, "all subscribers evicted");
 }
 
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn force_detach_idle_session_reports_not_attached() {
     let tmp = private_dir();
@@ -376,7 +368,6 @@ async fn force_detach_idle_session_reports_not_attached() {
 /// target answers a typed denial beside `queued: 0`, while a switch
 /// whose post-condition already holds answers the same count with no
 /// denial at all.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_switch_with_no_targeted_window_separates_the_count_from_the_denial() {
     use felis_protocol::messages::SwitchDenied;

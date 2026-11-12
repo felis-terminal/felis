@@ -9,6 +9,7 @@ use super::*;
 mod animation;
 mod commands;
 mod decode;
+// Windows declines file transmission with ENOTSUP.
 #[cfg(unix)]
 mod file_media;
 mod placements;

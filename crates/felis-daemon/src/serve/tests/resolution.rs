@@ -1,6 +1,5 @@
 use super::*;
 
-#[cfg(unix)]
 async fn attach_failure<R>(reader: &mut FrameReader<R>) -> (AttachRefusal, String)
 where
     R: tokio::io::AsyncRead + Unpin,
@@ -12,7 +11,6 @@ where
     }
 }
 
-#[cfg(unix)]
 async fn info_outcome<R>(reader: &mut FrameReader<R>) -> InfoOutcome
 where
     R: tokio::io::AsyncRead + Unpin,
@@ -24,7 +22,6 @@ where
     }
 }
 
-#[cfg(unix)]
 async fn pooled_session(pool: &Arc<Mutex<SessionPool>>) -> SessionId {
     let session_task::SessionLifecycle { id, .. } = session_task::spawn_owned(
         pool,
@@ -44,7 +41,6 @@ async fn pooled_session(pool: &Arc<Mutex<SessionPool>>) -> SessionId {
 /// Session ids are random, so an ambiguous prefix has to be found
 /// rather than written down: sessions are added until two of them share
 /// a leading hex digit, which sixteen possible digits make quick.
-#[cfg(unix)]
 async fn prefix_matching_several(pool: &Arc<Mutex<SessionPool>>) -> (String, u32) {
     let mut ids: Vec<u128> = Vec::new();
     for _ in 0..24 {
@@ -64,7 +60,6 @@ async fn prefix_matching_several(pool: &Arc<Mutex<SessionPool>>) -> (String, u32
 
 /// A prefix names a session the daemon resolves for itself, and the ack
 /// carries the full id back.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_attach_by_prefix_lands_on_the_session_the_daemon_resolves() {
     let tmp = private_dir();
@@ -90,7 +85,6 @@ async fn an_attach_by_prefix_lands_on_the_session_the_daemon_resolves() {
 /// The resolution and the handle are taken under one lock, so a session
 /// destroyed before the attach arrives is a `NoMatch` on the prefix
 /// rather than an attach to a row the pool has dropped.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_prefix_whose_session_was_destroyed_refuses_with_no_match() {
     let tmp = private_dir();
@@ -135,7 +129,6 @@ async fn a_prefix_whose_session_was_destroyed_refuses_with_no_match() {
 
 /// A prefix short enough to name two sessions is refused by count, not
 /// resolved to whichever the pool happened to walk last.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_ambiguous_prefix_on_attach_refuses_with_the_match_count() {
     let tmp = private_dir();
@@ -165,7 +158,6 @@ async fn an_ambiguous_prefix_on_attach_refuses_with_the_match_count() {
 /// `Ops::Info` answers the row and the display prefix from one pool
 /// snapshot, and the prefix it reports resolves back to the same
 /// session.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ops_info_answers_a_row_and_a_short_id_checked_against_the_pool() {
     let tmp = private_dir();
@@ -196,7 +188,6 @@ async fn ops_info_answers_a_row_and_a_short_id_checked_against_the_pool() {
     );
 }
 
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ops_info_reports_no_match_and_ambiguity_as_outcome_arms() {
     let tmp = private_dir();

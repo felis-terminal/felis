@@ -1,6 +1,5 @@
 use super::*;
 
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn streams_pty_output_through_the_grid_to_the_wire() {
     let tmp = private_dir();
@@ -22,7 +21,6 @@ async fn streams_pty_output_through_the_grid_to_the_wire() {
 
 /// Text written after a placement in the same write lands where kitty
 /// moved the cursor: right of the image, on its last row.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn text_after_a_placement_in_one_write_lands_right_of_the_image() {
     let tmp = private_dir();
@@ -59,7 +57,6 @@ async fn text_after_a_placement_in_one_write_lands_right_of_the_image() {
 
 /// The daemon hands region bytes back rather than spawning the argv: the
 /// pipe target belongs to the requester's host.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_region_request_ships_the_bytes_back_and_spawns_nothing() {
     let tmp = private_dir();
@@ -107,7 +104,6 @@ async fn a_region_request_ships_the_bytes_back_and_spawns_nothing() {
     );
 }
 
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn resize_over_the_wire_makes_subsequent_row_deltas_carry_the_new_width() {
     use felis_grid::decode_row;

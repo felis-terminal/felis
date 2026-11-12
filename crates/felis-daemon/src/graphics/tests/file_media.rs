@@ -1,6 +1,5 @@
 use super::*;
 
-#[cfg(unix)] // t=f/t=t file transmission is Unix-only (Windows declines with ENOTSUP)
 #[test]
 fn transmit_via_file_path_reads_bytes_from_disk() {
     let (mut grid, mut images, mut placements) = handler_state();
@@ -25,7 +24,6 @@ fn transmit_via_file_path_reads_bytes_from_disk() {
 
 /// kitty reads `t=f` / `t=t` data from `O=` for `S=` bytes, as for `t=s`;
 /// producers that pack several images into one file rely on it.
-#[cfg(unix)]
 #[test]
 fn file_transmissions_read_the_offset_and_size_they_name() {
     let bytes = [0, 0, 0xDE, 0xAD, 0xBE, 0xEF, 0, 0];
@@ -52,7 +50,6 @@ fn file_transmissions_read_the_offset_and_size_they_name() {
     assert!(!t.exists());
 }
 
-#[cfg(unix)]
 #[test]
 fn a_temp_file_range_past_its_end_is_refused_and_still_unlinked() {
     let t = graphics_tempfile_with_bytes(&[0; 4]);
@@ -70,7 +67,6 @@ fn a_temp_file_range_past_its_end_is_refused_and_still_unlinked() {
     assert!(!t.exists());
 }
 
-#[cfg(unix)] // t=f/t=t file transmission is Unix-only (Windows declines with ENOTSUP)
 #[test]
 fn transmit_via_file_path_rejects_relative_path() {
     let (mut grid, mut images, mut placements) = handler_state();
@@ -83,7 +79,6 @@ fn transmit_via_file_path_rejects_relative_path() {
     assert!(response.starts_with(b"\x1b_Gi=101;EINVAL"));
 }
 
-#[cfg(unix)] // t=f/t=t file transmission is Unix-only (Windows declines with ENOTSUP)
 #[test]
 fn transmit_via_file_path_rejects_parent_dir_component() {
     let (mut grid, mut images, mut placements) = handler_state();
@@ -99,7 +94,6 @@ fn transmit_via_file_path_rejects_parent_dir_component() {
     );
 }
 
-#[cfg(unix)] // t=f/t=t file transmission is Unix-only (Windows declines with ENOTSUP)
 #[test]
 fn transmit_via_file_path_missing_file_returns_ebadf() {
     let (mut grid, mut images, mut placements) = handler_state();
@@ -115,7 +109,6 @@ fn transmit_via_file_path_missing_file_returns_ebadf() {
     );
 }
 
-#[cfg(unix)] // t=f/t=t file transmission is Unix-only (Windows declines with ENOTSUP)
 #[test]
 fn transmit_via_file_path_rejects_directory_target_with_ebadf() {
     let (mut grid, mut images, mut placements) = handler_state();
@@ -132,7 +125,6 @@ fn transmit_via_file_path_rejects_directory_target_with_ebadf() {
     );
 }
 
-#[cfg(unix)] // t=f/t=t file transmission is Unix-only (Windows declines with ENOTSUP)
 #[test]
 fn transmit_via_temp_file_reads_then_unlinks() {
     let (mut grid, mut images, mut placements) = handler_state();
@@ -159,7 +151,6 @@ fn transmit_via_temp_file_reads_then_unlinks() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn a_marked_temp_file_in_a_nested_temp_directory_is_unlinked() {
     let dir = tempfile::Builder::new()
@@ -178,7 +169,6 @@ fn a_marked_temp_file_in_a_nested_temp_directory_is_unlinked() {
     assert!(!t.exists());
 }
 
-#[cfg(unix)]
 #[test]
 fn a_temp_file_without_the_protocol_marker_is_read_but_kept() {
     let t = tempfile_with_bytes(&[0xFE, 0xED, 0xFA, 0xCE]);
@@ -191,7 +181,6 @@ fn a_temp_file_without_the_protocol_marker_is_read_but_kept() {
     assert!(t.path().exists());
 }
 
-#[cfg(unix)]
 #[test]
 fn a_temp_file_outside_the_temp_directories_is_not_deletable() {
     let marked = "/etc/tty-graphics-protocol-x";
@@ -202,7 +191,6 @@ fn a_temp_file_outside_the_temp_directories_is_not_deletable() {
     assert!(!deletable_path(&tmp, &format!("{}/x", tmp.display())));
 }
 
-#[cfg(unix)]
 #[test]
 fn kernel_interfaces_and_devices_are_not_readable_locations() {
     let readable = |p: &str| readable_location(std::path::Path::new(p));
@@ -215,7 +203,6 @@ fn kernel_interfaces_and_devices_are_not_readable_locations() {
     assert!(readable("/home/user/procfile"));
 }
 
-#[cfg(unix)]
 fn file_command(medium: &'static [u8], path: &std::path::Path) -> CompleteCommand {
     complete(
         &[(b't', medium), (b'f', b"32"), (b's', b"1"), (b'v', b"1")],
@@ -225,7 +212,6 @@ fn file_command(medium: &'static [u8], path: &std::path::Path) -> CompleteComman
 
 /// Missing, not regular, out of range or undecodable: a producer told
 /// any of these apart would learn what the path holds.
-#[cfg(unix)]
 #[test]
 fn every_file_medium_failure_gets_the_same_error() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -278,7 +264,6 @@ fn file_media_refuse_proc_even_through_a_symlinked_parent() {
 
 /// A resolved parent is walked without following links, so a component
 /// that became a symlink after the canonicalize is refused.
-#[cfg(unix)]
 #[test]
 fn the_resolved_parent_walk_refuses_a_symlinked_component() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -289,7 +274,6 @@ fn the_resolved_parent_walk_refuses_a_symlinked_component() {
     assert!(open_resolved_dir(&real.join("link")).is_err());
 }
 
-#[cfg(unix)]
 #[test]
 fn a_fifo_is_refused_without_waiting_for_a_writer() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -307,7 +291,6 @@ fn a_fifo_is_refused_without_waiting_for_a_writer() {
     }
 }
 
-#[cfg(unix)] // symlink NOFOLLOW guard is POSIX-only
 #[test]
 fn transmit_via_temp_file_rejects_symlink_with_nofollow() {
     use std::os::unix::fs::symlink;
@@ -339,7 +322,6 @@ fn transmit_via_temp_file_rejects_symlink_with_nofollow() {
     );
 }
 
-#[cfg(unix)] // t=f/t=t file transmission is Unix-only (Windows declines with ENOTSUP)
 #[test]
 fn transmit_via_temp_file_rejects_relative_path() {
     let (mut grid, mut images, mut placements) = handler_state();
@@ -355,7 +337,6 @@ fn transmit_via_temp_file_rejects_relative_path() {
     );
 }
 
-#[cfg(unix)] // t=f/t=t file transmission is Unix-only (Windows declines with ENOTSUP)
 #[test]
 fn transmit_via_file_path_oversize_file_returns_ebadf() {
     // `set_len` is sparse on macOS and Linux, so the file costs no disk.

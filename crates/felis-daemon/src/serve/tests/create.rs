@@ -2,7 +2,6 @@ use super::*;
 
 /// Out-of-bound geometry on a create is refused with the dedicated reason
 /// before anything is execed (REQ-605a); the factory panics if it runs.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_create_past_the_geometry_bound_is_refused_before_anything_spawns() {
     for rows in [65_536_u32, u32::MAX] {
@@ -52,7 +51,6 @@ async fn a_create_past_the_geometry_bound_is_refused_before_anything_spawns() {
 /// Absence is the only way a create asks for the daemon default: an
 /// omitted geometry lands on 24x80, and a create that spells a zero
 /// axis out is refused rather than defaulted (REQ-605a).
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_absent_create_geometry_defaults_and_a_zero_axis_is_refused() {
     let tmp = private_dir();
@@ -102,7 +100,6 @@ async fn an_absent_create_geometry_defaults_and_a_zero_axis_is_refused() {
 
 /// The same values on a resize are clamped instead: a resize the user did
 /// not ask for must never cost them their shell (REQ-605a).
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_resize_past_the_geometry_bound_is_clamped_and_reported_clamped() {
     use felis_protocol::messages::{MAX_GRID_COLS, MAX_GRID_ROWS};
@@ -154,7 +151,6 @@ async fn a_resize_past_the_geometry_bound_is_clamped_and_reported_clamped() {
 
 /// The cap refuses the create typed, with nothing executed, and the
 /// connection survives.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_create_past_the_session_cap_is_refused_and_executes_nothing() {
     let tmp = private_dir();
@@ -222,7 +218,6 @@ async fn a_create_past_the_session_cap_is_refused_and_executes_nothing() {
 
 /// Two spawns in flight on one connection: each reply carries its own
 /// `request_id` and its own session.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_ops_spawns_are_attributed_by_request_id() {
     let tmp = private_dir();
@@ -272,7 +267,6 @@ async fn concurrent_ops_spawns_are_attributed_by_request_id() {
 /// The create ack means "attached" and "nameable": the rehydrate burst
 /// follows it with no `Attach` in between, and any connection can
 /// already look the session up by id.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_create_is_attached_when_its_ack_is_written() {
     let tmp = private_dir();
@@ -300,7 +294,6 @@ async fn a_create_is_attached_when_its_ack_is_written() {
 
 /// Until a create publishes its row, no other connection can list,
 /// resolve, attach to or destroy the session it may still roll back.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_create_in_flight_is_unnameable_until_it_publishes() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
@@ -341,7 +334,6 @@ async fn a_create_in_flight_is_unnameable_until_it_publishes() {
 
 /// A create whose subscribe cannot land leaves nothing in the pool, and
 /// its rollback does not return until the child is reaped.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_rolled_back_create_leaves_no_pool_entry_and_no_child() {
     let tmp = private_dir();
@@ -353,7 +345,6 @@ async fn a_rolled_back_create_leaves_no_pool_entry_and_no_child() {
 /// Rollback reaps a child that ignores hangup via `SIGKILL` within timeout.
 ///
 /// `trap '' HUP` survives `exec` so `SIGKILL` cleanup is exercised directly.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_rolled_back_create_reaps_a_child_that_ignores_the_hangup() {
     let tmp = private_dir();
@@ -365,7 +356,6 @@ async fn a_rolled_back_create_reaps_a_child_that_ignores_the_hangup() {
     rolls_back_a_create_and_reaps(body, &pid_file).await;
 }
 
-#[cfg(unix)]
 async fn rolls_back_a_create_and_reaps(body: String, pid_file: &Path) {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     let factory: SessionFactory = Arc::new(move |_| {
@@ -409,7 +399,6 @@ async fn rolls_back_a_create_and_reaps(body: String, pid_file: &Path) {
 /// so the row must answer lookups before the ack can be read. The
 /// carrier here is a byte or two wide, so the ack cannot complete until
 /// this test reads it.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_create_is_nameable_before_its_ack_is_read() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
@@ -474,7 +463,6 @@ async fn a_create_is_nameable_before_its_ack_is_read() {
 /// A creation still in flight appears in the status row: reading `0`
 /// while a concurrent create is refused at the cap would name a limit
 /// the refusal disagrees with (REQ-915).
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn daemon_status_counts_a_creation_still_in_flight() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
@@ -515,7 +503,6 @@ async fn daemon_status_counts_a_creation_still_in_flight() {
 
 /// A create is published before its ack, so an ack that never lands
 /// leaves the session detached and listed, as a lost `Spawned` does.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_create_whose_ack_cannot_be_written_leaves_a_detached_session() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
@@ -578,7 +565,6 @@ async fn a_create_whose_ack_cannot_be_written_leaves_a_detached_session() {
 
 /// Returns once the session task has left the pool and its child is
 /// reaped: `quiescent` stays false until the teardown guard drops.
-#[cfg(unix)]
 async fn shut_down_and_reap(pool: &Arc<Mutex<SessionPool>>, id: SessionId) {
     let handle = pool.lock().await.handle_cloned(id).expect("listed");
     let delivered = handle.shutdown().await;
@@ -595,7 +581,6 @@ async fn shut_down_and_reap(pool: &Arc<Mutex<SessionPool>>, id: SessionId) {
 
 /// The shell writes its pid before `exec`ing the long sleep, so the
 /// value is the process the daemon must reap.
-#[cfg(unix)]
 async fn read_pid(path: &Path) -> i32 {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
@@ -616,7 +601,6 @@ async fn read_pid(path: &Path) -> i32 {
 /// fixtures are stand-ins for a session's *child*, and this probe needs
 /// the real utility. A zombie answers `kill -0`, so an unreaped exit
 /// still reads as alive.
-#[cfg(unix)]
 fn pid_alive(pid: i32) -> bool {
     std::process::Command::new("kill")
         .args(["-0", &pid.to_string()])
@@ -630,7 +614,6 @@ fn pid_alive(pid: i32) -> bool {
 /// Registration happens after the PTY fork/exec, so a cap that merely reads
 /// the pool count admits every create that reached the check before the
 /// first one registered; the slot must not overshoot either way.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_creates_never_admit_past_the_session_cap() {
     const CAP: usize = 3;

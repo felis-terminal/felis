@@ -2,7 +2,6 @@ use super::*;
 
 // ── Connection admission and handshake deadlines (REQ-916) ──────────
 
-#[cfg(unix)]
 fn admission_caps(max_connections: usize, refusal_slots: usize) -> DaemonCaps {
     DaemonCaps {
         admission: ConnectionAdmission::with_refusal_slots(max_connections, refusal_slots),
@@ -12,7 +11,6 @@ fn admission_caps(max_connections: usize, refusal_slots: usize) -> DaemonCaps {
 
 /// A permit is released by the connection task's drop, which the peer's
 /// close only schedules, so a freed slot has to be polled for.
-#[cfg(unix)]
 async fn dial_until_admitted(path: &Path) -> bool {
     for _ in 0..200 {
         let (read_half, write_half) = connect(path).await.unwrap();
@@ -37,7 +35,6 @@ async fn dial_until_admitted(path: &Path) -> bool {
     false
 }
 
-#[cfg(unix)]
 async fn connections_row<R, W>(
     reader: &mut FrameReader<R>,
     writer: &mut FrameWriter<W>,
@@ -58,7 +55,6 @@ where
 
 /// Over-cap peers get a frame, not a bare close: to a client a closed
 /// socket is indistinguishable from a crashed daemon.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_dial_past_the_connection_cap_is_refused_at_capacity() {
     let tmp = private_dir();
@@ -104,7 +100,6 @@ async fn a_dial_past_the_connection_cap_is_refused_at_capacity() {
 
 /// The refusal path is itself admitted: a flood of silent peers can
 /// hold at most `max_connections + refusal slots` tasks and fds.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn silent_over_cap_peers_are_bounded_by_the_refusal_slots() {
     use felis_protocol::preface::ClientPreface;
@@ -141,7 +136,6 @@ async fn silent_over_cap_peers_are_bounded_by_the_refusal_slots() {
 /// Every accounted connection is one the daemon is serving, and every
 /// permit comes back: the aggregate bound the per-resource ceilings
 /// multiply against.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_connections_row_counts_admitted_peers_and_every_permit_returns() {
     const CAP: usize = 4;
@@ -213,7 +207,6 @@ async fn the_connections_row_counts_admitted_peers_and_every_permit_returns() {
 
 /// A peer that opens a socket and writes nothing costs a task and an fd
 /// for the preface deadline, not forever.
-#[cfg(unix)]
 #[tokio::test(start_paused = true)]
 async fn a_peer_that_writes_no_preface_is_cut_at_the_preface_deadline() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
@@ -243,7 +236,6 @@ async fn a_peer_that_writes_no_preface_is_cut_at_the_preface_deadline() {
     drop((client_r, client_w));
 }
 
-#[cfg(unix)]
 #[tokio::test(start_paused = true)]
 async fn a_peer_that_stops_after_the_preface_is_cut_at_the_hello_deadline() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
@@ -271,7 +263,6 @@ async fn a_peer_that_stops_after_the_preface_is_cut_at_the_hello_deadline() {
     drop((reader, writer));
 }
 
-#[cfg(unix)]
 #[tokio::test(start_paused = true)]
 async fn a_peer_that_never_attaches_is_cut_at_the_first_operation_deadline() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
@@ -309,7 +300,6 @@ async fn a_peer_that_never_attaches_is_cut_at_the_first_operation_deadline() {
 /// daemon is reachable and writes nothing until its user asks for
 /// something, so the deadline that cut it would kill an idle client
 /// for working as documented.
-#[cfg(unix)]
 #[tokio::test(start_paused = true)]
 async fn an_ops_connection_may_idle_before_its_first_verb() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
@@ -346,7 +336,6 @@ async fn an_ops_connection_may_idle_before_its_first_verb() {
 /// Only the *first* operation is timed: an ops client idles between verbs
 /// and an observer idles for hours, and cutting either would break the
 /// connection modes the daemon exists to serve.
-#[cfg(unix)]
 #[tokio::test(start_paused = true)]
 async fn an_ops_connection_that_answered_one_verb_may_idle() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
@@ -382,7 +371,6 @@ async fn an_ops_connection_that_answered_one_verb_may_idle() {
 /// One dial through the handshake, `None` when the daemon is full. Any
 /// other answer is a bug in the admission path, so it panics rather
 /// than counting as a refusal.
-#[cfg(unix)]
 async fn try_admit(path: &Path, mode: ConnectionMode) -> Option<Halves> {
     let (read_half, write_half) = connect(path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
@@ -408,7 +396,6 @@ async fn try_admit(path: &Path, mode: ConnectionMode) -> Option<Halves> {
 /// The permit rides on the connection's task, and the deadline paths end
 /// that task with `Err`. Were the drop not the release, every silent
 /// peer would ratchet the daemon's ceiling down by one.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_connection_cut_at_a_handshake_deadline_returns_its_permit() {
     let tmp = private_dir();
@@ -448,7 +435,6 @@ async fn a_connection_cut_at_a_handshake_deadline_returns_its_permit() {
 /// the load does pushes the admitted count past the ceiling, over-cap
 /// dials are typed rather than dropped, and once the peers are gone
 /// every permit is back.
-#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn many_sessions_with_mirrors_never_pass_the_connection_ceiling() {
     const SESSIONS: usize = 16;
@@ -553,7 +539,6 @@ async fn many_sessions_with_mirrors_never_pass_the_connection_ceiling() {
 /// shipped GUI asks `Ops::List` for its roster before it names a
 /// session, so a peer that stops after that verb is still a stalled
 /// window holding a permit.
-#[cfg(unix)]
 #[tokio::test(start_paused = true)]
 async fn a_window_that_only_lists_is_still_cut_at_the_first_operation_deadline() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
