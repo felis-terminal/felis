@@ -7,19 +7,9 @@ fn reserved_bottom_rows_keeps_bar_row_free_of_cells() {
     let g = drive(2, 3, b"AB\r\nCD");
     let atlas = MockAtlas::full(slot());
     let theme = Theme::default();
-    let mut buffers = RowPaint::default();
-    CellPainter::new(
-        g.screen(),
-        metrics(),
-        &ResolvedTheme::new(&theme),
-        &atlas,
-        &ShapeFrame::empty(),
-    )
-    .without_compaction()
-    .with_cursor_visible(true)
-    .with_viewport(0, u32::from(g.rows()))
-    .with_reserved_bottom_rows(1)
-    .extend_screen(&mut buffers);
+    let buffers = build_instances_with(g.screen(), metrics(), &theme, &atlas, |painter| {
+        painter.with_reserved_bottom_rows(1)
+    });
     assert_eq!(
         buffers.rects.len(),
         3,

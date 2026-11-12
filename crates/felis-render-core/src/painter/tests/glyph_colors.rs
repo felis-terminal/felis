@@ -106,7 +106,7 @@ fn decscnm_xors_with_sgr_reverse_over_the_resolved_pair() {
     let (dfg, dbg) = (theme.fg, theme.bg);
     let (efg, ebg) = (pal(1), pal(4));
 
-    let plain = build_instances_with_reverse(g.screen(), metrics(), &theme, &atlas, false);
+    let plain = build_instances(g.screen(), metrics(), &theme, &atlas);
     let pairs: Vec<_> = (0..4)
         .map(|i| (plain.glyphs[i].color, plain.rects[i].color))
         .collect();
@@ -116,7 +116,9 @@ fn decscnm_xors_with_sgr_reverse_over_the_resolved_pair() {
         "without DECSCNM only SGR 7 swaps",
     );
 
-    let reversed = build_instances_with_reverse(g.screen(), metrics(), &theme, &atlas, true);
+    let reversed = build_instances_with(g.screen(), metrics(), &theme, &atlas, |painter| {
+        painter.with_reverse_video(true)
+    });
     let pairs: Vec<_> = (0..4)
         .map(|i| (reversed.glyphs[i].color, reversed.rects[i].color))
         .collect();

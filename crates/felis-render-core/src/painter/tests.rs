@@ -116,28 +116,26 @@ fn build_instances<A: AtlasView>(
     theme: &Theme,
     atlas: &A,
 ) -> RowPaint {
-    build_instances_with_reverse(screen, metrics, theme, atlas, false)
+    build_instances_with(screen, metrics, theme, atlas, |painter| painter)
 }
 
-fn build_instances_with_reverse<A: AtlasView>(
+/// [`build_instances`] with `configure` applied to its painter last.
+fn build_instances_with<A: AtlasView>(
     screen: &ScreenBuffer,
     metrics: CellMetrics,
     theme: &Theme,
     atlas: &A,
-    screen_reverse: bool,
+    configure: impl for<'p> FnOnce(CellPainter<'p, A>) -> CellPainter<'p, A>,
 ) -> RowPaint {
+    let theme = ResolvedTheme::new(theme);
+    let frame = ShapeFrame::empty();
     let mut buffers = RowPaint::default();
-    CellPainter::new(
-        screen,
-        metrics,
-        &ResolvedTheme::new(theme),
-        atlas,
-        &ShapeFrame::empty(),
+    configure(
+        CellPainter::new(screen, metrics, &theme, atlas, &frame)
+            .without_compaction()
+            .with_cursor_visible(true)
+            .with_viewport(0, u32::from(screen.rows())),
     )
-    .without_compaction()
-    .with_cursor_visible(true)
-    .with_viewport(0, u32::from(screen.rows()))
-    .with_reverse_video(screen_reverse)
     .extend_screen(&mut buffers);
     buffers
 }

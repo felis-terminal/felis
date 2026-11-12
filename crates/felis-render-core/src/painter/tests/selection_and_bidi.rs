@@ -119,23 +119,13 @@ fn selection_highlight_paints_cells_inside_the_range() {
     let g = drive(1, 5, b"\x1b[?25l"); // hide cursor for isolation
     let atlas = MockAtlas::full(slot());
     let theme = Theme::default();
-    let mut buffers = RowPaint::default();
-    CellPainter::new(
-        g.screen(),
-        metrics(),
-        &ResolvedTheme::new(&theme),
-        &atlas,
-        &ShapeFrame::empty(),
-    )
-    .without_compaction()
-    .with_cursor_visible(true)
-    .with_selection(Some(SelectionRange {
-        start: (0, 1),
-        end: (0, 3),
-        rectangle: false,
-    }))
-    .with_viewport(0, u32::from(g.rows()))
-    .extend_screen(&mut buffers);
+    let buffers = build_instances_with(g.screen(), metrics(), &theme, &atlas, |painter| {
+        painter.with_selection(Some(SelectionRange {
+            start: (0, 1),
+            end: (0, 3),
+            rectangle: false,
+        }))
+    });
     assert_eq!(buffers.rects.len(), 5);
     assert_eq!(buffers.rects[0].color, theme.bg, "cell 0 outside selection");
     for (i, buffer) in buffers.rects.iter().enumerate().skip(1).take(3) {
@@ -149,23 +139,13 @@ fn selection_highlight_clips_to_boundary_columns_across_rows() {
     let g = drive(3, 4, b"\x1b[?25l");
     let atlas = MockAtlas::full(slot());
     let theme = Theme::default();
-    let mut buffers = RowPaint::default();
-    CellPainter::new(
-        g.screen(),
-        metrics(),
-        &ResolvedTheme::new(&theme),
-        &atlas,
-        &ShapeFrame::empty(),
-    )
-    .without_compaction()
-    .with_cursor_visible(true)
-    .with_selection(Some(SelectionRange {
-        start: (0, 2),
-        end: (2, 1),
-        rectangle: false,
-    }))
-    .with_viewport(0, u32::from(g.rows()))
-    .extend_screen(&mut buffers);
+    let buffers = build_instances_with(g.screen(), metrics(), &theme, &atlas, |painter| {
+        painter.with_selection(Some(SelectionRange {
+            start: (0, 2),
+            end: (2, 1),
+            rectangle: false,
+        }))
+    });
     let inside = |idx: usize| matches!(idx, 2..=9);
     for (idx, inst) in buffers.rects.iter().enumerate() {
         if inside(idx) {
@@ -181,18 +161,7 @@ fn no_selection_leaves_every_cell_on_theme_bg() {
     let g = drive(1, 5, b"\x1b[?25l");
     let atlas = MockAtlas::full(slot());
     let theme = Theme::default();
-    let mut buffers = RowPaint::default();
-    CellPainter::new(
-        g.screen(),
-        metrics(),
-        &ResolvedTheme::new(&theme),
-        &atlas,
-        &ShapeFrame::empty(),
-    )
-    .without_compaction()
-    .with_cursor_visible(true)
-    .with_viewport(0, u32::from(g.rows()))
-    .extend_screen(&mut buffers);
+    let buffers = build_instances(g.screen(), metrics(), &theme, &atlas);
     assert_eq!(buffers.rects.len(), 5);
     for (i, inst) in buffers.rects.iter().enumerate() {
         assert_eq!(inst.color, theme.bg, "cell {i}");
@@ -208,23 +177,13 @@ fn bidi_marker_wins_over_selection_highlight() {
     p.advance(&mut g, "\x1b[?25lA\u{202E}B".as_bytes());
     let atlas = MockAtlas::full(slot());
     let theme = Theme::default();
-    let mut buffers = RowPaint::default();
-    CellPainter::new(
-        g.screen(),
-        metrics(),
-        &ResolvedTheme::new(&theme),
-        &atlas,
-        &ShapeFrame::empty(),
-    )
-    .without_compaction()
-    .with_cursor_visible(true)
-    .with_selection(Some(SelectionRange {
-        start: (0, 0),
-        end: (0, 3),
-        rectangle: false,
-    }))
-    .with_viewport(0, u32::from(g.rows()))
-    .extend_screen(&mut buffers);
+    let buffers = build_instances_with(g.screen(), metrics(), &theme, &atlas, |painter| {
+        painter.with_selection(Some(SelectionRange {
+            start: (0, 0),
+            end: (0, 3),
+            rectangle: false,
+        }))
+    });
     for r in 0..g.rows() {
         for c in 0..g.cols() {
             let Some(cell) = g.cell(r, c) else { continue };
@@ -244,23 +203,13 @@ fn rectangle_selection_clips_every_row_to_column_range() {
     let g = drive(3, 4, b"\x1b[?25l");
     let atlas = MockAtlas::full(slot());
     let theme = Theme::default();
-    let mut buffers = RowPaint::default();
-    CellPainter::new(
-        g.screen(),
-        metrics(),
-        &ResolvedTheme::new(&theme),
-        &atlas,
-        &ShapeFrame::empty(),
-    )
-    .without_compaction()
-    .with_cursor_visible(true)
-    .with_selection(Some(SelectionRange {
-        start: (0, 1),
-        end: (2, 2),
-        rectangle: true,
-    }))
-    .with_viewport(0, u32::from(g.rows()))
-    .extend_screen(&mut buffers);
+    let buffers = build_instances_with(g.screen(), metrics(), &theme, &atlas, |painter| {
+        painter.with_selection(Some(SelectionRange {
+            start: (0, 1),
+            end: (2, 2),
+            rectangle: true,
+        }))
+    });
     let inside = |r: u16, c: u16| (1..=2).contains(&c) && (0..=2).contains(&r);
     for r in 0..3u16 {
         for c in 0..4u16 {

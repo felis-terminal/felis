@@ -373,18 +373,9 @@ fn unfocused_window_suppresses_the_cursor_block() {
     let g = drive(1, 3, b"AB");
     let atlas = MockAtlas::full(slot());
     let theme = Theme::default();
-    let mut buffers = RowPaint::default();
-    CellPainter::new(
-        g.screen(),
-        metrics(),
-        &ResolvedTheme::new(&theme),
-        &atlas,
-        &ShapeFrame::empty(),
-    )
-    .without_compaction()
-    .with_cursor_visible(false)
-    .with_viewport(0, u32::from(g.rows()))
-    .extend_screen(&mut buffers);
+    let buffers = build_instances_with(g.screen(), metrics(), &theme, &atlas, |painter| {
+        painter.with_cursor_visible(false)
+    });
     assert_eq!(buffers.rects.len(), 3);
     for inst in &buffers.rects {
         assert_eq!(inst.color, theme.bg, "no cell painted with cursor swap");
@@ -395,18 +386,13 @@ fn unfocused_window_suppresses_the_cursor_block() {
 fn unfocused_window_suppresses_underline_marker_too() {
     let g = drive(1, 3, b"\x1b[4 qA");
     let atlas = MockAtlas::full(slot());
-    let mut buffers = RowPaint::default();
-    CellPainter::new(
+    let buffers = build_instances_with(
         g.screen(),
         metrics(),
-        &ResolvedTheme::new(&Theme::default()),
+        &Theme::default(),
         &atlas,
-        &ShapeFrame::empty(),
-    )
-    .without_compaction()
-    .with_cursor_visible(false)
-    .with_viewport(0, u32::from(g.rows()))
-    .extend_screen(&mut buffers);
+        |painter| painter.with_cursor_visible(false),
+    );
     let marker = buffers
         .rects
         .iter()
@@ -421,18 +407,13 @@ fn unfocused_window_suppresses_underline_marker_too() {
 fn unfocused_window_suppresses_bar_marker_too() {
     let g = drive(1, 3, b"\x1b[6 qA");
     let atlas = MockAtlas::full(slot());
-    let mut buffers = RowPaint::default();
-    CellPainter::new(
+    let buffers = build_instances_with(
         g.screen(),
         metrics(),
-        &ResolvedTheme::new(&Theme::default()),
+        &Theme::default(),
         &atlas,
-        &ShapeFrame::empty(),
-    )
-    .without_compaction()
-    .with_cursor_visible(false)
-    .with_viewport(0, u32::from(g.rows()))
-    .extend_screen(&mut buffers);
+        |painter| painter.with_cursor_visible(false),
+    );
     let marker = buffers
         .rects
         .iter()

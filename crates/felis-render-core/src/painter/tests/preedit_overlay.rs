@@ -7,7 +7,6 @@ fn preedit_overlay_span_is_reserved_from_the_cell_walk() {
     let g = drive(1, 5, b"ABCDE");
     let atlas = MockAtlas::full(slot());
     let theme = Theme::default();
-    let mut buffers = RowPaint::default();
     let overlay = PreeditOverlay {
         anchor: (0, 1),
         text: "あ".to_string(),
@@ -23,18 +22,9 @@ fn preedit_overlay_span_is_reserved_from_the_cell_walk() {
         }),
         "wide char covers cols 1 and 2",
     );
-    CellPainter::new(
-        g.screen(),
-        metrics(),
-        &ResolvedTheme::new(&theme),
-        &atlas,
-        &ShapeFrame::empty(),
-    )
-    .without_compaction()
-    .with_cursor_visible(true)
-    .with_viewport(0, u32::from(g.rows()))
-    .with_preedit(span)
-    .extend_screen(&mut buffers);
+    let buffers = build_instances_with(g.screen(), metrics(), &theme, &atlas, |painter| {
+        painter.with_preedit(span)
+    });
     let cw = metrics().width as f32;
     let leaked = |x: f32| {
         let col = (x / cw).round() as u16;

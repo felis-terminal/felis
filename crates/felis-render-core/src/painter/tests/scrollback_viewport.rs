@@ -7,18 +7,7 @@ fn extend_screen_viewport_zero_paints_same_bg_as_live_path() {
     let g = drive(2, 4, b"\x1b[?25lAB\r\nCD");
     let atlas = MockAtlas::full(slot());
     let theme = Theme::default();
-    let mut buffers = RowPaint::default();
-    CellPainter::new(
-        g.screen(),
-        metrics(),
-        &ResolvedTheme::new(&theme),
-        &atlas,
-        &ShapeFrame::empty(),
-    )
-    .without_compaction()
-    .with_cursor_visible(true)
-    .with_viewport(0, u32::from(g.rows()))
-    .extend_screen(&mut buffers);
+    let buffers = build_instances(g.screen(), metrics(), &theme, &atlas);
     assert_eq!(
         buffers.rects.len(),
         8,
@@ -41,18 +30,9 @@ fn extend_screen_paints_scrollbar_lane_while_browsing() {
     assert!(!g.scrollback().is_empty());
     let atlas = MockAtlas::full(slot());
     let theme = Theme::default();
-    let mut buffers = RowPaint::default();
-    CellPainter::new(
-        g.screen(),
-        metrics(),
-        &ResolvedTheme::new(&theme),
-        &atlas,
-        &ShapeFrame::empty(),
-    )
-    .without_compaction()
-    .with_cursor_visible(true)
-    .with_viewport(1, 3)
-    .extend_screen(&mut buffers);
+    let buffers = build_instances_with(g.screen(), metrics(), &theme, &atlas, |painter| {
+        painter.with_viewport(1, 3)
+    });
     assert_eq!(
         buffers.rects.len(),
         8 + 2,
@@ -75,30 +55,12 @@ fn extend_screen_hides_cursor_while_viewport_above_zero() {
     p.advance(&mut g, b"row1\r\nrow2\r\nrow3");
     let atlas = MockAtlas::full(slot());
     let theme = Theme::default();
-    let mut buffers_live = RowPaint::default();
-    let mut buffers_browse = RowPaint::default();
-    CellPainter::new(
-        g.screen(),
-        metrics(),
-        &ResolvedTheme::new(&theme),
-        &atlas,
-        &ShapeFrame::empty(),
-    )
-    .without_compaction()
-    .with_cursor_visible(true)
-    .with_viewport(0, 3)
-    .extend_screen(&mut buffers_live);
-    CellPainter::new(
-        g.screen(),
-        metrics(),
-        &ResolvedTheme::new(&theme),
-        &atlas,
-        &ShapeFrame::empty(),
-    )
-    .without_compaction()
-    .with_cursor_visible(true)
-    .with_viewport(1, 3)
-    .extend_screen(&mut buffers_browse);
+    let buffers_live = build_instances_with(g.screen(), metrics(), &theme, &atlas, |painter| {
+        painter.with_viewport(0, 3)
+    });
+    let buffers_browse = build_instances_with(g.screen(), metrics(), &theme, &atlas, |painter| {
+        painter.with_viewport(1, 3)
+    });
     let cursor = g.cursor();
     let idx = usize::from(cursor.row) * usize::from(g.cols()) + usize::from(cursor.col);
     assert_eq!(

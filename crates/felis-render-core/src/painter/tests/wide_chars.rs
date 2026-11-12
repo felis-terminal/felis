@@ -24,20 +24,9 @@ fn fg_in_col(buffers: &RowPaint, col: u16) -> Option<&GlyphDraw> {
 fn build_with_selection(screen: &ScreenBuffer, range: SelectionRange) -> RowPaint {
     let theme = Theme::default();
     let atlas = MockAtlas::full(slot());
-    let mut buffers = RowPaint::default();
-    CellPainter::new(
-        screen,
-        metrics(),
-        &ResolvedTheme::new(&theme),
-        &atlas,
-        &ShapeFrame::empty(),
-    )
-    .without_compaction()
-    .with_cursor_visible(true)
-    .with_selection(Some(range))
-    .with_viewport(0, u32::from(screen.rows()))
-    .extend_screen(&mut buffers);
-    buffers
+    build_instances_with(screen, metrics(), &theme, &atlas, |painter| {
+        painter.with_selection(Some(range))
+    })
 }
 
 #[test]
@@ -151,23 +140,13 @@ fn a_preedit_over_the_spacer_hides_the_lead_glyph_but_keeps_its_background() {
     let g = drive(1, 6, "\x1b[?25la\x1b[41m字\x1b[mb".as_bytes());
     let theme = Theme::default();
     let atlas = MockAtlas::full(slot());
-    let mut buffers = RowPaint::default();
-    CellPainter::new(
-        g.screen(),
-        metrics(),
-        &ResolvedTheme::new(&theme),
-        &atlas,
-        &ShapeFrame::empty(),
-    )
-    .without_compaction()
-    .with_cursor_visible(true)
-    .with_viewport(0, u32::from(g.rows()))
-    .with_preedit(Some(PreeditSpan {
-        row: 0,
-        col_start: 2,
-        col_end: 4,
-    }))
-    .extend_screen(&mut buffers);
+    let buffers = build_instances_with(g.screen(), metrics(), &theme, &atlas, |painter| {
+        painter.with_preedit(Some(PreeditSpan {
+            row: 0,
+            col_start: 2,
+            col_end: 4,
+        }))
+    });
     assert!(fg_in_col(&buffers, 0).is_some(), "a draws");
     assert!(
         fg_in_col(&buffers, 1).is_none(),
