@@ -1,6 +1,6 @@
 use std::ffi::OsStr;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::path::PathBuf;
+use std::process::Command;
 
 pub(crate) fn cli_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_felis"))
@@ -22,13 +22,15 @@ pub(crate) fn cli_command() -> Command {
     felis_command(cli_bin())
 }
 
-pub(crate) fn cli_on(socket: impl AsRef<Path>) -> Command {
+#[cfg(unix)]
+pub(crate) fn cli_on(socket: impl AsRef<std::path::Path>) -> Command {
     let mut cmd = cli_command();
     cmd.arg("--socket").arg(socket.as_ref());
     cmd
 }
 
-pub(crate) fn felis_out(socket: &Path, args: &[&str]) -> Output {
+#[cfg(unix)]
+pub(crate) fn felis_out(socket: &std::path::Path, args: &[&str]) -> std::process::Output {
     cli_on(socket)
         .args(args)
         .output()

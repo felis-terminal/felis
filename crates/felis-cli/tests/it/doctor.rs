@@ -7,10 +7,9 @@ use std::process::Command as StdCommand;
 
 use tempfile::TempDir;
 
-use crate::common::{
-    cli::{cli_bin, cli_command},
-    fixtures, schema,
-};
+#[cfg(unix)]
+use crate::common::cli::cli_bin;
+use crate::common::{cli::cli_command, fixtures, schema};
 
 use fixtures::private_dir;
 #[cfg(unix)]
