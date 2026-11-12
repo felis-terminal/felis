@@ -524,4 +524,7 @@ pub fn split_osc(body: &[u8]) -> impl Iterator<Item = &[u8]> {
 }
 
 #[cfg(test)]
+mod test_support;
+
+#[cfg(test)]
 mod tests;
