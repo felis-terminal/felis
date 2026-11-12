@@ -129,30 +129,14 @@ fn private_dir() -> TempDir {
 }
 
 #[cfg(unix)]
-use crate::fixture_path;
+use crate::test_support::{fixture_path, sh};
 
 use felis_pty::Command;
 
 #[cfg(unix)]
-fn shell_factory(body: &'static str) -> SessionFactory {
-    Arc::new(move |_| {
-        let mut cmd = Command::new("/bin/sh");
-        cmd.args(["-c", body]);
-        cmd.env_clear();
-        cmd.env("PATH", fixture_path());
-        cmd
-    })
-}
-
-#[cfg(unix)]
-fn script_factory(script: String) -> SessionFactory {
-    Arc::new(move |_| {
-        let mut cmd = Command::new("/bin/sh");
-        cmd.args(["-c", &script]);
-        cmd.env_clear();
-        cmd.env("PATH", fixture_path());
-        cmd
-    })
+fn shell_factory(body: impl Into<String>) -> SessionFactory {
+    let body = body.into();
+    Arc::new(move |_| sh(&body, fixture_path()))
 }
 
 /// A FIFO a child script blocks on with `read _ < gate` until the test
@@ -185,10 +169,7 @@ async fn open_gate(gate: &Path) {
 
 #[cfg(unix)]
 fn owned_session(body: &str) -> crate::pool::Session {
-    let mut cmd = Command::new("/bin/sh");
-    cmd.args(["-c", body]);
-    cmd.env_clear();
-    cmd.env("PATH", fixture_path());
+    let cmd = sh(body, fixture_path());
     crate::pool::Session::from_spawned(SpawnedPty::spawn(cmd).expect("spawn /bin/sh"))
 }
 

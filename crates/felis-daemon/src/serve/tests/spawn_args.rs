@@ -645,13 +645,7 @@ fn spawn_with_args_falls_back_to_the_daemon_cwd_only_for_a_bare_launch() {
         .into_os_string()
         .into_string()
         .unwrap();
-    let factory: SessionFactory = Arc::new(|_| {
-        let mut cmd = Command::new("/bin/sh");
-        cmd.args(["-c", "exit 0"]);
-        cmd.env_clear();
-        cmd.env("PATH", "/bin:/usr/bin");
-        cmd
-    });
+    let factory: SessionFactory = Arc::new(|_| sh("exit 0", "/bin:/usr/bin"));
     let missing = "/felis-no-such-directory-for-tests";
 
     let bare = felis_protocol::messages::SpawnArgs {

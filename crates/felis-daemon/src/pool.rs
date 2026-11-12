@@ -1025,6 +1025,8 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    #[cfg(unix)]
+    use crate::test_support::{create_shm, shm_exists};
 
     /// The parse path must drive the sweep: a producer that repaints sized
     /// text mints an entry per repaint, and the table would walk to the
@@ -1076,24 +1078,6 @@ mod tests {
         );
     }
 
-    /// Slash-prefixed, the way a producer creates it (mpv's
-    /// `/mpv-kitty-<ptr>`).
-    #[cfg(unix)]
-    fn create_shm(name: &str) {
-        let fd = rustix::shm::open(
-            name,
-            rustix::shm::OFlags::CREATE | rustix::shm::OFlags::EXCL | rustix::shm::OFlags::RDWR,
-            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
-        )
-        .expect("create test shm");
-        rustix::fs::ftruncate(&fd, 4).expect("size test shm");
-    }
-
-    #[cfg(unix)]
-    fn shm_exists(name: &str) -> bool {
-        rustix::shm::open(name, rustix::shm::OFlags::RDONLY, rustix::fs::Mode::empty()).is_ok()
-    }
-
     /// `Drop` is the only thing that honors the spec's "the terminal must
     /// delete the object" for deferred segments. Names are recorded
     /// slash-less, as mpv transmits them, so the sweep's macOS slash
@@ -1101,10 +1085,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn dropping_a_session_unlinks_its_deferred_shm_segments() {
-        let mut cmd = felis_pty::Command::new("/bin/sh");
-        cmd.args(["-c", "read _x"]);
-        cmd.env_clear();
-        cmd.env("PATH", "/bin:/usr/bin");
+        let cmd = crate::test_support::sh("read _x", "/bin:/usr/bin");
         let mut session = Session::from_spawned(crate::SpawnedPty::spawn(cmd).expect("spawn sh"));
 
         let pid = std::process::id();

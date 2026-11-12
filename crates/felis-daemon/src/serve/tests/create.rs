@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::{pid_alive, read_pid};
 
 /// Out-of-bound geometry on a create is refused with the dedicated reason
 /// before anything is execed (REQ-605a); the factory panics if it runs.
@@ -297,13 +298,7 @@ async fn a_create_is_attached_when_its_ack_is_written() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_create_in_flight_is_unnameable_until_it_publishes() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    let factory: SessionFactory = Arc::new(|_| {
-        let mut cmd = Command::new("/bin/sh");
-        cmd.args(["-c", "exec sleep 30"]);
-        cmd.env_clear();
-        cmd.env("PATH", fixture_path());
-        cmd
-    });
+    let factory: SessionFactory = Arc::new(|_| sh("exec sleep 30", fixture_path()));
     let caps = DaemonCaps::default();
     let (registered, info) = create_session(
         CreateCtx {
@@ -358,13 +353,7 @@ async fn a_rolled_back_create_reaps_a_child_that_ignores_the_hangup() {
 
 async fn rolls_back_a_create_and_reaps(body: String, pid_file: &Path) {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
-    let factory: SessionFactory = Arc::new(move |_| {
-        let mut cmd = Command::new("/bin/sh");
-        cmd.args(["-c", &body]);
-        cmd.env_clear();
-        cmd.env("PATH", fixture_path());
-        cmd
-    });
+    let factory: SessionFactory = Arc::new(move |_| sh(&body, fixture_path()));
     let caps = DaemonCaps::default();
     let (mut registered, _info) = create_session(
         CreateCtx {
@@ -577,38 +566,6 @@ async fn shut_down_and_reap(pool: &Arc<Mutex<SessionPool>>, id: SessionId) {
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-}
-
-/// The shell writes its pid before `exec`ing the long sleep, so the
-/// value is the process the daemon must reap.
-async fn read_pid(path: &Path) -> i32 {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        if let Ok(raw) = std::fs::read_to_string(path)
-            && let Ok(pid) = raw.trim().parse()
-        {
-            return pid;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the fixture child never reported its pid"
-        );
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-}
-
-/// `kill -0` from the ambient `PATH`, not [`fixture_path`]: the
-/// fixtures are stand-ins for a session's *child*, and this probe needs
-/// the real utility. A zombie answers `kill -0`, so an unreaped exit
-/// still reads as alive.
-fn pid_alive(pid: i32) -> bool {
-    std::process::Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .expect("`kill -0` must be runnable")
-        .success()
 }
 
 /// Registration happens after the PTY fork/exec, so a cap that merely reads

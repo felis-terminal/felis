@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::{read_pid, waits_for_exit};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn supervise_removes_pool_entry_when_the_task_panics() {
@@ -243,54 +244,21 @@ fn a_held_session_keeps_a_bounded_outbox() {
 }
 
 fn exited_child() -> Arc<ChildHandle> {
-    let mut cmd = Command::new("/bin/sh");
-    cmd.args(["-c", "exit 0"]);
-    cmd.env_clear();
-    cmd.env("PATH", "/bin:/usr/bin");
+    let cmd = sh("exit 0", "/bin:/usr/bin");
     let spawned = crate::SpawnedPty::spawn(cmd).expect("spawn /bin/sh");
     Arc::new(spawned.pty.child)
-}
-
-async fn pid_from(path: &std::path::Path) -> i32 {
-    for _ in 0..200 {
-        if let Ok(text) = std::fs::read_to_string(path)
-            && let Ok(pid) = text.trim().parse()
-        {
-            return pid;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    panic!("the shell never reported its pid to {}", path.display());
-}
-
-/// Reaped counts as gone: the daemon stays the parent, and a zombie
-/// would still answer a signal.
-async fn waits_for_exit(pid: i32) -> bool {
-    let Some(pid) = rustix::process::Pid::from_raw(pid) else {
-        return true;
-    };
-    for _ in 0..200 {
-        if matches!(
-            rustix::process::test_kill_process(pid),
-            Err(rustix::io::Errno::SRCH)
-        ) {
-            return true;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    false
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn destroying_a_session_ends_its_shell() {
     let dir = tempfile::TempDir::new().unwrap();
     let pidfile = dir.path().join("pid");
-    let mut cmd = Command::new("/bin/sh");
     // External `sleep`, not a builtin blocking on the PTY: it does
     // not end when the master closes, so only the signal can end it.
-    cmd.args(["-c", &format!("echo $$ > {}; sleep 60", pidfile.display())]);
-    cmd.env_clear();
-    cmd.env("PATH", crate::fixture_path());
+    let cmd = sh(
+        &format!("echo $$ > {}; sleep 60", pidfile.display()),
+        crate::test_support::fixture_path(),
+    );
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     let SessionLifecycle { id, .. } = spawn_session(
         &pool,
@@ -309,7 +277,7 @@ async fn destroying_a_session_ends_its_shell() {
         Listing::Public,
     )
     .await;
-    let pid = pid_from(&pidfile).await;
+    let pid = read_pid(&pidfile).await;
 
     let handle = pool.lock().await.handle_cloned(id).expect("registered");
     assert!(handle.shutdown().await, "send");
@@ -327,18 +295,15 @@ async fn destroying_a_session_ends_its_shell() {
 async fn supervise_ends_the_child_when_the_task_panics() {
     let dir = tempfile::TempDir::new().unwrap();
     let pidfile = dir.path().join("pid");
-    let mut cmd = Command::new("/bin/sh");
-    cmd.args([
-        "-c",
+    let cmd = sh(
         &format!(
             "trap '' HUP; echo $$ > {}; exec sleep 60",
             pidfile.display()
         ),
-    ]);
-    cmd.env_clear();
-    cmd.env("PATH", crate::fixture_path());
+        crate::test_support::fixture_path(),
+    );
     let session = Session::from_spawned(crate::SpawnedPty::spawn(cmd).expect("spawn /bin/sh"));
-    let pid = pid_from(&pidfile).await;
+    let pid = read_pid(&pidfile).await;
     let child = Arc::clone(&session.child);
 
     // The real panic path drops the session before the watchdog

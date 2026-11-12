@@ -275,7 +275,7 @@ async fn a_key_parked_on_a_full_budget_holds_back_the_fence_behind_it() {
     spawn_daemon(
         &path,
         pool,
-        script_factory(format!(
+        shell_factory(format!(
             "stty raw -echo; read _ < {}; exec cat >/dev/null",
             gate.display()
         )),
@@ -342,7 +342,7 @@ async fn an_exact_limit_paste_takes_the_budget_whole_and_completes() {
     spawn_daemon(
         &path,
         pool,
-        script_factory(format!(
+        shell_factory(format!(
             "stty raw -echo; read _ < {}; exec cat >/dev/null",
             gate.display()
         )),
@@ -485,7 +485,7 @@ async fn a_paste_admitted_before_a_mode_flip_is_written_bracketed_within_its_res
     spawn_daemon(
         &path,
         pool,
-        script_factory(format!(
+        shell_factory(format!(
             "stty raw -echo; read _ < {}; printf '\\033[?2004h'; exec cat > {}",
             gate.display(),
             received.display()

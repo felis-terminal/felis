@@ -22,11 +22,7 @@ async fn measure_attached_cat_drain() {
             // `sh -c 'exec cat …'` rather than `/bin/cat`: a store-only
             // host has no `/bin/cat`, and `exec` leaves the same single
             // `cat` on the PTY.
-            let mut cmd = Command::new("/bin/sh");
-            cmd.args(["-c", &format!("exec cat '{file}'")]);
-            cmd.env_clear();
-            cmd.env("PATH", fixture_path());
-            cmd
+            sh(&format!("exec cat '{file}'"), fixture_path())
         })
     };
     spawn_daemon(&path, pool.clone(), factory);
@@ -127,13 +123,7 @@ async fn measure_pull_cycles_under_flood() {
             f = frames_file.display(),
             p = passes_file.display(),
         );
-        Arc::new(move |_| {
-            let mut cmd = Command::new("/bin/sh");
-            cmd.args(["-c", &script]);
-            cmd.env_clear();
-            cmd.env("PATH", fixture_path());
-            cmd
-        })
+        Arc::new(move |_| sh(&script, fixture_path()))
     };
     spawn_daemon(&path, pool.clone(), factory);
 

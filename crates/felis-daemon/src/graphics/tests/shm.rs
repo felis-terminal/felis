@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(unix)]
+use crate::test_support::{create_shm, shm_exists};
 
 // Fills the segment with `write`, which macOS shm fds reject
 // (mmap/ftruncate/fstat/close only), so the cases below are Linux-only.
@@ -16,11 +18,6 @@ fn shm_with_bytes(suffix: &str, bytes: &[u8]) -> String {
         .write_all(bytes)
         .expect("fill test shm object");
     name
-}
-
-#[cfg(unix)]
-fn shm_exists(name: &str) -> bool {
-    rustix::shm::open(name, rustix::shm::OFlags::RDONLY, Mode::empty()).is_ok()
 }
 
 #[test]
@@ -158,18 +155,10 @@ fn shm_name_with_embedded_slash_is_invalid() {
     ));
 }
 
-/// Filled by `ftruncate`, not `write`: macOS shm fds accept only
-/// mmap/ftruncate/fstat/close.
 #[cfg(unix)]
 fn zeroed_shm(suffix: &str) -> String {
     let name = format!("/felis-{}-{suffix}", std::process::id());
-    let fd = rustix::shm::open(
-        &name,
-        rustix::shm::OFlags::CREATE | rustix::shm::OFlags::EXCL | rustix::shm::OFlags::RDWR,
-        Mode::RUSR | Mode::WUSR,
-    )
-    .expect("create test shm object");
-    rustix::fs::ftruncate(&fd, 4).expect("size test shm object");
+    create_shm(&name);
     name
 }
 

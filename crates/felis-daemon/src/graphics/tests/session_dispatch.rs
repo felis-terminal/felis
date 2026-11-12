@@ -5,11 +5,7 @@ use super::*;
 /// exits at once, taking the PTY pieces with it.
 #[cfg(unix)]
 fn keepalive_command() -> felis_pty::Command {
-    let mut cmd = felis_pty::Command::new("/bin/sh");
-    cmd.args(["-c", "read _x"]);
-    cmd.env_clear();
-    cmd.env("PATH", "/bin:/usr/bin");
-    cmd
+    crate::test_support::sh("read _x", "/bin:/usr/bin")
 }
 
 #[cfg(windows)]

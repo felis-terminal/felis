@@ -233,7 +233,7 @@ async fn await_file(path: &Path, done: impl Fn(&[u8]) -> bool) -> Vec<u8> {
 /// A child that reads nothing until the test opens `gate`, then copies
 /// its input to `received`.
 fn gated_sink(gate: &Path, received: &Path) -> SessionFactory {
-    script_factory(format!(
+    shell_factory(format!(
         "stty raw -echo; read _ < {}; exec cat > {}",
         gate.display(),
         received.display()
@@ -279,7 +279,7 @@ async fn a_send_stalled_on_the_input_budget_leaves_other_connections_answering()
 async fn a_raw_step_the_size_of_the_whole_budget_is_followed_by_its_key() {
     let dir = private_dir();
     let received = dir.path().join("received");
-    let factory = script_factory(format!("stty raw -echo; exec cat > {}", received.display()));
+    let factory = shell_factory(format!("stty raw -echo; exec cat > {}", received.display()));
     let (_tmp, path, _pool) = daemon(factory);
     let mut ops = Peer::ops(&path).await;
     let id = ops.spawn().await;
@@ -304,7 +304,7 @@ async fn a_request_whose_last_mouse_event_is_unreported_writes_nothing() {
     let dir = private_dir();
     let received = dir.path().join("received");
     // `?1000` reports clicks but not drags.
-    let factory = script_factory(format!(
+    let factory = shell_factory(format!(
         r"stty raw -echo; printf '\033[?1000hREADY'; exec cat > {}",
         received.display()
     ));
@@ -384,7 +384,7 @@ async fn a_command_that_ends_at_once_is_marked_right_after_wait_sent() {
 async fn a_mark_that_lands_during_a_stalled_admission_follows_wait_sent() {
     let dir = private_dir();
     let gate = gate(dir.path());
-    let factory = script_factory(format!(
+    let factory = shell_factory(format!(
         r"stty raw -echo; read _ < {}; printf '\033]133;D;5\007'; exec cat > /dev/null",
         gate.display()
     ));
@@ -503,7 +503,7 @@ async fn a_watch_only_wait_reports_the_mark_another_connection_caused() {
 async fn a_mark_that_arrives_while_the_connection_is_idle_is_delivered() {
     let dir = private_dir();
     let gate = gate(dir.path());
-    let factory = script_factory(format!(
+    let factory = shell_factory(format!(
         r"read _ < {}; printf '\033]133;D;9\007'; read _x",
         gate.display()
     ));
@@ -610,7 +610,7 @@ async fn a_send_past_the_step_cap_is_refused_before_its_steps_are_decoded() {
 async fn a_wait_ends_unavailable_when_the_session_exits_with_no_mark() {
     let dir = private_dir();
     let gate = gate(dir.path());
-    let factory = script_factory(format!("read _ < {}; exit 0", gate.display()));
+    let factory = shell_factory(format!("read _ < {}; exit 0", gate.display()));
     let (_tmp, path, _pool) = daemon(factory);
     let mut ops = Peer::ops(&path).await;
     let id = ops.spawn().await;

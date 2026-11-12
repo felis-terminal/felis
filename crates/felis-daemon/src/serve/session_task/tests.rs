@@ -7,6 +7,8 @@ use felis_protocol::messages::{
 
 use felis_pty::Command;
 
+use crate::test_support::sh;
+
 use proptest::prelude::*;
 
 use super::*;
@@ -37,13 +39,10 @@ fn test_stream(n: u64) -> StreamId {
 }
 
 /// Builtin-only bodies; one that runs an external program wants
-/// [`crate::fixture_path`], or it silently runs nothing on a host
+/// [`crate::test_support::fixture_path`], or it silently runs nothing on a host
 /// with no FHS `/bin`.
 fn session_with(body: &str) -> Session {
-    let mut cmd = Command::new("/bin/sh");
-    cmd.args(["-c", body]);
-    cmd.env_clear();
-    cmd.env("PATH", "/bin:/usr/bin");
+    let cmd = sh(body, "/bin:/usr/bin");
     Session::from_spawned(crate::SpawnedPty::spawn(cmd).expect("spawn /bin/sh"))
 }
 
@@ -179,16 +178,13 @@ fn capture_session(path: &std::path::Path, emit: &str, on_go: bool) -> Session {
     } else {
         ""
     };
-    let mut cmd = Command::new("/bin/sh");
-    cmd.args([
-        "-c",
+    let cmd = sh(
         &format!(
             "stty raw -echo; {go}printf '{emit}'; printf {CAPTURE_READY}; exec cat > {}",
             path.display()
         ),
-    ]);
-    cmd.env_clear();
-    cmd.env("PATH", crate::fixture_path());
+        crate::test_support::fixture_path(),
+    );
     Session::from_spawned(crate::SpawnedPty::spawn(cmd).expect("spawn /bin/sh"))
 }
 

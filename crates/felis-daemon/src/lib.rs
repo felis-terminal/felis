@@ -35,6 +35,8 @@ pub mod program_status;
 pub mod relay;
 pub mod serve;
 pub(crate) mod terminfo;
+#[cfg(test)]
+mod test_support;
 pub mod upgrade;
 pub use pool::SessionPool;
 #[doc(hidden)]
@@ -383,21 +385,6 @@ const fn default_shell() -> &'static str {
     "powershell.exe"
 }
 
-/// The `PATH` this crate's shell fixtures hand their children. The FHS
-/// pair keeps first claim; the runner's own `PATH` is the tail that
-/// lets a host without an FHS `/bin` resolve anything (NixOS links only
-/// `sh` there). Without it `sh` runs every fixture body with its
-/// externals missing and reports no failure.
-#[cfg(all(test, unix))]
-pub(crate) fn fixture_path() -> std::ffi::OsString {
-    let mut path = std::ffi::OsString::from("/bin:/usr/bin");
-    if let Some(host) = env::var_os("PATH") {
-        path.push(":");
-        path.push(host);
-    }
-    path
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -538,11 +525,7 @@ mod tests {
 
     #[cfg(unix)]
     fn echo_marker_command(marker: &str) -> Command {
-        let mut cmd = Command::new("/bin/sh");
-        cmd.args(["-c", &format!("printf '{marker}\\n'; exit 0")]);
-        cmd.env_clear();
-        cmd.env("PATH", "/bin:/usr/bin");
-        cmd
+        test_support::sh(&format!("printf '{marker}\\n'; exit 0"), "/bin:/usr/bin")
     }
 
     #[cfg(windows)]
@@ -821,10 +804,7 @@ mod tests {
         // `pwd` reports the resolved path.
         let resolved = dir.path().canonicalize().expect("canonicalize tempdir");
 
-        let mut cmd = Command::new("/bin/sh");
-        cmd.args(["-c", "pwd"]);
-        cmd.env_clear();
-        cmd.env("PATH", "/bin:/usr/bin");
+        let mut cmd = test_support::sh("pwd", "/bin:/usr/bin");
         cmd.cwd(dir.path());
         let core = read_until_output_complete(SpawnedPty::spawn(cmd).expect("spawn pwd")).await;
 

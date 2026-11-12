@@ -564,16 +564,13 @@ async fn a_window_evicted_during_the_decode_still_has_its_held_keystrokes_writte
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_child_exiting_during_the_decode_ends_its_wait_with_the_mark_after_the_image() {
-    let mut cmd = Command::new("/bin/sh");
-    cmd.args([
-        "-c",
+    let cmd = sh(
         &format!(
             "stty raw -echo; printf READY; read -r _go; printf '\\033_Ga=t,i=1,f=100,q=2;{}\\033\\\\\\033]133;D;7\\007'",
             base64(&png(2, 2, 10))
         ),
-    ]);
-    cmd.env_clear();
-    cmd.env("PATH", crate::fixture_path());
+        crate::test_support::fixture_path(),
+    );
     let session = Session::from_spawned(crate::SpawnedPty::spawn(cmd).expect("spawn /bin/sh"));
     let mut watcher = None;
     let run = start_with(session, |task| {

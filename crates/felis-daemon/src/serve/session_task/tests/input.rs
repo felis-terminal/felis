@@ -9,13 +9,10 @@ use super::*;
 async fn a_key_encodes_against_a_mode_the_subscriber_has_not_been_told_about() {
     let tmp = tempfile::TempDir::new().unwrap();
     let received = tmp.path().join("keys");
-    let mut cmd = Command::new("/bin/sh");
-    cmd.args([
-        "-c",
+    let cmd = sh(
         &format!("stty raw -echo; exec cat > {}", received.display()),
-    ]);
-    cmd.env_clear();
-    cmd.env("PATH", crate::fixture_path());
+        crate::test_support::fixture_path(),
+    );
     let mut task = SessionTask::for_tests(Session::from_spawned(
         crate::SpawnedPty::spawn(cmd).expect("spawn /bin/sh"),
     ));
