@@ -11,29 +11,18 @@ use felis_daemon::{
     serve::{DaemonCaps, SessionFactory, bind_unix},
 };
 use felis_protocol::messages::SpawnArgs;
-use felis_pty::Command as PtyCommand;
 use tempfile::TempDir;
 use tokio::sync::Mutex;
 
-use crate::common::{fixtures, schema};
-
-use fixtures::{
-    create_and_detach, poll_until, private_dir, quiet_factory, spawn_daemon, spawn_daemon_with_caps,
+use crate::common::{
+    cli::{cli_bin, cli_command, cli_on, felis_command, felis_out},
+    fixtures, schema,
 };
 
-/// The FHS pair keeps first claim; the runner's own `PATH` is the tail
-/// that lets a host with no FHS `/bin` (NixOS links only `sh` there)
-/// resolve anything. Without it `sh` runs the body with the program
-/// missing and reports nothing, so the test passes having exercised
-/// nothing.
-fn fixture_path() -> std::ffi::OsString {
-    let mut path = std::ffi::OsString::from("/bin:/usr/bin");
-    if let Some(host) = std::env::var_os("PATH") {
-        path.push(":");
-        path.push(host);
-    }
-    path
-}
+use fixtures::{
+    create_and_detach, fixture_path, poll_until, private_dir, quiet_factory, sh_factory,
+    spawn_daemon, spawn_daemon_with_caps,
+};
 
 type StampedDaemon = (
     tokio::task::JoinHandle<()>,
@@ -110,26 +99,6 @@ impl Drop for KillableDaemon {
     }
 }
 
-fn cli_bin() -> std::path::PathBuf {
-    let bin = std::env::var("CARGO_BIN_EXE_felis").expect(
-        "CARGO_BIN_EXE_felis is set by cargo when running this \
-         integration test from the felis-cli crate",
-    );
-    std::path::PathBuf::from(bin)
-}
-
-/// `FELIS_SOCKET` outranks the platform default, so a run started inside
-/// a felis window would otherwise address the developer's own daemon.
-/// `RUST_LOG` outranks machine mode's `"off"` fallback directive, so a
-/// developer or runner with it exported would otherwise put log lines
-/// on the channel the one-object assertions count.
-fn cli_command() -> StdCommand {
-    let mut cmd = StdCommand::new(cli_bin());
-    cmd.env_remove("FELIS_SOCKET");
-    cmd.env_remove("RUST_LOG");
-    cmd
-}
-
 /// The hidden completion helper lists the daemon an explicit
 /// `--socket` names (the shell overlays forward only that flag).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -138,9 +107,7 @@ async fn complete_sessions_lists_the_local_socket_roster() {
     let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let id = create_and_detach(&socket).await;
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
+    let out = cli_on(&socket)
         .arg("__complete-sessions")
         .output()
         .expect("run felis __complete-sessions");
@@ -276,12 +243,7 @@ async fn list_prints_one_session_and_exits_zero() {
     let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let id = create_and_detach(&socket).await;
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "list"])
-        .output()
-        .expect("run felis sessions list");
+    let out = felis_out(&socket, &["sessions", "list"]);
     assert!(
         out.status.success(),
         "non-zero exit: status={:?} stderr={}",
@@ -296,12 +258,7 @@ async fn list_prints_one_session_and_exits_zero() {
         "list output missing session prefix {short}: {stdout}",
     );
 
-    let out_json = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "list", "--format", "json"])
-        .output()
-        .expect("run felis sessions list --format json");
+    let out_json = felis_out(&socket, &["sessions", "list", "--format", "json"]);
     assert!(
         out_json.status.success(),
         "sessions list --format json must exit 0 (the plain form above \
@@ -363,12 +320,7 @@ fn parse_point(stdout: &str, verb: &str) -> serde_json::Value {
 async fn list_against_cold_socket_exits_two_without_autospawn() {
     let tmp = private_dir();
     let socket = tmp.path().join("nonexistent.sock");
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "list"])
-        .output()
-        .expect("run felis sessions list");
+    let out = felis_out(&socket, &["sessions", "list"]);
     assert_eq!(
         out.status.code(),
         Some(2),
@@ -388,12 +340,7 @@ async fn list_against_cold_socket_exits_two_without_autospawn() {
 async fn a_stream_that_never_opens_still_emits_its_error_terminal() {
     let tmp = private_dir();
     let socket = tmp.path().join("nonexistent.sock");
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "capture", "1a", "--format", "jsonl"])
-        .output()
-        .expect("run felis sessions capture --format jsonl");
+    let out = felis_out(&socket, &["sessions", "capture", "1a", "--format", "jsonl"]);
     assert_eq!(
         out.status.code(),
         Some(2),
@@ -417,12 +364,10 @@ async fn a_stream_that_never_opens_still_emits_its_error_terminal() {
 async fn a_point_verbs_failure_is_one_typed_error_on_stderr() {
     let tmp = private_dir();
     let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "info", "--format", "json", "deadbeef"])
-        .output()
-        .expect("run felis sessions info --format json");
+    let out = felis_out(
+        &socket,
+        &["sessions", "info", "--format", "json", "deadbeef"],
+    );
     assert_eq!(
         out.status.code(),
         Some(1),
@@ -448,12 +393,7 @@ async fn info_prints_session_metadata() {
     let id_hex = format!("{id:032x}");
     let prefix = &id_hex[..8];
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "info", prefix])
-        .output()
-        .expect("run felis sessions info");
+    let out = felis_out(&socket, &["sessions", "info", prefix]);
     assert!(
         out.status.success(),
         "non-zero: status={:?} stderr={}",
@@ -488,12 +428,7 @@ async fn list_and_info_show_the_spawn_directory() {
         .into_string()
         .unwrap();
 
-    let list = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "list", "--format", "json"])
-        .output()
-        .expect("run felis sessions list --format json");
+    let list = felis_out(&socket, &["sessions", "list", "--format", "json"]);
     assert!(list.status.success(), "{list:?}");
     let row = parse_point(&String::from_utf8_lossy(&list.stdout), "sessions list")["sessions"]
         .as_array()
@@ -505,9 +440,7 @@ async fn list_and_info_show_the_spawn_directory() {
     assert_eq!(row["spawn_cwd"], daemon_cwd.as_str());
     assert!(row.get("cwd").is_none(), "no OSC 7 was sent: {row}");
 
-    let info = cli_command()
-        .arg("--socket")
-        .arg(&socket)
+    let info = cli_on(&socket)
         .args(["sessions", "info", &id_hex[..8]])
         .output()
         .expect("run felis sessions info");
@@ -526,16 +459,9 @@ async fn list_and_info_show_the_spawn_directory() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn list_and_info_show_program_status_records_and_progress() {
     let tmp = private_dir();
-    let factory: SessionFactory = Arc::new(|_| {
-        let mut cmd = PtyCommand::new("/bin/sh");
-        cmd.args([
-            "-c",
-            "printf '\\033]7501;state=blocked:kind=question:progress=50:app=claude-code:msg=d2hpY2ggZmlsZT8=\\033\\\\\\033]9;4;2;71\\007'; read x",
-        ]);
-        cmd.env_clear();
-        cmd.env("PATH", "/bin:/usr/bin");
-        cmd
-    });
+    let factory = sh_factory(
+        "printf '\\033]7501;state=blocked:kind=question:progress=50:app=claude-code:msg=d2hpY2ggZmlsZT8=\\033\\\\\\033]9;4;2;71\\007'; read x",
+    );
     let (server, socket, pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
@@ -554,12 +480,7 @@ async fn list_and_info_show_program_status_records_and_progress() {
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
 
-    let list = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "list", "--format", "json"])
-        .output()
-        .expect("run felis sessions list --format json");
+    let list = felis_out(&socket, &["sessions", "list", "--format", "json"]);
     assert!(list.status.success(), "{list:?}");
     let list_out = String::from_utf8_lossy(&list.stdout);
     assert!(
@@ -573,12 +494,7 @@ async fn list_and_info_show_program_status_records_and_progress() {
         "list --format json must carry the progress: {list_out}",
     );
 
-    let info = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "info", &id_hex])
-        .output()
-        .expect("run felis sessions info");
+    let info = felis_out(&socket, &["sessions", "info", &id_hex]);
     assert!(info.status.success(), "{info:?}");
     let info_out = String::from_utf8_lossy(&info.stdout);
     assert!(
@@ -600,12 +516,7 @@ async fn kill_removes_session_and_second_call_exits_one() {
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "kill", &id_hex])
-        .output()
-        .expect("run felis sessions kill");
+    let out = felis_out(&socket, &["sessions", "kill", &id_hex]);
     assert!(
         out.status.success(),
         "first kill must succeed: status={:?} stderr={}",
@@ -621,12 +532,7 @@ async fn kill_removes_session_and_second_call_exits_one() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
-    let out2 = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "kill", &id_hex])
-        .output()
-        .expect("run felis sessions kill again");
+    let out2 = felis_out(&socket, &["sessions", "kill", &id_hex]);
     assert_eq!(
         out2.status.code(),
         Some(1),
@@ -648,12 +554,7 @@ async fn send_without_text_or_dash_is_a_usage_error_exit_two() {
     let tmp = private_dir();
     let socket = tmp.path().join("daemon.sock");
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "send", "deadbeef"])
-        .output()
-        .expect("run felis sessions send with no payload");
+    let out = felis_out(&socket, &["sessions", "send", "deadbeef"]);
     assert_eq!(
         out.status.code(),
         Some(2),
@@ -670,12 +571,10 @@ async fn send_without_text_or_dash_is_a_usage_error_exit_two() {
     // A refusal clap can state is stated by clap: argument parsing
     // precedes format selection, so `--format json` yields no machine
     // object.
-    let framed = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "send", "--format", "json", "deadbeef"])
-        .output()
-        .expect("run felis sessions send --format json with no payload");
+    let framed = felis_out(
+        &socket,
+        &["sessions", "send", "--format", "json", "deadbeef"],
+    );
     assert_eq!(
         framed.status.code(),
         Some(2),
@@ -703,9 +602,7 @@ async fn send_empty_payload_still_resolves_the_session_id() {
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
-    let ok = cli_command()
-        .arg("--socket")
-        .arg(&socket)
+    let ok = cli_on(&socket)
         .args(["sessions", "send", &id_hex, "-"])
         .stdin(std::process::Stdio::null())
         .output()
@@ -718,9 +615,7 @@ async fn send_empty_payload_still_resolves_the_session_id() {
         String::from_utf8_lossy(&ok.stderr),
     );
 
-    let unknown = cli_command()
-        .arg("--socket")
-        .arg(&socket)
+    let unknown = cli_on(&socket)
         .args(["sessions", "send", "deadbeef", "-"])
         .stdin(std::process::Stdio::null())
         .output()
@@ -742,23 +637,15 @@ async fn send_returns_zero_on_detached_session() {
     // Exit 0 alone cannot catch `send` quitting mid-rehydrate-burst,
     // where the daemon's pump dies on EPIPE before forwarding the
     // input; the echo proves delivery.
-    let factory: SessionFactory = Arc::new(|_| {
-        let mut cmd = PtyCommand::new("/bin/sh");
-        cmd.args(["-c", "read x; printf 'got=%s' \"$x\"; read _y"]);
-        cmd.env_clear();
-        cmd.env("PATH", "/bin:/usr/bin");
-        cmd
-    });
+    let factory = sh_factory("read x; printf 'got=%s' \"$x\"; read _y");
     let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "send", &id_hex, "PROBE-12345\n", "--raw"])
-        .output()
-        .expect("run felis sessions send");
+    let out = felis_out(
+        &socket,
+        &["sessions", "send", &id_hex, "PROBE-12345\n", "--raw"],
+    );
     assert!(
         out.status.success(),
         "send must succeed: status={:?} stderr={}",
@@ -801,32 +688,17 @@ async fn send_waits_for_admission_rather_than_dropping_its_input() {
         .status()
         .expect("run mkfifo");
     assert!(mkfifo.success(), "mkfifo failed: {mkfifo:?}");
-    let factory: SessionFactory = {
-        let received = received.clone();
-        let gate = gate.clone();
-        Arc::new(move |_| {
-            let mut cmd = PtyCommand::new("/bin/sh");
-            cmd.args([
-                "-c",
-                &format!(
-                    "stty raw -echo; read _ < {}; exec cat > {}",
-                    gate.display(),
-                    received.display()
-                ),
-            ]);
-            cmd.env_clear();
-            cmd.env("PATH", fixture_path());
-            cmd
-        })
-    };
+    let factory = sh_factory(format!(
+        "stty raw -echo; read _ < {}; exec cat > {}",
+        gate.display(),
+        received.display()
+    ));
     let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
     // Fills the session's budget against a child that is not reading.
-    let mut filler = cli_command()
-        .arg("--socket")
-        .arg(&socket)
+    let mut filler = cli_on(&socket)
         .args(["sessions", "send", &id_hex, "-", "--raw"])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -842,12 +714,7 @@ async fn send_waits_for_admission_rather_than_dropping_its_input() {
     // case this test is about.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
-        let status = cli_command()
-            .arg("--socket")
-            .arg(&socket)
-            .args(["daemon", "status"])
-            .output()
-            .expect("run felis daemon status");
+        let status = felis_out(&socket, &["daemon", "status"]);
         let stdout = String::from_utf8_lossy(&status.stdout);
         let row = stdout
             .lines()
@@ -864,9 +731,7 @@ async fn send_waits_for_admission_rather_than_dropping_its_input() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    let mut marker = cli_command()
-        .arg("--socket")
-        .arg(&socket)
+    let mut marker = cli_on(&socket)
         .args(["sessions", "send", &id_hex, MARKER, "--raw"])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -924,21 +789,13 @@ async fn send_wait_timeout_bounds_the_admission_of_a_wedged_child() {
 0123456789-0123456789-0123456789";
 
     let tmp = private_dir();
-    let factory: SessionFactory = Arc::new(|_| {
-        let mut cmd = PtyCommand::new("/bin/sh");
-        // Never reads its stdin: the budget it fills is never released.
-        cmd.args(["-c", "stty raw -echo; sleep 3600"]);
-        cmd.env_clear();
-        cmd.env("PATH", fixture_path());
-        cmd
-    });
+    // Never reads its stdin: the budget it fills is never released.
+    let factory = sh_factory("stty raw -echo; sleep 3600");
     let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
-    let mut filler = cli_command()
-        .arg("--socket")
-        .arg(&socket)
+    let mut filler = cli_on(&socket)
         .args(["sessions", "send", &id_hex, "-", "--raw"])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -952,12 +809,7 @@ async fn send_wait_timeout_bounds_the_admission_of_a_wedged_child() {
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
-        let status = cli_command()
-            .arg("--socket")
-            .arg(&socket)
-            .args(["daemon", "status"])
-            .output()
-            .expect("run felis daemon status");
+        let status = felis_out(&socket, &["daemon", "status"]);
         let stdout = String::from_utf8_lossy(&status.stdout);
         let row = stdout
             .lines()
@@ -975,10 +827,9 @@ async fn send_wait_timeout_bounds_the_admission_of_a_wedged_child() {
     }
 
     let started = std::time::Instant::now();
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args([
+    let out = felis_out(
+        &socket,
+        &[
             "sessions",
             "send",
             &id_hex,
@@ -986,9 +837,8 @@ async fn send_wait_timeout_bounds_the_admission_of_a_wedged_child() {
             "--wait",
             "--timeout",
             "1",
-        ])
-        .output()
-        .expect("run felis sessions send --wait --timeout 1");
+        ],
+    );
     assert_eq!(
         out.status.code(),
         Some(1),
@@ -1017,22 +867,15 @@ async fn send_wait_timeout_bounds_the_admission_of_a_wedged_child() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn send_wait_timeout_zero_gives_up_at_once() {
     let tmp = private_dir();
-    let factory: SessionFactory = Arc::new(|_| {
-        let mut cmd = PtyCommand::new("/bin/sh");
-        // Never reads its stdin, so nothing can satisfy the wait early.
-        cmd.args(["-c", "stty raw -echo; sleep 3600"]);
-        cmd.env_clear();
-        cmd.env("PATH", fixture_path());
-        cmd
-    });
+    // Never reads its stdin, so nothing can satisfy the wait early.
+    let factory = sh_factory("stty raw -echo; sleep 3600");
     let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args([
+    let out = felis_out(
+        &socket,
+        &[
             "sessions",
             "send",
             &id_hex,
@@ -1042,9 +885,8 @@ async fn send_wait_timeout_zero_gives_up_at_once() {
             "0",
             "--format",
             "json",
-        ])
-        .output()
-        .expect("run felis sessions send --wait --timeout 0");
+        ],
+    );
     assert_eq!(
         out.status.code(),
         Some(1),
@@ -1062,24 +904,16 @@ async fn send_wait_timeout_zero_gives_up_at_once() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn send_key_enter_delivers_text_and_enter_in_one_call() {
     let tmp = private_dir();
-    let factory: SessionFactory = Arc::new(|_| {
-        let mut cmd = PtyCommand::new("/bin/sh");
-        cmd.args(["-c", "read x; printf 'got=%s' \"$x\"; read _y"]);
-        cmd.env_clear();
-        cmd.env("PATH", "/bin:/usr/bin");
-        cmd
-    });
+    let factory = sh_factory("read x; printf 'got=%s' \"$x\"; read _y");
     let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
     // No newline in the text: the Enter comes from `--key`.
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "send", &id_hex, "SUBMIT-99", "--key", "enter"])
-        .output()
-        .expect("run felis sessions send --key enter");
+    let out = felis_out(
+        &socket,
+        &["sessions", "send", &id_hex, "SUBMIT-99", "--key", "enter"],
+    );
     assert!(
         out.status.success(),
         "send --key enter must succeed: status={:?} stderr={}",
@@ -1095,16 +929,7 @@ async fn send_key_enter_delivers_text_and_enter_in_one_call() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn capture_renders_visible_grid_rows() {
     let tmp = private_dir();
-    let factory: SessionFactory = Arc::new(|_| {
-        let mut cmd = PtyCommand::new("/bin/sh");
-        cmd.args([
-            "-c",
-            "printf 'CAPTURE-LINE-ONE\\r\\nCAPTURE-LINE-TWO\\r\\n'; read x",
-        ]);
-        cmd.env_clear();
-        cmd.env("PATH", "/bin:/usr/bin");
-        cmd
-    });
+    let factory = sh_factory("printf 'CAPTURE-LINE-ONE\\r\\nCAPTURE-LINE-TWO\\r\\n'; read x");
     let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
@@ -1116,12 +941,7 @@ async fn capture_renders_visible_grid_rows() {
     )
     .await;
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "capture", &id_hex])
-        .output()
-        .expect("run felis sessions capture");
+    let out = felis_out(&socket, &["sessions", "capture", &id_hex]);
     assert!(
         out.status.success(),
         "capture must succeed: status={:?} stderr={}",
@@ -1149,29 +969,17 @@ async fn capture_renders_visible_grid_rows() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn capture_scrollback_includes_offscreen_history() {
     let tmp = private_dir();
-    let factory: SessionFactory = Arc::new(|_| {
-        let mut cmd = PtyCommand::new("/bin/sh");
-        // 50 lines overflow the 24-row grid into scrollback.
-        cmd.args([
-            "-c",
-            "i=1; while [ $i -le 50 ]; do printf 'SB-LINE-%03d\\r\\n' $i; i=$((i+1)); done; read x",
-        ]);
-        cmd.env_clear();
-        cmd.env("PATH", "/bin:/usr/bin");
-        cmd
-    });
+    // 50 lines overflow the 24-row grid into scrollback.
+    let factory = sh_factory(
+        "i=1; while [ $i -le 50 ]; do printf 'SB-LINE-%03d\\r\\n' $i; i=$((i+1)); done; read x",
+    );
     let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
     poll_until(&socket, &["sessions", "capture", &id_hex], "SB-LINE-050").await;
 
-    let plain = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "capture", &id_hex])
-        .output()
-        .expect("run felis sessions capture");
+    let plain = felis_out(&socket, &["sessions", "capture", &id_hex]);
     assert!(plain.status.success(), "plain capture must succeed");
     let plain_out = String::from_utf8_lossy(&plain.stdout);
     assert!(
@@ -1179,12 +987,10 @@ async fn capture_scrollback_includes_offscreen_history() {
         "line 1 should have scrolled off the visible grid: {plain_out}",
     );
 
-    let scrolled = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "capture", &id_hex, "--source", "scrollback"])
-        .output()
-        .expect("run felis sessions capture --source scrollback");
+    let scrolled = felis_out(
+        &socket,
+        &["sessions", "capture", &id_hex, "--source", "scrollback"],
+    );
     assert!(
         scrolled.status.success(),
         "scrollback capture must succeed: status={:?} stderr={}",
@@ -1210,16 +1016,9 @@ async fn capture_scrollback_includes_offscreen_history() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn capture_lines_tails_the_region_and_keeps_row_indices() {
     let tmp = private_dir();
-    let factory: SessionFactory = Arc::new(|_| {
-        let mut cmd = PtyCommand::new("/bin/sh");
-        cmd.args([
-            "-c",
-            "i=1; while [ $i -le 50 ]; do printf 'SB-LINE-%03d\\r\\n' $i; i=$((i+1)); done; read x",
-        ]);
-        cmd.env_clear();
-        cmd.env("PATH", "/bin:/usr/bin");
-        cmd
-    });
+    let factory = sh_factory(
+        "i=1; while [ $i -le 50 ]; do printf 'SB-LINE-%03d\\r\\n' $i; i=$((i+1)); done; read x",
+    );
     let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
@@ -1229,9 +1028,7 @@ async fn capture_lines_tails_the_region_and_keeps_row_indices() {
     let capture_json = |extra: Vec<&str>| {
         let mut args = vec!["sessions", "capture", &id_hex, "--format", "jsonl"];
         args.extend(extra);
-        let out = cli_command()
-            .arg("--socket")
-            .arg(&socket)
+        let out = cli_on(&socket)
             .args(&args)
             .output()
             .expect("run felis sessions capture --lines");
@@ -1287,28 +1084,14 @@ async fn capture_lines_tails_the_region_and_keeps_row_indices() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn capture_ansi_reconstructs_sgr_color() {
     let tmp = private_dir();
-    let factory: SessionFactory = Arc::new(|_| {
-        let mut cmd = PtyCommand::new("/bin/sh");
-        cmd.args([
-            "-c",
-            "printf '\\033[31mANSI-RED-LINE\\033[0m\\r\\n'; read x",
-        ]);
-        cmd.env_clear();
-        cmd.env("PATH", "/bin:/usr/bin");
-        cmd
-    });
+    let factory = sh_factory("printf '\\033[31mANSI-RED-LINE\\033[0m\\r\\n'; read x");
     let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
     poll_until(&socket, &["sessions", "capture", &id_hex], "ANSI-RED-LINE").await;
 
-    let ansi = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "capture", &id_hex, "--ansi"])
-        .output()
-        .expect("run felis sessions capture --ansi");
+    let ansi = felis_out(&socket, &["sessions", "capture", &id_hex, "--ansi"]);
     assert!(
         ansi.status.success(),
         "ansi capture must succeed: status={:?} stderr={}",
@@ -1325,12 +1108,7 @@ async fn capture_ansi_reconstructs_sgr_color() {
         "ansi capture missing the red SGR run: {ansi_out:?}",
     );
 
-    let plain = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "capture", &id_hex])
-        .output()
-        .expect("run felis sessions capture");
+    let plain = felis_out(&socket, &["sessions", "capture", &id_hex]);
     let plain_out = String::from_utf8_lossy(&plain.stdout);
     assert!(
         plain_out.contains("ANSI-RED-LINE"),
@@ -1347,30 +1125,19 @@ async fn capture_ansi_reconstructs_sgr_color() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn capture_ansi_json_carries_both_forms_per_row() {
     let tmp = private_dir();
-    let factory: SessionFactory = Arc::new(|_| {
-        let mut cmd = PtyCommand::new("/bin/sh");
-        cmd.args([
-            "-c",
-            "printf '\\033[31mANSI-RED-LINE\\033[0m\\r\\n'; read x",
-        ]);
-        cmd.env_clear();
-        cmd.env("PATH", "/bin:/usr/bin");
-        cmd
-    });
+    let factory = sh_factory("printf '\\033[31mANSI-RED-LINE\\033[0m\\r\\n'; read x");
     let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
     poll_until(&socket, &["sessions", "capture", &id_hex], "ANSI-RED-LINE").await;
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args([
+    let out = felis_out(
+        &socket,
+        &[
             "sessions", "capture", &id_hex, "--ansi", "--format", "jsonl",
-        ])
-        .output()
-        .expect("run felis sessions capture --ansi --format jsonl");
+        ],
+    );
     assert!(
         out.status.success(),
         "capture --ansi --format jsonl must succeed: status={:?} stderr={}",
@@ -1401,17 +1168,10 @@ async fn capture_ansi_json_carries_both_forms_per_row() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn capture_ansi_json_composes_on_a_mark_range_source() {
     let tmp = private_dir();
-    let factory: SessionFactory = Arc::new(|_| {
-        let mut cmd = PtyCommand::new("/bin/sh");
-        cmd.args([
-            "-c",
-            "printf '\\033]133;A\\007$ \\033]133;B\\007echo hi\\r\\n\
+    let factory = sh_factory(
+        "printf '\\033]133;A\\007$ \\033]133;B\\007echo hi\\r\\n\
              \\033]133;C\\007\\033[31mRED-133\\033[0m\\r\\n\\033]133;D;0\\007'; read x",
-        ]);
-        cmd.env_clear();
-        cmd.env("PATH", "/bin:/usr/bin");
-        cmd
-    });
+    );
     let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
@@ -1423,10 +1183,9 @@ async fn capture_ansi_json_composes_on_a_mark_range_source() {
     )
     .await;
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args([
+    let out = felis_out(
+        &socket,
+        &[
             "sessions",
             "capture",
             &id_hex,
@@ -1435,9 +1194,8 @@ async fn capture_ansi_json_composes_on_a_mark_range_source() {
             "jsonl",
             "--source",
             "command-output",
-        ])
-        .output()
-        .expect("run felis sessions capture --ansi --format jsonl --source command-output");
+        ],
+    );
     assert!(
         out.status.success(),
         "the pair must succeed on a mark-range source: status={:?} stderr={}",
@@ -1460,17 +1218,10 @@ async fn capture_ansi_json_composes_on_a_mark_range_source() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn capture_source_command_output_returns_the_c_to_d_range() {
     let tmp = private_dir();
-    let factory: SessionFactory = Arc::new(|_| {
-        let mut cmd = PtyCommand::new("/bin/sh");
-        cmd.args([
-            "-c",
-            "printf '\\033]133;A\\007$ \\033]133;B\\007echo hi\\r\\n\
+    let factory = sh_factory(
+        "printf '\\033]133;A\\007$ \\033]133;B\\007echo hi\\r\\n\
              \\033]133;C\\007CMDOUT-133\\r\\n\\033]133;D;0\\007'; read x",
-        ]);
-        cmd.env_clear();
-        cmd.env("PATH", "/bin:/usr/bin");
-        cmd
-    });
+    );
     let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
@@ -1482,12 +1233,10 @@ async fn capture_source_command_output_returns_the_c_to_d_range() {
     )
     .await;
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "capture", &id_hex, "--source", "command-output"])
-        .output()
-        .expect("run felis sessions capture --source command-output");
+    let out = felis_out(
+        &socket,
+        &["sessions", "capture", &id_hex, "--source", "command-output"],
+    );
     assert!(
         out.status.success(),
         "capture --source command-output must succeed: status={:?} stderr={}",
@@ -1504,12 +1253,7 @@ async fn capture_source_command_output_returns_the_c_to_d_range() {
         "command-output must exclude the command line: {stdout:?}",
     );
 
-    let info = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "info", &id_hex, "--format", "json"])
-        .output()
-        .expect("run felis sessions info --format json");
+    let info = felis_out(&socket, &["sessions", "info", &id_hex, "--format", "json"]);
     let info_out = String::from_utf8_lossy(&info.stdout);
     assert!(
         info_out.contains("\"last_exit_code\":0"),
@@ -1522,17 +1266,10 @@ async fn capture_source_command_output_returns_the_c_to_d_range() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn capture_json_semantic_source_emits_region_relative_rows() {
     let tmp = private_dir();
-    let factory: SessionFactory = Arc::new(|_| {
-        let mut cmd = PtyCommand::new("/bin/sh");
-        cmd.args([
-            "-c",
-            "printf '\\033]133;A\\007$ \\033]133;B\\007echo hi\\r\\n\
+    let factory = sh_factory(
+        "printf '\\033]133;A\\007$ \\033]133;B\\007echo hi\\r\\n\
              \\033]133;C\\007CMDOUT-133\\r\\n\\033]133;D;0\\007'; read x",
-        ]);
-        cmd.env_clear();
-        cmd.env("PATH", "/bin:/usr/bin");
-        cmd
-    });
+    );
     let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
@@ -1544,10 +1281,9 @@ async fn capture_json_semantic_source_emits_region_relative_rows() {
     )
     .await;
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args([
+    let out = felis_out(
+        &socket,
+        &[
             "sessions",
             "capture",
             &id_hex,
@@ -1555,9 +1291,8 @@ async fn capture_json_semantic_source_emits_region_relative_rows() {
             "last-command",
             "--format",
             "jsonl",
-        ])
-        .output()
-        .expect("run felis sessions capture --source last-command --format jsonl");
+        ],
+    );
     assert!(
         out.status.success(),
         "capture --source last-command --format jsonl must succeed: status={:?} stderr={}",
@@ -1595,25 +1330,17 @@ async fn capture_json_semantic_source_emits_region_relative_rows() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn send_wait_prints_the_commands_exit_code() {
     let tmp = private_dir();
-    let factory: SessionFactory = Arc::new(|_| {
-        let mut cmd = PtyCommand::new("/bin/sh");
-        cmd.args([
-            "-c",
-            "printf '\\033]133;A\\007$ '; read x; eval \"$x\"; \
+    let factory = sh_factory(
+        "printf '\\033]133;A\\007$ '; read x; eval \"$x\"; \
              printf '\\033]133;D;%d\\007' \"$?\"; read _y",
-        ]);
-        cmd.env_clear();
-        cmd.env("PATH", "/bin:/usr/bin");
-        cmd
-    });
+    );
     let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args([
+    let out = felis_out(
+        &socket,
+        &[
             "sessions",
             "send",
             &id_hex,
@@ -1623,9 +1350,8 @@ async fn send_wait_prints_the_commands_exit_code() {
             "--wait",
             "--timeout",
             "30",
-        ])
-        .output()
-        .expect("run felis sessions send --key enter --wait");
+        ],
+    );
     assert!(
         out.status.success(),
         "send --wait must exit 0 on an observed D mark: status={:?} stderr={}",
@@ -1644,25 +1370,17 @@ async fn send_wait_prints_the_commands_exit_code() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn send_wait_json_emits_the_wait_shape() {
     let tmp = private_dir();
-    let factory: SessionFactory = Arc::new(|_| {
-        let mut cmd = PtyCommand::new("/bin/sh");
-        cmd.args([
-            "-c",
-            "printf '\\033]133;A\\007$ '; read x; eval \"$x\"; \
+    let factory = sh_factory(
+        "printf '\\033]133;A\\007$ '; read x; eval \"$x\"; \
              printf '\\033]133;D;%d\\007' \"$?\"; read _y",
-        ]);
-        cmd.env_clear();
-        cmd.env("PATH", "/bin:/usr/bin");
-        cmd
-    });
+    );
     let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args([
+    let out = felis_out(
+        &socket,
+        &[
             "sessions",
             "send",
             &id_hex,
@@ -1674,9 +1392,8 @@ async fn send_wait_json_emits_the_wait_shape() {
             "30",
             "--format",
             "json",
-        ])
-        .output()
-        .expect("run felis sessions send --key enter --wait --format json");
+        ],
+    );
     assert!(
         out.status.success(),
         "send --wait --format json must exit 0: status={:?} stderr={}",
@@ -1701,13 +1418,7 @@ async fn send_wait_json_emits_the_wait_shape() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn payload_less_wait_ignores_historical_marks_and_times_out() {
     let tmp = private_dir();
-    let factory: SessionFactory = Arc::new(|_| {
-        let mut cmd = PtyCommand::new("/bin/sh");
-        cmd.args(["-c", "printf '\\033]133;D;7\\007'; read x"]);
-        cmd.env_clear();
-        cmd.env("PATH", "/bin:/usr/bin");
-        cmd
-    });
+    let factory = sh_factory("printf '\\033]133;D;7\\007'; read x");
     let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
@@ -1719,12 +1430,10 @@ async fn payload_less_wait_ignores_historical_marks_and_times_out() {
     )
     .await;
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "send", &id_hex, "--wait", "--timeout", "1"])
-        .output()
-        .expect("run felis sessions send --wait --timeout 1");
+    let out = felis_out(
+        &socket,
+        &["sessions", "send", &id_hex, "--wait", "--timeout", "1"],
+    );
     assert_eq!(
         out.status.code(),
         Some(1),
@@ -1747,13 +1456,7 @@ async fn payload_less_wait_ignores_historical_marks_and_times_out() {
 async fn a_wait_without_a_timeout_ends_session_ended_when_the_session_exits_markless() {
     for with_input in [false, true] {
         let tmp = private_dir();
-        let factory: SessionFactory = Arc::new(|_| {
-            let mut cmd = PtyCommand::new("/bin/sh");
-            cmd.args(["-c", "read x; exit 0"]);
-            cmd.env_clear();
-            cmd.env("PATH", "/bin:/usr/bin");
-            cmd
-        });
+        let factory = sh_factory("read x; exit 0");
         let (server, socket, _pool) = spawn_daemon(&tmp, factory);
         let id = create_and_detach(&socket).await;
         let id_hex = format!("{id:032x}");
@@ -1763,9 +1466,7 @@ async fn a_wait_without_a_timeout_ends_session_ended_when_the_session_exits_mark
             args.extend(["--key", "enter"]);
         }
         args.extend(["--wait", "--format", "json"]);
-        let waiter = cli_command()
-            .arg("--socket")
-            .arg(&socket)
+        let waiter = cli_on(&socket)
             .args(&args)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -1774,12 +1475,7 @@ async fn a_wait_without_a_timeout_ends_session_ended_when_the_session_exits_mark
         if !with_input {
             // Only a watch already registered can be ended by the exit.
             tokio::time::sleep(Duration::from_millis(300)).await;
-            let out = cli_command()
-                .arg("--socket")
-                .arg(&socket)
-                .args(["sessions", "send", &id_hex, "--key", "enter"])
-                .output()
-                .expect("run felis sessions send");
+            let out = felis_out(&socket, &["sessions", "send", &id_hex, "--key", "enter"]);
             assert!(out.status.success(), "the line that ends the shell is sent");
         }
         let out = tokio::task::spawn_blocking(move || waiter.wait_with_output())
@@ -1807,12 +1503,10 @@ async fn spawn_creates_session_and_id_is_addressable() {
     let tmp = private_dir();
     let (server, socket, pool) = spawn_daemon(&tmp, quiet_factory());
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "spawn", "--", "/bin/sh", "-c", "read x"])
-        .output()
-        .expect("run felis sessions spawn");
+    let out = felis_out(
+        &socket,
+        &["sessions", "spawn", "--", "/bin/sh", "-c", "read x"],
+    );
     assert!(
         out.status.success(),
         "spawn must succeed: status={:?} stderr={}",
@@ -1832,23 +1526,13 @@ async fn spawn_creates_session_and_id_is_addressable() {
         "spawned session must be in the pool under the printed id",
     );
 
-    let list = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "list"])
-        .output()
-        .expect("run felis sessions list");
+    let list = felis_out(&socket, &["sessions", "list"]);
     assert!(
         String::from_utf8_lossy(&list.stdout).contains(&id_hex[..8]),
         "list must include the spawned session's short id",
     );
 
-    let kill = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "kill", &id_hex])
-        .output()
-        .expect("run felis sessions kill");
+    let kill = felis_out(&socket, &["sessions", "kill", &id_hex]);
     assert!(
         kill.status.success(),
         "kill of spawned session must succeed"
@@ -1865,12 +1549,10 @@ async fn spawn_with_out_of_range_rows_is_refused_by_the_daemon() {
     let (server, socket, pool) = spawn_daemon(&tmp, quiet_factory());
 
     for rows in ["3000", "70000"] {
-        let out = cli_command()
-            .arg("--socket")
-            .arg(&socket)
-            .args(["sessions", "spawn", "--rows", rows, "--cols", "80"])
-            .output()
-            .expect("run felis sessions spawn --rows");
+        let out = felis_out(
+            &socket,
+            &["sessions", "spawn", "--rows", rows, "--cols", "80"],
+        );
         assert_eq!(
             out.status.code(),
             Some(1),
@@ -1907,9 +1589,7 @@ fn spawn_with_only_one_geometry_flag_is_a_usage_error() {
         ["sessions", "spawn", "--rows", "40"],
         ["sessions", "spawn", "--cols", "132"],
     ] {
-        let out = cli_command()
-            .arg("--socket")
-            .arg("/tmp/felis-absent.sock")
+        let out = cli_on("/tmp/felis-absent.sock")
             .args(argv)
             .output()
             .expect("run felis sessions spawn with half a geometry");
@@ -1940,24 +1620,14 @@ async fn spawn_past_the_session_cap_is_typed_at_capacity() {
         },
     );
 
-    let first = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "spawn"])
-        .output()
-        .expect("run felis sessions spawn");
+    let first = felis_out(&socket, &["sessions", "spawn"]);
     assert!(
         first.status.success(),
         "the first spawn fills the cap: stderr={}",
         String::from_utf8_lossy(&first.stderr),
     );
 
-    let refused = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "spawn", "--format", "json"])
-        .output()
-        .expect("run felis sessions spawn --format json");
+    let refused = felis_out(&socket, &["sessions", "spawn", "--format", "json"]);
     assert_eq!(
         refused.status.code(),
         Some(1),
@@ -1968,12 +1638,7 @@ async fn spawn_past_the_session_cap_is_typed_at_capacity() {
         refused.stdout.is_empty(),
         "a refused spawn prints no id object",
     );
-    let stderr = String::from_utf8(refused.stderr).unwrap();
-    let line = stderr
-        .lines()
-        .find(|l| l.starts_with('{'))
-        .expect("a machine error object");
-    let object: serde_json::Value = serde_json::from_str(line).unwrap();
+    let object = schema::stderr_object(&refused);
     assert_eq!(object["error"]["kind"], "at_capacity");
     let message = object["error"]["message"].as_str().unwrap();
     assert!(message.contains("at 1 of 1 sessions"), "{message}");
@@ -1992,15 +1657,13 @@ async fn spawn_tag_labels_the_session_at_creation() {
     let tmp = private_dir();
     let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args([
+    let out = felis_out(
+        &socket,
+        &[
             "sessions", "spawn", "--tag", "agent", "--tag", "build", "--", "/bin/sh", "-c",
             "read x",
-        ])
-        .output()
-        .expect("run felis sessions spawn --tag");
+        ],
+    );
     assert!(
         out.status.success(),
         "spawn --tag must succeed: status={:?} stderr={}",
@@ -2009,34 +1672,19 @@ async fn spawn_tag_labels_the_session_at_creation() {
     );
     let id_hex = String::from_utf8_lossy(&out.stdout).trim().to_string();
 
-    let info = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "info", &id_hex, "--format", "json"])
-        .output()
-        .expect("run felis sessions info --format json");
+    let info = felis_out(&socket, &["sessions", "info", &id_hex, "--format", "json"]);
     let stdout = String::from_utf8_lossy(&info.stdout);
     assert!(
         stdout.contains("\"tags\":[\"agent\",\"build\"]"),
         "info --format json must carry the creation tags sorted; got {stdout}",
     );
 
-    let hit = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "list", "--tag", "agent"])
-        .output()
-        .expect("run felis sessions list --tag agent");
+    let hit = felis_out(&socket, &["sessions", "list", "--tag", "agent"]);
     assert!(
         String::from_utf8_lossy(&hit.stdout).contains(&id_hex[..8]),
         "list --tag agent must include the spawned session",
     );
-    let miss = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "list", "--tag", "other"])
-        .output()
-        .expect("run felis sessions list --tag other");
+    let miss = felis_out(&socket, &["sessions", "list", "--tag", "other"]);
     assert!(
         !String::from_utf8_lossy(&miss.stdout).contains(&id_hex[..8]),
         "list --tag other must not include the spawned session",
@@ -2050,14 +1698,12 @@ async fn spawn_json_emits_id_object() {
     let tmp = private_dir();
     let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args([
+    let out = felis_out(
+        &socket,
+        &[
             "sessions", "spawn", "--format", "json", "--", "/bin/sh", "-c", "read x",
-        ])
-        .output()
-        .expect("run felis sessions spawn --format json");
+        ],
+    );
     assert!(
         out.status.success(),
         "spawn --format json must succeed: status={:?} stderr={}",
@@ -2086,14 +1732,12 @@ async fn tag_json_emits_id_and_tag_array_for_adds_and_removes() {
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
-    let tag = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args([
+    let tag = felis_out(
+        &socket,
+        &[
             "sessions", "tag", "--format", "json", &id_hex, "work", "agent",
-        ])
-        .output()
-        .expect("run felis sessions tag --format json");
+        ],
+    );
     assert!(
         tag.status.success(),
         "tag --format json must succeed: status={:?} stderr={}",
@@ -2105,14 +1749,12 @@ async fn tag_json_emits_id_and_tag_array_for_adds_and_removes() {
     assert_eq!(tagged["id"], id_hex.as_str());
     assert_eq!(tagged["tags"], serde_json::json!(["agent", "work"]));
 
-    let relabel = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args([
+    let relabel = felis_out(
+        &socket,
+        &[
             "sessions", "tag", "--format", "json", &id_hex, "done", "--remove", "agent",
-        ])
-        .output()
-        .expect("run felis sessions tag --format json with adds and removes");
+        ],
+    );
     assert!(
         relabel.status.success(),
         "tag --format json add+remove must succeed: status={:?} stderr={}",
@@ -2130,14 +1772,12 @@ async fn tag_json_emits_id_and_tag_array_for_adds_and_removes() {
         "one call must apply the add and the remove together",
     );
 
-    let untag = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args([
+    let untag = felis_out(
+        &socket,
+        &[
             "sessions", "tag", "--format", "json", &id_hex, "--remove", "work", "--remove", "done",
-        ])
-        .output()
-        .expect("run felis sessions tag --format json --remove");
+        ],
+    );
     assert!(
         untag.status.success(),
         "tag --remove --format json must succeed: status={:?} stderr={}",
@@ -2165,23 +1805,13 @@ async fn kill_and_evict_json_emit_their_typed_replies() {
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
-    let evict = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "evict", "--format", "json", &id_hex])
-        .output()
-        .expect("run felis sessions evict --format json");
+    let evict = felis_out(&socket, &["sessions", "evict", "--format", "json", &id_hex]);
     assert!(evict.status.success(), "evict --format json must exit 0");
     let evicted = parse_point(&String::from_utf8_lossy(&evict.stdout), "sessions evict");
     assert_eq!(evicted["id"], id_hex.as_str());
     assert_eq!(evicted["was_attached"], false);
 
-    let kill = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "kill", "--format", "json", &id_hex])
-        .output()
-        .expect("run felis sessions kill --format json");
+    let kill = felis_out(&socket, &["sessions", "kill", "--format", "json", &id_hex]);
     assert!(kill.status.success(), "kill --format json must exit 0");
     let killed = parse_point(&String::from_utf8_lossy(&kill.stdout), "sessions kill");
     assert_eq!(killed["id"], id_hex.as_str());
@@ -2196,28 +1826,16 @@ async fn kill_and_evict_json_emit_their_typed_replies() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn search_returns_hits_and_no_match_exits_one() {
     let tmp = private_dir();
-    let factory: SessionFactory = Arc::new(|_| {
-        let mut cmd = PtyCommand::new("/bin/sh");
-        cmd.args([
-            "-c",
-            "i=0; while [ $i -lt 50 ]; do printf 'entry-%s-PROBE\\r\\n' $i; i=$((i+1)); done; read x",
-        ]);
-        cmd.env_clear();
-        cmd.env("PATH", "/bin:/usr/bin");
-        cmd
-    });
+    let factory = sh_factory(
+        "i=0; while [ $i -lt 50 ]; do printf 'entry-%s-PROBE\\r\\n' $i; i=$((i+1)); done; read x",
+    );
     let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
     poll_until(&socket, &["sessions", "capture", &id_hex], "entry-49-PROBE").await;
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "search", &id_hex, "PROBE"])
-        .output()
-        .expect("run felis sessions search");
+    let out = felis_out(&socket, &["sessions", "search", &id_hex, "PROBE"]);
     assert!(
         out.status.success(),
         "search must succeed: status={:?} stderr={}",
@@ -2235,12 +1853,7 @@ async fn search_returns_hits_and_no_match_exits_one() {
         "stdout must echo the matched text; got: {stdout}",
     );
 
-    let out_miss = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "search", &id_hex, "XYZ-NOPE-NEVER"])
-        .output()
-        .expect("run felis sessions search no-match");
+    let out_miss = felis_out(&socket, &["sessions", "search", &id_hex, "XYZ-NOPE-NEVER"]);
     assert_eq!(
         out_miss.status.code(),
         Some(1),
@@ -2250,12 +1863,10 @@ async fn search_returns_hits_and_no_match_exits_one() {
         String::from_utf8_lossy(&out_miss.stderr),
     );
 
-    let out_json = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "search", &id_hex, "PROBE", "--format", "jsonl"])
-        .output()
-        .expect("run felis sessions search --format jsonl");
+    let out_json = felis_out(
+        &socket,
+        &["sessions", "search", &id_hex, "PROBE", "--format", "jsonl"],
+    );
     let json_out = String::from_utf8_lossy(&out_json.stdout);
     let objects = parse_jsonl(&json_out);
     assert_all_versioned(&objects, "sessions search");
@@ -2277,12 +1888,10 @@ async fn send_against_unknown_id_exits_one() {
     let tmp = private_dir();
     let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "send", "deadbeef", "anything", "--raw"])
-        .output()
-        .expect("run felis sessions send");
+    let out = felis_out(
+        &socket,
+        &["sessions", "send", "deadbeef", "anything", "--raw"],
+    );
     assert_eq!(
         out.status.code(),
         Some(1),
@@ -2312,9 +1921,7 @@ async fn switch_pushes_reattach_to_attached_client() {
     let mut gui = connect(&socket, Offer::window(false)).await.unwrap();
     let from = gui.create_with(SpawnArgs::default()).await.unwrap().id;
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
+    let out = cli_on(&socket)
         .args([
             "sessions",
             "switch",
@@ -2367,18 +1974,16 @@ async fn switch_with_no_attached_client_exits_one() {
     let from = create_and_detach(&socket).await;
     let target = create_and_detach(&socket).await;
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args([
+    let out = felis_out(
+        &socket,
+        &[
             "sessions",
             "switch",
             &format!("{target:032x}"),
             "--from",
             &format!("{from:032x}"),
-        ])
-        .output()
-        .expect("run felis sessions switch");
+        ],
+    );
     assert_eq!(
         out.status.code(),
         Some(1),
@@ -2403,10 +2008,9 @@ async fn switch_with_an_unknown_attachment_exits_one() {
     let from = create_and_detach(&socket).await;
     let target = create_and_detach(&socket).await;
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args([
+    let out = felis_out(
+        &socket,
+        &[
             "sessions",
             "switch",
             &format!("{target:032x}"),
@@ -2414,9 +2018,8 @@ async fn switch_with_an_unknown_attachment_exits_one() {
             &format!("{from:032x}"),
             "--attachment",
             "4096",
-        ])
-        .output()
-        .expect("run felis sessions switch --attachment");
+        ],
+    );
     assert_eq!(
         out.status.code(),
         Some(1),
@@ -2440,10 +2043,9 @@ async fn switch_to_the_same_session_exits_zero() {
     // Parked: the shape the default scope would otherwise deny.
     let id = create_and_detach(&socket).await;
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args([
+    let out = felis_out(
+        &socket,
+        &[
             "sessions",
             "switch",
             &format!("{id:032x}"),
@@ -2451,9 +2053,8 @@ async fn switch_to_the_same_session_exits_zero() {
             &format!("{id:032x}"),
             "--format",
             "json",
-        ])
-        .output()
-        .expect("run felis sessions switch onto itself");
+        ],
+    );
     assert_eq!(
         out.status.code(),
         Some(0),
@@ -2483,9 +2084,7 @@ async fn a_switch_human_line_says_queued_and_not_landed() {
     let mut gui = connect(&socket, Offer::window(false)).await.unwrap();
     let from = gui.create_with(SpawnArgs::default()).await.unwrap().id;
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
+    let out = cli_on(&socket)
         .args(["sessions", "switch", &format!("{target:032x}")])
         .env("FELIS_SESSION_ID", format!("{from:032x}"))
         .output()
@@ -2513,18 +2112,16 @@ async fn a_same_session_switch_human_line_says_nothing_was_queued() {
     let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let id = create_and_detach(&socket).await;
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args([
+    let out = felis_out(
+        &socket,
+        &[
             "sessions",
             "switch",
             &format!("{id:032x}"),
             "--from",
             &format!("{id:032x}"),
-        ])
-        .output()
-        .expect("run felis sessions switch onto itself");
+        ],
+    );
     assert_eq!(
         out.status.code(),
         Some(0),
@@ -2556,9 +2153,7 @@ async fn a_target_that_disconnects_after_queue_admission_keeps_the_switch_result
     let mut gui = connect(&socket, Offer::window(false)).await.unwrap();
     let from = gui.create_with(SpawnArgs::default()).await.unwrap().id;
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
+    let out = cli_on(&socket)
         .args([
             "sessions",
             "switch",
@@ -2603,18 +2198,16 @@ async fn a_target_that_disconnects_after_queue_admission_keeps_the_switch_result
     // departure from `from` is the daemon's last word on it.
     drop(gui);
     let attachments_of = |id: u128| {
-        let out = cli_command()
-            .arg("--socket")
-            .arg(&socket)
-            .args([
+        let out = felis_out(
+            &socket,
+            &[
                 "sessions",
                 "info",
                 &format!("{id:032x}"),
                 "--format",
                 "json",
-            ])
-            .output()
-            .expect("run felis sessions info");
+            ],
+        );
         parse_point(&String::from_utf8_lossy(&out.stdout), "sessions info")["attachments"].clone()
     };
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
@@ -2626,18 +2219,16 @@ async fn a_target_that_disconnects_after_queue_admission_keeps_the_switch_result
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
-    let info = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args([
+    let info = felis_out(
+        &socket,
+        &[
             "sessions",
             "info",
             &format!("{target:032x}"),
             "--format",
             "json",
-        ])
-        .output()
-        .expect("run felis sessions info");
+        ],
+    );
     let info_stdout = String::from_utf8_lossy(&info.stdout);
     let info = parse_point(&info_stdout, "sessions info");
     assert_eq!(
@@ -2707,12 +2298,7 @@ async fn a_cross_daemon_retarget_reports_admission_without_landing() {
         ),
     );
 
-    let roster = cli_command()
-        .arg("--socket")
-        .arg(&other_socket)
-        .args(["sessions", "list", "--format", "json"])
-        .output()
-        .expect("run felis sessions list on the target daemon");
+    let roster = felis_out(&other_socket, &["sessions", "list", "--format", "json"]);
     let roster_stdout = String::from_utf8_lossy(&roster.stdout);
     let roster = parse_point(&roster_stdout, "sessions list");
     assert_eq!(
@@ -2875,9 +2461,7 @@ async fn an_explicit_socket_outranks_the_stamp() {
     let tmp = private_dir();
     let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
+    let out = cli_on(&socket)
         .args(["sessions", "list"])
         .env("FELIS_SOCKET", tmp.path().join("no-daemon-here.sock"))
         .output()
@@ -3118,23 +2702,12 @@ async fn an_external_command_that_fails_to_launch_is_not_an_unknown_verb() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn notifications_once_waits_for_a_live_notification() {
     let tmp = private_dir();
-    let factory: SessionFactory = Arc::new(|_| {
-        let mut cmd = PtyCommand::new("/bin/sh");
-        cmd.args([
-            "-c",
-            "while :; do sleep 1; printf '\\033]9;task done\\007'; done",
-        ]);
-        cmd.env_clear();
-        cmd.env("PATH", fixture_path());
-        cmd
-    });
+    let factory = sh_factory("while :; do sleep 1; printf '\\033]9;task done\\007'; done");
     let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
+    let out = cli_on(&socket)
         .args([
             "notifications",
             "subscribe",
@@ -3186,26 +2759,14 @@ async fn a_stream_verb_whose_daemon_dies_still_writes_its_terminal() {
     use tokio::io::{AsyncBufReadExt as _, BufReader};
 
     let tmp = private_dir();
-    let factory: SessionFactory = Arc::new(|_| {
-        let mut cmd = PtyCommand::new("/bin/sh");
-        cmd.args([
-            "-c",
-            "while :; do sleep 1; printf '\\033]9;still here\\007'; done",
-        ]);
-        cmd.env_clear();
-        cmd.env("PATH", fixture_path());
-        cmd
-    });
+    let factory = sh_factory("while :; do sleep 1; printf '\\033]9;still here\\007'; done");
     let mut daemon = KillableDaemon::start(&tmp, factory).await;
     let id = create_and_detach(&daemon.socket).await;
     let id_hex = format!("{id:032x}");
 
     // Read while it runs, so the daemon can be killed under a producing
     // stream.
-    let mut child = tokio::process::Command::new(cli_bin())
-        .env_remove("FELIS_SOCKET")
-        .arg("--socket")
-        .arg(&daemon.socket)
+    let mut child = tokio::process::Command::from(cli_on(&daemon.socket))
         .args([
             "notifications",
             "subscribe",
@@ -3271,10 +2832,9 @@ async fn notifications_once_times_out_on_a_silent_session() {
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args([
+    let out = felis_out(
+        &socket,
+        &[
             "notifications",
             "subscribe",
             "--session",
@@ -3282,9 +2842,8 @@ async fn notifications_once_times_out_on_a_silent_session() {
             "--once",
             "--timeout",
             "1",
-        ])
-        .output()
-        .expect("run felis notifications subscribe --once --timeout");
+        ],
+    );
     assert_eq!(
         out.status.code(),
         Some(1),
@@ -3311,10 +2870,9 @@ async fn notifications_once_timeout_zero_gives_up_at_once() {
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args([
+    let out = felis_out(
+        &socket,
+        &[
             "notifications",
             "subscribe",
             "--session",
@@ -3324,9 +2882,8 @@ async fn notifications_once_timeout_zero_gives_up_at_once() {
             "0",
             "--format",
             "jsonl",
-        ])
-        .output()
-        .expect("run felis notifications subscribe --once --timeout 0");
+        ],
+    );
     assert_eq!(
         out.status.code(),
         Some(1),
@@ -3350,25 +2907,17 @@ async fn notifications_once_timeout_zero_gives_up_at_once() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn send_key_enter_runs_the_pasted_command() {
     let tmp = private_dir();
-    let factory: SessionFactory = Arc::new(|_| {
-        let mut cmd = PtyCommand::new("/bin/sh");
-        cmd.args([
-            "-c",
-            "printf '\\033]133;A\\007$ '; read x; eval \"$x\"; \
+    let factory = sh_factory(
+        "printf '\\033]133;A\\007$ '; read x; eval \"$x\"; \
              printf '\\033]133;D;%d\\007' \"$?\"; read _y",
-        ]);
-        cmd.env_clear();
-        cmd.env("PATH", "/bin:/usr/bin");
-        cmd
-    });
+    );
     let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args([
+    let out = felis_out(
+        &socket,
+        &[
             "sessions",
             "send",
             &id_hex,
@@ -3378,9 +2927,8 @@ async fn send_key_enter_runs_the_pasted_command() {
             "--wait",
             "--timeout",
             "30",
-        ])
-        .output()
-        .expect("run felis sessions send --key enter --wait");
+        ],
+    );
     assert!(
         out.status.success(),
         "send --key enter --wait must exit 0: status={:?} stderr={}",
@@ -3567,10 +3115,9 @@ async fn notifications_timeout_zero_outranks_an_already_readable_notification() 
     let socket = tmp.path().join("eager.sock");
     let daemon = tokio::spawn(eager_notify_daemon(bind_listener(&socket)));
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args([
+    let out = felis_out(
+        &socket,
+        &[
             "notifications",
             "subscribe",
             "--once",
@@ -3578,9 +3125,8 @@ async fn notifications_timeout_zero_outranks_an_already_readable_notification() 
             "0",
             "--format",
             "jsonl",
-        ])
-        .output()
-        .expect("run felis notifications subscribe --once --timeout 0");
+        ],
+    );
     assert_eq!(
         out.status.code(),
         Some(1),
@@ -3629,9 +3175,7 @@ fn a_failure_before_the_verb_body_is_framed_as_the_verb_would() {
     // read, which is its own input channel failing rather than an
     // empty payload.
     let sink = std::fs::File::open(tmp.path()).unwrap();
-    let unreadable = cli_command()
-        .arg("--socket")
-        .arg(tmp.path().join("daemon.sock"))
+    let unreadable = cli_on(tmp.path().join("daemon.sock"))
         .args(["sessions", "send", "deadbeef", "-", "--format", "json"])
         .stdin(std::process::Stdio::from(sink))
         .output()
@@ -3778,9 +3322,7 @@ async fn machine_mode_keeps_the_log_off_the_error_channel() {
     std::fs::copy(cli_bin(), &bin).unwrap();
     let socket = tmp.path().join("no-daemon.sock");
 
-    let out = StdCommand::new(&bin)
-        .env_remove("FELIS_SOCKET")
-        .env_remove("RUST_LOG")
+    let out = felis_command(&bin)
         .env("PATH", "")
         .arg("--socket")
         .arg(&socket)
@@ -3804,9 +3346,7 @@ async fn human_mode_logs_nothing_below_warn_by_default() {
     std::fs::copy(cli_bin(), &bin).unwrap();
     let socket = tmp.path().join("no-daemon.sock");
 
-    let out = StdCommand::new(&bin)
-        .env_remove("FELIS_SOCKET")
-        .env_remove("RUST_LOG")
+    let out = felis_command(&bin)
         .env("PATH", "")
         .arg("--socket")
         .arg(&socket)
@@ -3833,9 +3373,7 @@ async fn info_json_still_carries_a_short_id_without_a_roster_fetch() {
     let id = create_and_detach(&socket).await;
     let id_hex = format!("{id:032x}");
 
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&socket)
+    let out = cli_on(&socket)
         .args(["sessions", "info", &id_hex[..8], "--format", "json"])
         .output()
         .expect("run felis sessions info --format json");
@@ -3865,9 +3403,7 @@ fn a_send_past_the_step_cap_is_refused_with_no_daemon_running() {
     let tmp = private_dir();
     let cold = tmp.path().join("no-daemon.sock");
     let steps = felis_protocol::limits::MAX_SEND_STEPS + 1;
-    let out = cli_command()
-        .arg("--socket")
-        .arg(&cold)
+    let out = cli_on(&cold)
         .args(["sessions", "send", "deadbeef", "--format", "json"])
         .args(std::iter::repeat_n(["--key", "a"], steps).flatten())
         .output()
@@ -3881,9 +3417,7 @@ fn a_send_past_the_step_cap_is_refused_with_no_daemon_running() {
 /// the flag layer, before anything is dialed.
 #[test]
 fn events_without_a_kind_is_a_usage_error() {
-    let out = cli_command()
-        .arg("--socket")
-        .arg("/tmp/felis-absent.sock")
+    let out = cli_on("/tmp/felis-absent.sock")
         .args(["sessions", "events", "--format", "jsonl"])
         .output()
         .expect("run felis sessions events without --kind");
@@ -3905,23 +3439,11 @@ async fn events_streams_lifecycle_and_prompt_items() {
     use tokio::io::{AsyncBufReadExt as _, BufReader};
 
     let tmp = private_dir();
-    let factory: SessionFactory = Arc::new(|_| {
-        let mut cmd = PtyCommand::new("/bin/sh");
-        cmd.args([
-            "-c",
-            "while :; do printf '\\033]133;A\\007'; sleep 0.2; done",
-        ]);
-        cmd.env_clear();
-        cmd.env("PATH", fixture_path());
-        cmd
-    });
+    let factory = sh_factory("while :; do printf '\\033]133;A\\007'; sleep 0.2; done");
     let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let first = format!("{:032x}", create_and_detach(&socket).await);
 
-    let mut child = tokio::process::Command::new(cli_bin())
-        .env_remove("FELIS_SOCKET")
-        .arg("--socket")
-        .arg(&socket)
+    let mut child = tokio::process::Command::from(cli_on(&socket))
         .args([
             "sessions",
             "events",
@@ -3954,12 +3476,7 @@ async fn events_streams_lifecycle_and_prompt_items() {
         }
     }
 
-    let spawned = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "spawn"])
-        .output()
-        .expect("run felis sessions spawn");
+    let spawned = felis_out(&socket, &["sessions", "spawn"]);
     assert!(spawned.status.success(), "{spawned:?}");
     let second = String::from_utf8_lossy(&spawned.stdout).trim().to_owned();
     let mine = |item: &serde_json::Value| item["session_id"] == second.as_str();
@@ -3971,12 +3488,7 @@ async fn events_streams_lifecycle_and_prompt_items() {
     };
     assert_eq!(added["type"], "added", "{added}");
 
-    let killed = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["sessions", "kill", &second])
-        .output()
-        .expect("run felis sessions kill");
+    let killed = felis_out(&socket, &["sessions", "kill", &second]);
     assert!(killed.status.success(), "{killed:?}");
     loop {
         let item = next().await;
@@ -4001,22 +3513,10 @@ async fn events_end_cleanly_when_the_daemon_stops() {
     use tokio::io::{AsyncBufReadExt as _, BufReader};
 
     let tmp = private_dir();
-    let factory: SessionFactory = Arc::new(|_| {
-        let mut cmd = PtyCommand::new("/bin/sh");
-        cmd.args([
-            "-c",
-            "while :; do printf '\\033]133;A\\007'; sleep 0.2; done",
-        ]);
-        cmd.env_clear();
-        cmd.env("PATH", fixture_path());
-        cmd
-    });
+    let factory = sh_factory("while :; do printf '\\033]133;A\\007'; sleep 0.2; done");
     let (server, socket, _pool) = spawn_daemon(&tmp, factory);
     let id = format!("{:032x}", create_and_detach(&socket).await);
-    let mut child = tokio::process::Command::new(cli_bin())
-        .env_remove("FELIS_SOCKET")
-        .arg("--socket")
-        .arg(&socket)
+    let mut child = tokio::process::Command::from(cli_on(&socket))
         .args([
             "sessions",
             "events",
@@ -4048,12 +3548,7 @@ async fn events_end_cleanly_when_the_daemon_stops() {
         }
     }
 
-    let stopped = cli_command()
-        .arg("--socket")
-        .arg(&socket)
-        .args(["daemon", "stop", "--force", "--format", "json"])
-        .output()
-        .expect("run felis daemon stop");
+    let stopped = felis_out(&socket, &["daemon", "stop", "--force", "--format", "json"]);
     assert_eq!(stopped.status.code(), Some(0), "{stopped:?}");
 
     let mut removed = false;

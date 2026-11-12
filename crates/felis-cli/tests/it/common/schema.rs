@@ -1,6 +1,7 @@
 //! Validation for the e2e suites: the objects they already produce are
 //! the fixtures.
 
+use std::process::Output;
 use std::sync::OnceLock;
 
 use boon::{Compiler, SchemaIndex, Schemas};
@@ -86,4 +87,20 @@ pub(crate) fn invalid_output_fixtures() -> Vec<(String, Value)> {
     found.sort_by(|a, b| a.0.cmp(&b.0));
     assert!(!found.is_empty(), "no `out-` fixtures in {}", dir.display());
     found
+}
+
+fn one_object(channel: &str, bytes: &[u8]) -> Value {
+    let text = String::from_utf8_lossy(bytes);
+    let object: Value = serde_json::from_str(text.trim())
+        .unwrap_or_else(|err| panic!("{channel} must be one JSON object: {text} ({err})"));
+    assert_cli_object(&object);
+    object
+}
+
+pub(crate) fn stdout_object(out: &Output) -> Value {
+    one_object("stdout", &out.stdout)
+}
+
+pub(crate) fn stderr_object(out: &Output) -> Value {
+    one_object("stderr", &out.stderr)
 }

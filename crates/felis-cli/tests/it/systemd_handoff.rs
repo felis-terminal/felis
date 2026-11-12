@@ -15,7 +15,7 @@ use std::{
 
 use tempfile::TempDir;
 
-use crate::common::fixtures;
+use crate::common::{cli::cli_on, fixtures};
 
 use fixtures::private_dir;
 
@@ -28,10 +28,6 @@ fn enabled() -> bool {
     std::env::var_os("FELIS_SYSTEMD_TESTS").is_some_and(|value| value == "1")
 }
 
-fn cli_bin() -> PathBuf {
-    PathBuf::from(std::env::var("CARGO_BIN_EXE_felis").expect("cargo sets CARGO_BIN_EXE_felis"))
-}
-
 /// The unit name the launcher derives, restated here so a change to the
 /// naming cannot pass unnoticed by renaming both sides at once.
 fn unit_name(socket: &Path) -> String {
@@ -42,15 +38,6 @@ fn unit_name(socket: &Path) -> String {
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     format!("felis-daemon-{hash:016x}")
-}
-
-fn felis(socket: &Path) -> Command {
-    let mut cmd = Command::new(cli_bin());
-    cmd.env_remove("FELIS_SOCKET")
-        .env_remove("RUST_LOG")
-        .arg("--socket")
-        .arg(socket);
-    cmd
 }
 
 fn start(mut command: Command) -> Child {
@@ -114,7 +101,7 @@ impl Handed {
 
 impl Drop for Handed {
     fn drop(&mut self) {
-        let mut stop = felis(&self.socket);
+        let mut stop = cli_on(&self.socket);
         stop.args(["daemon", "stop", "--force"]);
         let stopped = run(stop, "felis daemon stop --force").status.success();
         if !stopped {
@@ -145,7 +132,7 @@ fn a_spawn_from_a_user_manager_unit_lands_in_its_own_transient_service() {
     let tmp = private_dir();
     let handed = Handed::new(cold_socket(&tmp, "handoff"));
 
-    let mut spawn = felis(&handed.socket);
+    let mut spawn = cli_on(&handed.socket);
     spawn.args([
         "sessions", "spawn", "--format", "json", "--", "/bin/sh", "-c", "read x",
     ]);
@@ -181,7 +168,7 @@ fn two_launchers_on_one_cold_socket_end_up_on_one_daemon() {
 
     let launchers: Vec<Child> = (0..2)
         .map(|_| {
-            let mut spawn = felis(&handed.socket);
+            let mut spawn = cli_on(&handed.socket);
             spawn.args([
                 "sessions", "spawn", "--format", "json", "--", "/bin/sh", "-c", "read x",
             ]);
@@ -198,7 +185,7 @@ fn two_launchers_on_one_cold_socket_end_up_on_one_daemon() {
     }
 
     assert_eq!(show(&handed.unit, "ActiveState"), "active");
-    let mut list = felis(&handed.socket);
+    let mut list = cli_on(&handed.socket);
     list.args(["sessions", "list", "--format", "json"]);
     let listed = run(list, "felis sessions list");
     let sessions: serde_json::Value =

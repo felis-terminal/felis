@@ -8,22 +8,15 @@ use std::process::Command as StdCommand;
 
 use tempfile::TempDir;
 
-use crate::common::schema;
+use crate::common::{cli::cli_command, schema};
 
 fn config_path(home: &TempDir) -> std::path::PathBuf {
     home.path().join("config.toml")
 }
 
 fn cli(home: &TempDir) -> StdCommand {
-    let mut cmd = bare_cli();
+    let mut cmd = cli_command();
     cmd.arg("--config").arg(config_path(home));
-    cmd
-}
-
-fn bare_cli() -> StdCommand {
-    let bin = std::env::var("CARGO_BIN_EXE_felis").expect("cargo sets CARGO_BIN_EXE_felis");
-    let mut cmd = StdCommand::new(bin);
-    cmd.env_remove("FELIS_SOCKET");
     cmd
 }
 
@@ -31,14 +24,6 @@ fn write_config(home: &TempDir, text: &str) -> std::path::PathBuf {
     let path = config_path(home);
     std::fs::write(&path, text).unwrap();
     path
-}
-
-fn json_of(out: &std::process::Output) -> serde_json::Value {
-    let stdout = String::from_utf8(out.stdout.clone()).unwrap();
-    let object: serde_json::Value = serde_json::from_str(stdout.trim())
-        .unwrap_or_else(|e| panic!("not one JSON object: {e}\n{stdout}"));
-    schema::assert_cli_object(&object);
-    object
 }
 
 /// The spelling of `path` a child launched there will report back:
@@ -67,7 +52,7 @@ fn path_reports_the_location_before_the_file_exists() {
         .output()
         .unwrap();
     assert!(out.status.success());
-    let object = json_of(&out);
+    let object = schema::stdout_object(&out);
     assert_eq!(object["v"], 1);
     assert_eq!(object["exists"], false);
     let path = object["path"].as_str().unwrap();
@@ -78,7 +63,7 @@ fn path_reports_the_location_before_the_file_exists() {
         .args(["config", "path", "--format", "json"])
         .output()
         .unwrap();
-    assert_eq!(json_of(&out)["exists"], true);
+    assert_eq!(schema::stdout_object(&out)["exists"], true);
 }
 
 /// Without the flag the platform default is still discovered, and its
@@ -90,7 +75,7 @@ fn path_reports_the_location_before_the_file_exists() {
 #[test]
 fn default_discovery_is_untouched_when_the_flag_is_absent() {
     let home = TempDir::new().unwrap();
-    let mut cmd = bare_cli();
+    let mut cmd = cli_command();
     cmd.env("HOME", home.path());
     cmd.env("XDG_CONFIG_HOME", home.path().join("config"));
     let out = cmd
@@ -98,7 +83,7 @@ fn default_discovery_is_untouched_when_the_flag_is_absent() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(0));
-    let object = json_of(&out);
+    let object = schema::stdout_object(&out);
     assert_eq!(object["exists"], false);
     assert_eq!(object["errors"], 0);
     let path = object["path"].as_str().unwrap();
@@ -116,12 +101,15 @@ fn default_discovery_is_untouched_when_the_flag_is_absent() {
 #[cfg(windows)]
 #[test]
 fn default_discovery_reports_the_roaming_app_data_path() {
-    let out = bare_cli()
+    let out = cli_command()
         .args(["config", "path", "--format", "json"])
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(0));
-    let path = json_of(&out)["path"].as_str().unwrap().to_owned();
+    let path = schema::stdout_object(&out)["path"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert!(
         path.ends_with(r"felis\config\config.toml"),
         "the `config\\` segment is part of the frozen row: {path}"
@@ -143,7 +131,7 @@ fn a_missing_selected_file_is_an_error_in_every_verb() {
         .output()
         .unwrap();
     assert_eq!(check.status.code(), Some(1));
-    let object = json_of(&check);
+    let object = schema::stdout_object(&check);
     assert_eq!(object["errors"], 1);
     assert_eq!(object["diagnostics"][0]["severity"], "error");
     assert_eq!(object["diagnostics"][0]["kind"], "missing_file");
@@ -161,7 +149,7 @@ fn a_missing_selected_file_is_an_error_in_every_verb() {
         .output()
         .unwrap();
     assert_eq!(path.status.code(), Some(0));
-    assert_eq!(json_of(&path)["exists"], false);
+    assert_eq!(schema::stdout_object(&path)["exists"], false);
 }
 
 /// A read failure is its own diagnostic kind, distinct from "not there"
@@ -178,7 +166,7 @@ fn an_unreadable_selected_file_reports_io() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
-    let object = json_of(&out);
+    let object = schema::stdout_object(&out);
     assert_eq!(object["errors"], 1);
     assert_eq!(object["diagnostics"][0]["kind"], "io");
 }
@@ -196,7 +184,12 @@ fn every_verb_reports_the_same_selected_path() {
             .output()
             .unwrap();
         assert_eq!(out.status.code(), Some(0), "{verb}");
-        reported.push(json_of(&out)["path"].as_str().unwrap().to_owned());
+        reported.push(
+            schema::stdout_object(&out)["path"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        );
     }
     assert_eq!(reported[0], written.display().to_string());
     assert!(reported.iter().all(|p| *p == reported[0]), "{reported:?}");
@@ -212,7 +205,7 @@ fn a_relative_selection_resolves_against_the_invoking_directory() {
     let nested = invoking_dir(&nested);
     std::fs::write(nested.join("felis.toml"), "[font]\nsize_px = 9.0\n").unwrap();
 
-    let out = bare_cli()
+    let out = cli_command()
         .current_dir(&nested)
         .args([
             "--config",
@@ -225,7 +218,7 @@ fn a_relative_selection_resolves_against_the_invoking_directory() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(0));
-    let object = json_of(&out);
+    let object = schema::stdout_object(&out);
     assert_eq!(object["exists"], true);
     assert_eq!(
         object["path"].as_str().unwrap(),
@@ -243,7 +236,7 @@ fn check_reports_warnings_and_still_exits_zero() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(0));
-    let object = json_of(&out);
+    let object = schema::stdout_object(&out);
     assert_eq!(object["v"], 1);
     assert_eq!(object["errors"], 0);
     assert_eq!(object["warnings"], 1);
@@ -265,7 +258,7 @@ fn check_warns_on_an_out_of_range_opacity_and_scroll_multiplier() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(0));
-    let object = json_of(&out);
+    let object = schema::stdout_object(&out);
     assert_eq!(object["errors"], 0);
     assert_eq!(object["warnings"], 2);
     let reported: Vec<(&str, &str)> = object["diagnostics"]
@@ -307,7 +300,7 @@ fn check_warns_on_an_unknown_enum_token_and_still_exits_zero() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(0));
-    let object = json_of(&out);
+    let object = schema::stdout_object(&out);
     assert_eq!(object["errors"], 0);
     assert_eq!(object["warnings"], 2);
     let keys: Vec<&str> = object["diagnostics"]
@@ -330,7 +323,7 @@ fn check_warns_on_an_unknown_enum_token_and_still_exits_zero() {
         .output()
         .unwrap();
     assert_eq!(shown.status.code(), Some(0));
-    let object = json_of(&shown);
+    let object = schema::stdout_object(&shown);
     assert_eq!(
         object["config"]["font"]["family"], "JetBrains Mono",
         "an unknown token must not reset the rest of the document: {object}"
@@ -346,7 +339,7 @@ fn a_font_size_written_as_an_integer_checks_clean_and_shows_the_float_value() {
         .output()
         .unwrap();
     assert_eq!(checked.status.code(), Some(0));
-    let object = json_of(&checked);
+    let object = schema::stdout_object(&checked);
     assert_eq!(object["errors"], 0);
     assert_eq!(object["warnings"], 0);
 
@@ -354,14 +347,14 @@ fn a_font_size_written_as_an_integer_checks_clean_and_shows_the_float_value() {
         .args(["config", "show-effective", "--format", "json"])
         .output()
         .unwrap();
-    let integer = json_of(&shown);
+    let integer = schema::stdout_object(&shown);
 
     write_config(&home, "[font]\nsize_px = 14.0\n");
     let shown = cli(&home)
         .args(["config", "show-effective", "--format", "json"])
         .output()
         .unwrap();
-    let float = json_of(&shown);
+    let float = schema::stdout_object(&shown);
 
     assert_eq!(integer["config"]["font"]["size_px"], 14.0);
     assert_eq!(integer, float);
@@ -376,7 +369,7 @@ fn check_on_a_parse_failure_exits_one_with_the_error_reported() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
-    let object = json_of(&out);
+    let object = schema::stdout_object(&out);
     assert_eq!(object["errors"], 1);
     assert_eq!(object["diagnostics"][0]["severity"], "error");
     assert_eq!(object["diagnostics"][0]["kind"], "parse");
@@ -400,7 +393,7 @@ fn check_reports_the_complete_set_not_the_first_problem() {
         .args(["config", "check", "--format", "json"])
         .output()
         .unwrap();
-    let object = json_of(&out);
+    let object = schema::stdout_object(&out);
     let kinds: Vec<&str> = object["diagnostics"]
         .as_array()
         .unwrap()
@@ -436,7 +429,7 @@ fn other_clients_overlays_are_never_validated() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(0));
-    let object = json_of(&out);
+    let object = schema::stdout_object(&out);
     assert_eq!(
         object["diagnostics"].as_array().unwrap().len(),
         0,
@@ -465,7 +458,7 @@ fn show_effective_resolves_the_named_clients_overlay() {
         .output()
         .unwrap();
     assert_eq!(base.status.code(), Some(0));
-    let object = json_of(&base);
+    let object = schema::stdout_object(&base);
     assert_eq!(object["v"], 1);
     assert_eq!(object["client"], "felis");
     assert_eq!(object["config"]["font"]["size_px"], 12.0);
@@ -481,7 +474,7 @@ fn show_effective_resolves_the_named_clients_overlay() {
         ])
         .output()
         .unwrap();
-    let object = json_of(&overlaid);
+    let object = schema::stdout_object(&overlaid);
     assert_eq!(object["client"], "tui");
     assert_eq!(object["config"]["font"]["size_px"], 20.0);
     assert_eq!(object["config"]["font"]["family"], "Base Mono");
@@ -514,10 +507,7 @@ fn show_effective_refuses_a_document_with_errors() {
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
     assert!(out.stdout.is_empty(), "a failure writes no result object");
-    let stderr = String::from_utf8(out.stderr).unwrap();
-    let line = stderr.lines().find(|l| l.starts_with('{')).unwrap();
-    let object: serde_json::Value = serde_json::from_str(line).unwrap();
-    schema::assert_cli_object(&object);
+    let object = schema::stderr_object(&out);
     assert_eq!(object["v"], 1);
     assert!(
         object["error"]["message"]
@@ -582,7 +572,7 @@ fn a_carrier_flag_on_a_config_verb_is_a_usage_error() {
 #[test]
 fn a_stream_verb_refuses_the_flag_in_its_own_framing() {
     let home = TempDir::new().unwrap();
-    let out = bare_cli()
+    let out = cli_command()
         .arg("--config")
         .arg(config_path(&home))
         .args(["notifications", "subscribe", "--format", "jsonl"])
@@ -594,7 +584,7 @@ fn a_stream_verb_refuses_the_flag_in_its_own_framing() {
         "stderr={}",
         String::from_utf8_lossy(&out.stderr),
     );
-    let object = json_of(&out);
+    let object = schema::stdout_object(&out);
     assert_eq!(object["v"], 1);
     assert_eq!(object["event"], "error");
     assert_eq!(object["error"]["kind"], "usage");
@@ -611,7 +601,7 @@ fn a_stream_verb_refuses_the_flag_in_its_own_framing() {
 #[test]
 fn a_window_launch_refuses_a_selection_that_is_not_there() {
     let home = TempDir::new().unwrap();
-    let out = bare_cli()
+    let out = cli_command()
         .arg("--config")
         .arg(config_path(&home))
         .output()
