@@ -3,8 +3,6 @@
 //! Placements created after `?1049h` in the same burst stay live on the alt screen
 //! rather than being swept into primary placements before screen-switch processing.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use felis_daemon::graphics::ImageEvent;
 use felis_daemon::graphics::{
     ApcCtx, SavedScreens, ShmDeferral, apply_screen_switch, dispatch_apc_body,
@@ -14,8 +12,7 @@ use felis_grid::kitty_graphics::Reassembler;
 use felis_grid::{Grid, PtyEffect};
 use felis_vt::Parser;
 
-mod common;
-use common::{apc, b64};
+use crate::common::{apc, b64};
 
 const TEST_STORE_CAP: usize = 1024 * 1024;
 

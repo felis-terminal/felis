@@ -2,8 +2,6 @@
 //! promises. Overlap with `graphics::tests` is deliberate: the
 //! security pins live in one file.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
 
@@ -12,8 +10,7 @@ use felis_grid::Grid;
 use felis_grid::images::{ImageEntry, ImageFormat, ImageId, ImageStore, Placements};
 use felis_grid::kitty_graphics::Reassembler;
 
-mod common;
-use common::{b64, body};
+use crate::common::{b64, body};
 
 const SECURITY_TEST_STORE_CAP: usize = 4 * 1024;
 

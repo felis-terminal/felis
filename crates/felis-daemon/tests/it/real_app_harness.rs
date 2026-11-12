@@ -4,22 +4,15 @@
 //! frame counters. A test whose binary is not on `PATH` fails; the dev
 //! shell provides them.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-#![expect(
-    clippy::manual_let_else,
-    reason = "integration harness: explicit match reads clearly"
-)]
-
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use felis_client_core::ShadowScreen;
 
-mod common;
-use common::require_tool;
+use crate::common::require_tool;
 #[cfg(unix)]
-use common::{resolve_binary, shadow_contains, shadow_rows};
+use crate::common::{resolve_binary, shadow_contains, shadow_rows};
 use felis_daemon::pool::SessionPool;
 use felis_daemon::serve::{DaemonCaps, SessionFactory, handle_stream};
 use felis_grid::{Cell, Grapheme};
@@ -39,7 +32,7 @@ use tokio::task::JoinHandle;
 const ROWS: u16 = 24;
 const COLS: u16 = 80;
 
-pub struct RealAppSession {
+struct RealAppSession {
     server: Option<JoinHandle<Result<(), felis_daemon::serve::ConnError>>>,
     drain_task: Option<JoinHandle<()>>,
     writer: Arc<AsyncMutex<FrameWriter<DuplexStream>>>,
@@ -48,20 +41,20 @@ pub struct RealAppSession {
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct FrameCounters {
-    pub by_variant: HashMap<&'static str, usize>,
+struct FrameCounters {
+    by_variant: HashMap<&'static str, usize>,
     /// A `RowDelta` counts as `rows.len()`.
-    pub total_dirty_rows: usize,
+    total_dirty_rows: usize,
 }
 
 impl FrameCounters {
-    pub fn count(&self, variant: &'static str) -> usize {
+    fn count(&self, variant: &'static str) -> usize {
         self.by_variant.get(variant).copied().unwrap_or(0)
     }
 }
 
 impl RealAppSession {
-    pub async fn spawn(command: Command, pull_paced: bool) -> Self {
+    async fn spawn(command: Command, pull_paced: bool) -> Self {
         let pool = Arc::new(AsyncMutex::new(SessionPool::new()));
         // The daemon stamps `xterm-felis` on every session and
         // `SpawnArgs.env` is the override channel
@@ -227,7 +220,7 @@ impl RealAppSession {
         }
     }
 
-    pub async fn send_input(&self, bytes: &[u8]) {
+    async fn send_input(&self, bytes: &[u8]) {
         let mut writer = self.writer.lock().await;
         writer
             .send(&InputMsg::KeyBytes(bytes.to_vec()))
@@ -238,32 +231,32 @@ impl RealAppSession {
     /// Under pull pacing the daemon ships the accumulated grid diff
     /// only in response to this (docs/explanation/rendering/pipeline.md
     /// "Demand-driven emission").
-    pub async fn send_pull(&self) {
+    async fn send_pull(&self) {
         let mut writer = self.writer.lock().await;
         writer.send(&InputMsg::NextGridFrame).await.unwrap();
     }
 
-    pub fn server_finished(&self) -> bool {
+    fn server_finished(&self) -> bool {
         self.server.as_ref().is_none_or(JoinHandle::is_finished)
     }
 
-    pub async fn server_outcome(&mut self) -> Option<Result<(), felis_daemon::serve::ConnError>> {
+    async fn server_outcome(&mut self) -> Option<Result<(), felis_daemon::serve::ConnError>> {
         match self.server.take() {
             Some(h) => Some(h.await.unwrap_or(Ok(()))),
             None => None,
         }
     }
 
-    pub fn with_shadow<R>(&self, f: impl FnOnce(&ShadowScreen) -> R) -> R {
+    fn with_shadow<R>(&self, f: impl FnOnce(&ShadowScreen) -> R) -> R {
         let shadow = self.shadow.lock().expect("shadow lock");
         f(&shadow)
     }
 
-    pub fn counters(&self) -> FrameCounters {
+    fn counters(&self) -> FrameCounters {
         self.counters.lock().expect("counters lock").clone()
     }
 
-    pub async fn wait_for_shadow<F>(&self, mut predicate: F, timeout: Duration) -> bool
+    async fn wait_for_shadow<F>(&self, mut predicate: F, timeout: Duration) -> bool
     where
         F: FnMut(&ShadowScreen) -> bool,
     {
@@ -277,7 +270,7 @@ impl RealAppSession {
         false
     }
 
-    pub async fn wait_for_counters<F>(&self, mut predicate: F, timeout: Duration) -> bool
+    async fn wait_for_counters<F>(&self, mut predicate: F, timeout: Duration) -> bool
     where
         F: FnMut(&FrameCounters) -> bool,
     {
@@ -291,7 +284,7 @@ impl RealAppSession {
         false
     }
 
-    pub async fn shutdown(mut self) {
+    async fn shutdown(mut self) {
         {
             let mut writer = self.writer.lock().await;
             drop(writer.flush().await);

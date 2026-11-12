@@ -2,12 +2,6 @@
 //! toggle sequences (`docs/reference/protocols/kitty-graphics.md`
 //! "Lifecycle").
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-#![expect(
-    clippy::type_complexity,
-    reason = "proptest strategy return types are inherently nested; a named alias would not aid the test"
-)]
-
 use felis_daemon::graphics::ImageEvent;
 use felis_daemon::graphics::{
     ApcCtx, SavedScreens, ShmDeferral, apply_screen_switch, dispatch_apc_body,
@@ -17,8 +11,7 @@ use felis_grid::kitty_graphics::Reassembler;
 use felis_grid::{Grid, PtyEffect};
 use felis_vt::Parser;
 
-mod common;
-use common::b64;
+use crate::common::b64;
 use proptest::prelude::*;
 
 const TEST_STORE_CAP: usize = 1024 * 1024;

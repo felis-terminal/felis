@@ -2,8 +2,7 @@
 //! on Windows. Each test runs at Medium integrity, the only level whose
 //! daemon uses the bundled console host that can hand a session over.
 
-#![cfg(windows)]
-#![allow(clippy::unwrap_used, clippy::expect_used, unsafe_code)]
+#![allow(unsafe_code)]
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as StdCommand, Stdio};
@@ -14,9 +13,9 @@ use felis_client_core::{AttachIntent, Offer, connect};
 use felis_protocol::messages::{SpawnArgs, UpgradeOutcome, UpgradeRefusal};
 use tempfile::TempDir;
 
-mod common;
+use crate::common;
 
-use common::medium;
+use crate::common::medium;
 
 struct Daemon {
     /// The test's handle to the first daemon, released once it exits so
@@ -142,6 +141,7 @@ fn ticker(ticks: &Path) -> SpawnArgs {
 #[test]
 fn an_upgrade_hands_the_running_session_to_a_new_daemon_process() {
     medium::run(
+        module_path!(),
         "an_upgrade_hands_the_running_session_to_a_new_daemon_process",
         || {
             runtime().block_on(async {
@@ -184,49 +184,53 @@ fn an_upgrade_hands_the_running_session_to_a_new_daemon_process() {
 /// What the session printed before the upgrade is on its screen after.
 #[test]
 fn an_upgrade_keeps_the_screen_a_session_drew() {
-    medium::run("an_upgrade_keeps_the_screen_a_session_drew", || {
-        runtime().block_on(async {
-            let mut daemon = spawn_daemon(None);
-            wait_until_up(&daemon.pipe).await;
-            let mut conn = connect(&daemon.pipe, Offer::ops()).await.unwrap();
-            let info = conn
-                .spawn_session(SpawnArgs {
-                    command: "cmd.exe".to_owned(),
-                    args: vec![
-                        "/q".to_owned(),
-                        "/k".to_owned(),
-                        "echo drawn before the upgrade".to_owned(),
-                    ],
-                    ..SpawnArgs::default()
-                })
-                .await
-                .unwrap();
-            let shadow = common::rehydrated_screen(&daemon.pipe, info.id).await;
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-            let mut shadow = shadow;
-            while !common::shadow_contains(&shadow, "drawn before the upgrade") {
+    medium::run(
+        module_path!(),
+        "an_upgrade_keeps_the_screen_a_session_drew",
+        || {
+            runtime().block_on(async {
+                let mut daemon = spawn_daemon(None);
+                wait_until_up(&daemon.pipe).await;
+                let mut conn = connect(&daemon.pipe, Offer::ops()).await.unwrap();
+                let info = conn
+                    .spawn_session(SpawnArgs {
+                        command: "cmd.exe".to_owned(),
+                        args: vec![
+                            "/q".to_owned(),
+                            "/k".to_owned(),
+                            "echo drawn before the upgrade".to_owned(),
+                        ],
+                        ..SpawnArgs::default()
+                    })
+                    .await
+                    .unwrap();
+                let shadow = common::rehydrated_screen(&daemon.pipe, info.id).await;
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+                let mut shadow = shadow;
+                while !common::shadow_contains(&shadow, "drawn before the upgrade") {
+                    assert!(
+                        tokio::time::Instant::now() < deadline,
+                        "the session never drew"
+                    );
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    shadow = common::rehydrated_screen(&daemon.pipe, info.id).await;
+                }
+
+                let mut conn = connect(&daemon.pipe, Offer::ops()).await.unwrap();
+                let outcome = conn.daemon_upgrade(common::daemon_bin()).await.unwrap();
+                assert_eq!(outcome, UpgradeOutcome::Upgrading);
+                drop(conn);
+                follow_upgrade(&mut daemon).await;
+
+                let shadow = common::rehydrated_screen(&daemon.pipe, info.id).await;
                 assert!(
-                    tokio::time::Instant::now() < deadline,
-                    "the session never drew"
+                    common::shadow_contains(&shadow, "drawn before the upgrade"),
+                    "{:?}",
+                    common::shadow_rows(&shadow)
                 );
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                shadow = common::rehydrated_screen(&daemon.pipe, info.id).await;
-            }
-
-            let mut conn = connect(&daemon.pipe, Offer::ops()).await.unwrap();
-            let outcome = conn.daemon_upgrade(common::daemon_bin()).await.unwrap();
-            assert_eq!(outcome, UpgradeOutcome::Upgrading);
-            drop(conn);
-            follow_upgrade(&mut daemon).await;
-
-            let shadow = common::rehydrated_screen(&daemon.pipe, info.id).await;
-            assert!(
-                common::shadow_contains(&shadow, "drawn before the upgrade"),
-                "{:?}",
-                common::shadow_rows(&shadow)
-            );
-        });
-    });
+            });
+        },
+    );
 }
 
 /// Windows attached when the upgrade starts all re-attach at once and
@@ -235,6 +239,7 @@ fn an_upgrade_keeps_the_screen_a_session_drew() {
 #[test]
 fn attached_windows_reattach_through_the_hand_over_at_once() {
     medium::run(
+        module_path!(),
         "attached_windows_reattach_through_the_hand_over_at_once",
         || {
             runtime().block_on(async {
@@ -314,7 +319,7 @@ fn a_failed_hand_over_leaves_the_daemon_serving(
     expected: UpgradeRefusal,
     said: &'static str,
 ) {
-    medium::run(test, || {
+    medium::run(module_path!(), test, || {
         runtime().block_on(async {
             let tmp = TempDir::new().unwrap();
             let ticks = tmp.path().join("ticks");

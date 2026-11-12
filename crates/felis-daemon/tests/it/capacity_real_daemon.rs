@@ -3,9 +3,6 @@
 //! Tests daemon fd limits against its own process instead of the test runner.
 //! Both tests are ignored; run on demand on macOS with `--run-ignored all`.
 
-#![cfg(unix)]
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use std::path::Path;
 use std::process::{Child, Command as StdCommand};
 use std::time::Duration;
@@ -14,7 +11,7 @@ use felis_client_core::{Offer, connect};
 use felis_protocol::messages::SpawnArgs;
 use tempfile::TempDir;
 
-mod common;
+use crate::common;
 
 /// A socket parent must be a `0700` directory this uid owns
 /// (REQ-107), and `TempDir` follows the process umask.

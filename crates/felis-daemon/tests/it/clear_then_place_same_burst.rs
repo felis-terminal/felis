@@ -3,8 +3,6 @@
 //! Erase operations sweep only placements preceding them in the burst;
 //! running eviction after the batch would remove newly created placements.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use felis_daemon::graphics::ImageEvent;
 use felis_daemon::graphics::{ApcCtx, ShmDeferral, dispatch_apc_body};
 use felis_grid::Grid;
@@ -12,8 +10,7 @@ use felis_grid::images::{ImageStore, Placements};
 use felis_grid::kitty_graphics::Reassembler;
 use felis_vt::Parser;
 
-mod common;
-use common::b64;
+use crate::common::b64;
 
 const TEST_STORE_CAP: usize = 64 * 1024 * 1024;
 

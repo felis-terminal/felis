@@ -4,8 +4,6 @@
 //! `LeftAlternate` restores the saved primary placements. Mirrors
 //! `serve::streaming::drive_pty_batch`'s stream-order replay.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use felis_daemon::graphics::ImageEvent;
 use felis_daemon::graphics::{
     ApcCtx, SavedScreens, ShmDeferral, apply_reflow_remap, apply_screen_switch, dispatch_apc_body,
@@ -15,8 +13,7 @@ use felis_grid::kitty_graphics::Reassembler;
 use felis_grid::{Grid, PtyEffect};
 use felis_vt::Parser;
 
-mod common;
-use common::{apc, b64};
+use crate::common::{apc, b64};
 
 const TEST_STORE_CAP: usize = 1024 * 1024;
 

@@ -3,8 +3,6 @@
 //! sequences (`docs/reference/protocols/kitty-graphics.md`), whether it
 //! takes frame edits as regions or as whole frames.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use felis_client_core::image_shadow::ImageShadow;
 use felis_daemon::graphics::{
     ApcCtx, ImageEvent, SavedScreens, ShmDeferral, apply_screen_switch, clear_images,
@@ -19,8 +17,7 @@ use felis_grid::{Grid, PtyEffect};
 use felis_vt::Parser;
 use proptest::prelude::*;
 
-mod common;
-use common::{b64, body};
+use crate::common::{b64, body};
 
 /// Three of the 2×2 images the ops send, so eviction runs too.
 fn store_cap() -> usize {

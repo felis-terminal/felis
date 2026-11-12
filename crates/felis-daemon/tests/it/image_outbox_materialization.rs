@@ -4,8 +4,6 @@
 //! leaves the client's [`ImageShadow`] agreeing with the store, and a
 //! marker whose image the same batch evicted ships nothing.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use felis_client_core::image_shadow::ImageShadow;
 use felis_daemon::graphics::{
     ApcCtx, ImageEvent, ShmDeferral, dispatch_apc_body, materialize_image_events,
@@ -15,8 +13,7 @@ use felis_grid::images::{ImageId, ImageStore, Placements};
 use felis_grid::kitty_graphics::Reassembler;
 use felis_protocol::messages::{ImageMsg, ImageTarget, SourceRect};
 
-mod common;
-use common::{b64, body};
+use crate::common::{b64, body};
 
 const ROOMY_CAP: usize = 1024 * 1024;
 

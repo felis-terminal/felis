@@ -37,8 +37,9 @@ const SE_GROUP_INTEGRITY: u32 = 0x20;
 const RELAUNCHED: &str = "FELIS_TEST_AT_MEDIUM";
 
 /// Runs `body` here when this process is at Medium integrity, else
-/// reruns `test` (this test's own name) at Medium and asserts it passed.
-pub(crate) fn run(test: &str, body: impl FnOnce()) {
+/// reruns `test` (this test's own name, in the caller's `module`, its
+/// `module_path!()`) at Medium and asserts it passed.
+pub(crate) fn run(module: &str, test: &str, body: impl FnOnce()) {
     if integrity_rid() == MEDIUM_RID {
         body();
         return;
@@ -47,7 +48,11 @@ pub(crate) fn run(test: &str, body: impl FnOnce()) {
         std::env::var_os(RELAUNCHED).is_none(),
         "the rerun is still above Medium integrity"
     );
-    let (code, output) = rerun_at_medium(test);
+    // libtest names a test by its path below the crate root.
+    let test = module
+        .split_once("::")
+        .map_or_else(|| test.to_owned(), |(_, path)| format!("{path}::{test}"));
+    let (code, output) = rerun_at_medium(&test);
     assert_eq!(code, 0, "the test failed at Medium integrity:\n{output}");
 }
 

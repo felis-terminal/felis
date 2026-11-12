@@ -4,8 +4,6 @@
 //! runs the session task's materialization, so the assertions cover
 //! the marker → store → wire path. No `pool::Session`, no PTY.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use felis_daemon::graphics::{
     ApcCtx, ImageEvent, SavedScreens, ShmDeferral, apply_screen_switch, clear_images,
     dispatch_apc_body, materialize_image_events,
@@ -19,8 +17,7 @@ use felis_protocol::{
 };
 use felis_vt::Parser;
 
-mod common;
-use common::{b64, body};
+use crate::common::{b64, body};
 
 const TEST_STORE_CAP: usize = 1024 * 1024;
 

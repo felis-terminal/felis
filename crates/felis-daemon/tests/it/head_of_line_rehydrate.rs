@@ -3,9 +3,6 @@
 //! Uses [`StallAfter`] in `poll_write` to deterministically park the daemon's
 //! writer mid-burst before asserting input delivery.
 
-#![cfg(unix)]
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -29,8 +26,7 @@ use tokio::io::{AsyncWrite, DuplexStream};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::Notify;
 
-mod common;
-use common::b64;
+use crate::common::b64;
 
 /// 1024 × 2048 × 3 = 6 MiB of raw RGB: the rehydrate burst is three
 /// orders of magnitude past [`STALL_AFTER`], so the gate closes deep

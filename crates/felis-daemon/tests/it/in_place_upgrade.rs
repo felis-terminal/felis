@@ -1,9 +1,6 @@
 //! The real `felis-daemon` replacing itself in place
 //! (`docs/explanation/architecture/overview.md` "In-place upgrade").
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-#![cfg(unix)]
-
 use std::path::Path;
 use std::process::{Child, Command as StdCommand};
 use std::time::Duration;
@@ -12,7 +9,7 @@ use felis_client_core::{Offer, connect};
 use felis_protocol::messages::{SpawnArgs, UpgradeOutcome};
 use tempfile::TempDir;
 
-mod common;
+use crate::common;
 
 fn private_dir() -> TempDir {
     use std::os::unix::fs::PermissionsExt as _;

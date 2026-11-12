@@ -3,21 +3,13 @@
 //! Missing OpenSSH tooling fails the tests; the dev shell provides it. `cross_host_stdio.rs` covers
 //! the same wire without the hop.
 
-#![cfg(unix)]
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-#![expect(
-    clippy::print_stderr,
-    reason = "skip diagnostics are intentional, mirroring real_app_harness"
-)]
-
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
 use felis_client_core::{Offer, ShadowScreen, connect};
 
-mod common;
-use common::{daemon_bin, require_tool, shadow_contains, wait_connectable};
+use crate::common::{daemon_bin, require_tool, shadow_contains, wait_connectable};
 use felis_protocol::{
     ConnectionMode, MessageKind, codec,
     messages::{

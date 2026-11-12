@@ -4,15 +4,12 @@
 //! medium, format, `q=` gating, error mapping).
 //! `felis-grid`'s `snapshot_kitty_graphics` pins the parser side.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use felis_daemon::graphics::{ApcCtx, ShmDeferral, dispatch_apc_body};
 use felis_grid::Grid;
 use felis_grid::images::{ImageId, ImageStore, Placements};
 use felis_grid::kitty_graphics::Reassembler;
 
-mod common;
-use common::{b64, body};
+use crate::common::{b64, body};
 
 const TEST_STORE_CAP: usize = 1024 * 1024;
 

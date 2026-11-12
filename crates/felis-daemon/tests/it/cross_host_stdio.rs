@@ -3,9 +3,6 @@
 //! tests in `felis-client-core` because Cargo sets
 //! `CARGO_BIN_EXE_felis-daemon` only for the binary's own crate.
 
-#![cfg(unix)]
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -17,8 +14,7 @@ use felis_protocol::{
 };
 use felis_transport::{FrameReader, FrameWriter, StdioSession, spawn_command};
 
-mod common;
-use common::{daemon_bin, wait_connectable};
+use crate::common::{daemon_bin, wait_connectable};
 
 /// A socket parent must be a `0700` directory this uid owns (REQ-107),
 /// and `TempDir` follows the process umask.
