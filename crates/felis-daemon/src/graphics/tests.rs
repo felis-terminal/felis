@@ -55,19 +55,7 @@ fn a_first_chunk_with_both_image_id_and_number_is_refused_at_once() {
     let Some(complete) = assembled(reassemble_apc_body(&mut r, b"Ga=T,i=1,I=2,m=1;zz")) else {
         panic!("expected the command to complete");
     };
-    let reply = handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        complete,
-    );
+    let reply = run(&mut grid, &mut images, &mut placements, complete);
     assert_eq!(
         reply,
         Some(
@@ -360,17 +348,10 @@ fn windows_transmission_rejection_echoes_id_and_honors_quiet() {
         (b'v', b"1"),
     ];
     let path = b64(br"C:\Users\test\felis-image.rgba");
-    let response = handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
+    let response = run(
+        &mut grid,
+        &mut images,
+        &mut placements,
         complete(&controls, &path),
     )
     .expect("the q=0 default replies to errors");
@@ -382,17 +363,10 @@ fn windows_transmission_rejection_echoes_id_and_honors_quiet() {
     let mut quiet = controls.to_vec();
     quiet.push((b'q', b"2"));
     assert!(
-        handle_complete(
-            &mut ApcCtx {
-                grid: &mut grid,
-                images: &mut images,
-                placements: &mut placements,
-                events: &mut Vec::new(),
-                shm: &mut ShmDeferral::default(),
-                cell_pixel_w: 0,
-                cell_pixel_h: 0,
-                anchor_cursor: None,
-            },
+        run(
+            &mut grid,
+            &mut images,
+            &mut placements,
             complete(&quiet, &path),
         )
         .is_none(),
@@ -560,32 +534,47 @@ fn tiny_rgba_controls() -> ([(u8, &'static [u8]); 4], Vec<u8>) {
     )
 }
 
+/// `keys` over a direct 1×1 RGBA transmission.
+fn tiny_rgba_cmd(keys: &[(u8, &[u8])]) -> CompleteCommand {
+    let (ctrls, payload) = tiny_rgba_controls();
+    let mut all = keys.to_vec();
+    all.extend_from_slice(&ctrls);
+    complete(&all, &payload)
+}
+
+/// `cmd` before any window reported its cell size, anchored at the live
+/// cursor, its image events dropped.
+fn run(
+    grid: &mut felis_grid::Grid,
+    images: &mut felis_grid::images::ImageStore,
+    placements: &mut felis_grid::images::Placements,
+    cmd: CompleteCommand,
+) -> Option<Vec<u8>> {
+    handle_complete(
+        &mut ApcCtx {
+            grid,
+            images,
+            placements,
+            events: &mut Vec::new(),
+            shm: &mut ShmDeferral::default(),
+            cell_pixel_w: 0,
+            cell_pixel_h: 0,
+            anchor_cursor: None,
+        },
+        cmd,
+    )
+}
+
 #[test]
 fn transmit_with_q3_or_higher_is_treated_as_silent() {
     let (mut grid, mut images, mut placements) = handler_state();
-    let (ctrls, payload) = tiny_rgba_controls();
-    let mut all = vec![
+    let cmd = tiny_rgba_cmd(&[
         (b'a', b"t".as_slice()),
         (b'i', b"3".as_slice()),
         (b'q', b"99".as_slice()),
-    ];
-    all.extend_from_slice(&ctrls);
-    let cmd = complete(&all, &payload);
+    ]);
     assert!(
-        handle_complete(
-            &mut ApcCtx {
-                grid: &mut grid,
-                images: &mut images,
-                placements: &mut placements,
-                events: &mut Vec::new(),
-                shm: &mut ShmDeferral::default(),
-                cell_pixel_w: 0,
-                cell_pixel_h: 0,
-                anchor_cursor: None,
-            },
-            cmd,
-        )
-        .is_none(),
+        run(&mut grid, &mut images, &mut placements, cmd).is_none(),
         "q=99 silences",
     );
 }
@@ -595,23 +584,8 @@ fn transmit_with_missing_image_id_auto_allocates_an_anonymous_id() {
     // The Kitty spec allows an anonymous transmit (yazi's direct
     // preview path sends one); with no id to address, nothing replies.
     let (mut grid, mut images, mut placements) = handler_state();
-    let (ctrls, payload) = tiny_rgba_controls();
-    let mut all = vec![(b'a', b"t".as_slice())];
-    all.extend_from_slice(&ctrls);
-    let cmd = complete(&all, &payload);
-    let response = handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    );
+    let cmd = tiny_rgba_cmd(&[(b'a', b"t".as_slice())]);
+    let response = run(&mut grid, &mut images, &mut placements, cmd);
     assert_eq!(response, None);
     assert!(
         images.get(ImageId(u32::MAX)).is_some(),
@@ -622,23 +596,8 @@ fn transmit_with_missing_image_id_auto_allocates_an_anonymous_id() {
 #[test]
 fn transmit_with_image_id_zero_is_anonymous() {
     let (mut grid, mut images, mut placements) = handler_state();
-    let (ctrls, payload) = tiny_rgba_controls();
-    let mut all = vec![(b'a', b"t".as_slice()), (b'i', b"0".as_slice())];
-    all.extend_from_slice(&ctrls);
-    let cmd = complete(&all, &payload);
-    let response = handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    );
+    let cmd = tiny_rgba_cmd(&[(b'a', b"t".as_slice()), (b'i', b"0".as_slice())]);
+    let response = run(&mut grid, &mut images, &mut placements, cmd);
     assert_eq!(response, None);
     assert!(images.get(ImageId(u32::MAX)).is_some());
 }
@@ -646,24 +605,8 @@ fn transmit_with_image_id_zero_is_anonymous() {
 #[test]
 fn transmit_and_display_records_placement_at_cursor() {
     let (mut grid, mut images, mut placements) = handler_state();
-    let (ctrls, payload) = tiny_rgba_controls();
-    let mut all = vec![(b'a', b"T".as_slice()), (b'i', b"42".as_slice())];
-    all.extend_from_slice(&ctrls);
-    let cmd = complete(&all, &payload);
-    handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    )
-    .unwrap();
+    let cmd = tiny_rgba_cmd(&[(b'a', b"T".as_slice()), (b'i', b"42".as_slice())]);
+    run(&mut grid, &mut images, &mut placements, cmd).unwrap();
     assert!(images.get(ImageId(42)).is_some());
     let placement = placements
         .iter()
@@ -686,38 +629,19 @@ fn delete_with_d_eq_a_clears_all_placements_but_keeps_images() {
         let id_str = id.to_string();
         let mut all = vec![(b'a', b"T".as_slice()), (b'i', id_str.as_bytes())];
         all.extend_from_slice(&ctrls);
-        handle_complete(
-            &mut ApcCtx {
-                grid: &mut grid,
-                images: &mut images,
-                placements: &mut placements,
-                events: &mut Vec::new(),
-                shm: &mut ShmDeferral::default(),
-                cell_pixel_w: 0,
-                cell_pixel_h: 0,
-                anchor_cursor: None,
-            },
+        run(
+            &mut grid,
+            &mut images,
+            &mut placements,
             complete(&all, &payload),
         )
         .unwrap();
     }
     assert_eq!(placements.len(), 3);
     let cmd = complete(&[(b'a', b"d"), (b'd', b"a")], b"");
-    handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    )
-    .ok_or(())
-    .expect_err("deletes are not acknowledged on success (kitty parity)");
+    run(&mut grid, &mut images, &mut placements, cmd)
+        .ok_or(())
+        .expect_err("deletes are not acknowledged on success (kitty parity)");
     assert!(placements.is_empty());
     assert_eq!(images.len(), 3, "images survive d=a");
     for id in 1..=3 {
@@ -770,17 +694,10 @@ fn delete_test_state(
         let id_str = id.to_string();
         let mut all = vec![(b'a', b"t".as_slice()), (b'i', id_str.as_bytes())];
         all.extend_from_slice(&ctrls);
-        handle_complete(
-            &mut ApcCtx {
-                grid: &mut grid,
-                images: &mut images,
-                placements: &mut placements,
-                events: &mut Vec::new(),
-                shm: &mut ShmDeferral::default(),
-                cell_pixel_w: 0,
-                cell_pixel_h: 0,
-                anchor_cursor: None,
-            },
+        run(
+            &mut grid,
+            &mut images,
+            &mut placements,
             complete(&all, &payload),
         )
         .unwrap();
@@ -797,21 +714,9 @@ fn delete_d_eq_p_drops_placement_intersecting_the_xy_cell() {
         &[(b'a', b"d"), (b'd', b"p"), (b'x', b"12"), (b'y', b"5")],
         b"",
     );
-    handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    )
-    .ok_or(())
-    .expect_err("deletes are not acknowledged on success (kitty parity)");
+    run(&mut grid, &mut images, &mut placements, cmd)
+        .ok_or(())
+        .expect_err("deletes are not acknowledged on success (kitty parity)");
     assert_eq!(placements.len(), 1, "image 2 should survive the d=p");
     assert_eq!(placements.iter().next().unwrap().image_id, ImageId(2));
     assert!(
@@ -828,21 +733,9 @@ fn delete_d_eq_capital_p_also_frees_the_image_store() {
         &[(b'a', b"d"), (b'd', b"P"), (b'x', b"12"), (b'y', b"5")],
         b"",
     );
-    handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    )
-    .ok_or(())
-    .expect_err("deletes are not acknowledged on success (kitty parity)");
+    run(&mut grid, &mut images, &mut placements, cmd)
+        .ok_or(())
+        .expect_err("deletes are not acknowledged on success (kitty parity)");
     assert!(placements.is_empty());
     assert!(images.get(ImageId(7)).is_none(), "d=P frees the image too");
 }
@@ -854,21 +747,9 @@ fn delete_d_eq_x_drops_placements_intersecting_the_column() {
     placements.upsert(seeded_placement(2, None, 20, 12, 1, 3, 0, false));
     placements.upsert(seeded_placement(3, None, 5, 1, 1, 5, 0, false));
     let cmd = complete(&[(b'a', b"d"), (b'd', b"x"), (b'x', b"12")], b"");
-    handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    )
-    .ok_or(())
-    .expect_err("deletes are not acknowledged on success (kitty parity)");
+    run(&mut grid, &mut images, &mut placements, cmd)
+        .ok_or(())
+        .expect_err("deletes are not acknowledged on success (kitty parity)");
     let kept: Vec<_> = placements.iter().map(|p| p.image_id.0).collect();
     assert_eq!(kept, vec![3], "only image 3 (col 1..=5) survives x=12");
 }
@@ -880,21 +761,9 @@ fn delete_d_eq_y_drops_placements_intersecting_the_row() {
     placements.upsert(seeded_placement(2, None, 5, 70, 1, 1, 0, false));
     placements.upsert(seeded_placement(3, None, 10, 1, 1, 1, 0, false));
     let cmd = complete(&[(b'a', b"d"), (b'd', b"y"), (b'y', b"5")], b"");
-    handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    )
-    .ok_or(())
-    .expect_err("deletes are not acknowledged on success (kitty parity)");
+    run(&mut grid, &mut images, &mut placements, cmd)
+        .ok_or(())
+        .expect_err("deletes are not acknowledged on success (kitty parity)");
     let kept: Vec<_> = placements.iter().map(|p| p.image_id.0).collect();
     assert_eq!(kept, vec![3], "only image 3 (row 10) survives y=5");
 }
@@ -906,21 +775,9 @@ fn delete_d_eq_z_drops_placements_at_the_specified_z_index() {
     placements.upsert(seeded_placement(2, None, 1, 1, 1, 1, -1, false));
     placements.upsert(seeded_placement(3, None, 1, 1, 1, 1, -1, false));
     let cmd = complete(&[(b'a', b"d"), (b'd', b"z"), (b'z', b"-1")], b"");
-    handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    )
-    .ok_or(())
-    .expect_err("deletes are not acknowledged on success (kitty parity)");
+    run(&mut grid, &mut images, &mut placements, cmd)
+        .ok_or(())
+        .expect_err("deletes are not acknowledged on success (kitty parity)");
     let kept: Vec<_> = placements.iter().map(|p| p.image_id.0).collect();
     assert_eq!(kept, vec![1], "z=-1 wipes the two -1 placements");
 }
@@ -940,21 +797,9 @@ fn delete_d_eq_q_requires_all_three_coords_to_match() {
         ],
         b"",
     );
-    handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    )
-    .ok_or(())
-    .expect_err("deletes are not acknowledged on success (kitty parity)");
+    run(&mut grid, &mut images, &mut placements, cmd)
+        .ok_or(())
+        .expect_err("deletes are not acknowledged on success (kitty parity)");
     let kept: Vec<_> = placements.iter().map(|p| p.image_id.0).collect();
     assert_eq!(kept, vec![1], "image 1 at z=0 survives the z=3 filter");
 }
@@ -965,21 +810,9 @@ fn delete_d_eq_c_uses_the_current_cursor_position() {
     placements.upsert(seeded_placement(1, None, 1, 1, 1, 1, 0, false));
     placements.upsert(seeded_placement(2, None, 5, 5, 1, 1, 0, false));
     let cmd = complete(&[(b'a', b"d"), (b'd', b"c")], b"");
-    handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    )
-    .ok_or(())
-    .expect_err("deletes are not acknowledged on success (kitty parity)");
+    run(&mut grid, &mut images, &mut placements, cmd)
+        .ok_or(())
+        .expect_err("deletes are not acknowledged on success (kitty parity)");
     let kept: Vec<_> = placements.iter().map(|p| p.image_id.0).collect();
     assert_eq!(kept, vec![2]);
 }
@@ -996,21 +829,9 @@ fn delete_d_eq_r_drops_placements_in_the_image_id_range() {
         &[(b'a', b"d"), (b'd', b"r"), (b'x', b"5"), (b'y', b"7")],
         b"",
     );
-    handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    )
-    .ok_or(())
-    .expect_err("deletes are not acknowledged on success (kitty parity)");
+    run(&mut grid, &mut images, &mut placements, cmd)
+        .ok_or(())
+        .expect_err("deletes are not acknowledged on success (kitty parity)");
     let kept: Vec<_> = placements.iter().map(|p| p.image_id.0).collect();
     assert_eq!(kept, vec![3, 9], "ids 5 and 7 inside [5..=7] are dropped");
     assert!(images.get(ImageId(5)).is_some());
@@ -1026,21 +847,9 @@ fn delete_d_eq_capital_r_also_frees_images_in_range() {
         &[(b'a', b"d"), (b'd', b"R"), (b'x', b"5"), (b'y', b"7")],
         b"",
     );
-    handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    )
-    .ok_or(())
-    .expect_err("deletes are not acknowledged on success (kitty parity)");
+    run(&mut grid, &mut images, &mut placements, cmd)
+        .ok_or(())
+        .expect_err("deletes are not acknowledged on success (kitty parity)");
     assert_eq!(placements.len(), 1);
     assert!(images.get(ImageId(5)).is_none());
     assert!(images.get(ImageId(7)).is_none());
@@ -1079,24 +888,8 @@ fn delete_extended_modes_emit_placement_removed_per_evicted_entry() {
 #[test]
 fn query_with_valid_payload_emits_ok() {
     let (mut grid, mut images, mut placements) = handler_state();
-    let (ctrls, payload) = tiny_rgba_controls();
-    let mut all = vec![(b'a', b"q".as_slice()), (b'i', b"31".as_slice())];
-    all.extend_from_slice(&ctrls);
-    let cmd = complete(&all, &payload);
-    let response = handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    )
-    .unwrap();
+    let cmd = tiny_rgba_cmd(&[(b'a', b"q".as_slice()), (b'i', b"31".as_slice())]);
+    let response = run(&mut grid, &mut images, &mut placements, cmd).unwrap();
     assert_eq!(response, b"\x1b_Gi=31;OK\x1b\\");
     assert!(
         images.is_empty(),
@@ -1345,20 +1138,7 @@ fn query_with_invalid_payload_emits_specific_error() {
         ],
         b"",
     );
-    let response = handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    )
-    .unwrap();
+    let response = run(&mut grid, &mut images, &mut placements, cmd).unwrap();
     assert!(
         response.starts_with(b"\x1b_Gi=32;EINVAL"),
         "f=99 → EINVAL, got: {response:?}",
@@ -1369,19 +1149,7 @@ fn query_with_invalid_payload_emits_specific_error() {
 fn unknown_action_is_dropped_without_a_reply() {
     let (mut grid, mut images, mut placements) = handler_state();
     let cmd = complete(&[(b'a', b"X"), (b'i', b"1")], b"");
-    let response = handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    );
+    let response = run(&mut grid, &mut images, &mut placements, cmd);
     assert_eq!(response, None);
 }
 
@@ -1394,19 +1162,7 @@ fn transmit_root(
     let (ctrls, payload) = tiny_rgba_controls();
     let mut all = vec![(b'a', b"t".as_slice()), (b'i', id)];
     all.extend_from_slice(&ctrls);
-    handle_complete(
-        &mut ApcCtx {
-            grid,
-            images,
-            placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        complete(&all, &payload),
-    );
+    run(grid, images, placements, complete(&all, &payload));
 }
 
 fn push_frame_cmd(gap: &'static [u8], pixel: [u8; 4]) -> (Vec<(u8, &'static [u8])>, Vec<u8>) {
@@ -1914,32 +1670,18 @@ fn animation_frame_default_gap_is_40ms_and_negative_is_gapless() {
     transmit_root(&mut grid, &mut images, &mut placements, b"1");
     let (mut ctrls, payload) = push_frame_cmd(b"0", [1, 2, 3, 4]);
     ctrls.retain(|(k, _)| *k != b'z');
-    handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
+    run(
+        &mut grid,
+        &mut images,
+        &mut placements,
         complete(&ctrls, &payload),
     );
     assert_eq!(images.get(ImageId(1)).unwrap().frame(1).unwrap().gap_ms, 40);
     let (ctrls, payload) = push_frame_cmd(b"-5", [5, 6, 7, 8]);
-    handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
+    run(
+        &mut grid,
+        &mut images,
+        &mut placements,
         complete(&ctrls, &payload),
     );
     assert_eq!(images.get(ImageId(1)).unwrap().frame(2).unwrap().gap_ms, 0);
@@ -1952,17 +1694,10 @@ fn animation_control_sets_state_loops_and_jumps() {
     transmit_root(&mut grid, &mut images, &mut placements, b"1");
     for px in [[1, 1, 1, 1], [2, 2, 2, 2]] {
         let (ctrls, payload) = push_frame_cmd(b"50", px);
-        handle_complete(
-            &mut ApcCtx {
-                grid: &mut grid,
-                images: &mut images,
-                placements: &mut placements,
-                events: &mut Vec::new(),
-                shm: &mut ShmDeferral::default(),
-                cell_pixel_w: 0,
-                cell_pixel_h: 0,
-                anchor_cursor: None,
-            },
+        run(
+            &mut grid,
+            &mut images,
+            &mut placements,
             complete(&ctrls, &payload),
         );
     }
@@ -2007,17 +1742,10 @@ fn delete_frame_removes_it_and_reships_the_image() {
     let (mut grid, mut images, mut placements) = handler_state();
     transmit_root(&mut grid, &mut images, &mut placements, b"1");
     let (ctrls, payload) = push_frame_cmd(b"50", [9, 9, 9, 9]);
-    handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
+    run(
+        &mut grid,
+        &mut images,
+        &mut placements,
         complete(&ctrls, &payload),
     );
     assert_eq!(images.get(ImageId(1)).unwrap().frame_count(), 2);
@@ -2071,17 +1799,10 @@ fn an_oversized_frame_from_a_file_gets_the_file_medium_reply() {
             (b'v', b"1"),
             (b't', medium),
         ];
-        handle_complete(
-            &mut ApcCtx {
-                grid: &mut grid,
-                images: &mut images,
-                placements: &mut placements,
-                events: &mut Vec::new(),
-                shm: &mut ShmDeferral::default(),
-                cell_pixel_w: 0,
-                cell_pixel_h: 0,
-                anchor_cursor: None,
-            },
+        run(
+            &mut grid,
+            &mut images,
+            &mut placements,
             complete(&ctrls, payload),
         )
         .expect("error response emitted")
@@ -2102,17 +1823,10 @@ fn animation_frame_on_missing_image_is_not_found() {
             c.1 = b"99";
         }
     }
-    let resp = handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
+    let resp = run(
+        &mut grid,
+        &mut images,
+        &mut placements,
         complete(&ctrls, &payload),
     )
     .expect("error response emitted");
@@ -2127,17 +1841,10 @@ fn compose_copies_a_region_between_frames() {
     let (mut grid, mut images, mut placements) = handler_state();
     transmit_root(&mut grid, &mut images, &mut placements, b"1");
     let (ctrls, payload) = push_frame_cmd(b"50", [0xAB, 0xCD, 0xEF, 0xFF]);
-    handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
+    run(
+        &mut grid,
+        &mut images,
+        &mut placements,
         complete(&ctrls, &payload),
     );
     let c: &[(u8, &[u8])] = &[
@@ -2147,19 +1854,7 @@ fn compose_copies_a_region_between_frames() {
         (b'c', b"1"),
         (b'C', b"1"),
     ];
-    handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        complete(c, b""),
-    );
+    run(&mut grid, &mut images, &mut placements, complete(c, b""));
     assert_eq!(
         images.get(ImageId(1)).unwrap().frame(0).unwrap().pixels,
         vec![0xAB, 0xCD, 0xEF, 0xFF],
@@ -2281,29 +1976,13 @@ fn dispatch_apc_bodies_returns_responses_in_order() {
 #[test]
 fn transmit_and_display_advances_cursor_by_cells() {
     let (mut grid, mut images, mut placements) = handler_state();
-    let (ctrls, payload) = tiny_rgba_controls();
-    let mut all = vec![
+    let cmd = tiny_rgba_cmd(&[
         (b'a', b"T".as_slice()),
         (b'i', b"50".as_slice()),
         (b'c', b"4".as_slice()),
         (b'r', b"2".as_slice()),
-    ];
-    all.extend_from_slice(&ctrls);
-    let cmd = complete(&all, &payload);
-    handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    )
-    .unwrap();
+    ]);
+    run(&mut grid, &mut images, &mut placements, cmd).unwrap();
     let cur = grid.cursor();
     assert_eq!(
         (cur.row, cur.col),
@@ -2315,30 +1994,14 @@ fn transmit_and_display_advances_cursor_by_cells() {
 #[test]
 fn transmit_and_display_with_no_cursor_move_keeps_cursor() {
     let (mut grid, mut images, mut placements) = handler_state();
-    let (ctrls, payload) = tiny_rgba_controls();
-    let mut all = vec![
+    let cmd = tiny_rgba_cmd(&[
         (b'a', b"T".as_slice()),
         (b'i', b"51".as_slice()),
         (b'c', b"4".as_slice()),
         (b'r', b"2".as_slice()),
         (b'C', b"1".as_slice()),
-    ];
-    all.extend_from_slice(&ctrls);
-    let cmd = complete(&all, &payload);
-    handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    )
-    .unwrap();
+    ]);
+    run(&mut grid, &mut images, &mut placements, cmd).unwrap();
     let cur = grid.cursor();
     assert_eq!((cur.row, cur.col), (0, 0), "C=1 → cursor stays put");
     assert_eq!(placements.len(), 1);
@@ -2560,20 +2223,7 @@ fn natural_sizing_falls_back_when_cell_pixel_dims_are_zero() {
     let mut all = vec![(b'a', b"T".as_slice()), (b'i', b"43".as_slice())];
     all.extend_from_slice(&ctrls);
     let cmd = complete(&all, &payload);
-    handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    )
-    .unwrap();
+    run(&mut grid, &mut images, &mut placements, cmd).unwrap();
     let cur = grid.cursor();
     assert_ne!((cur.row, cur.col), (0, 0));
 }
@@ -2619,20 +2269,7 @@ fn transmit_via_file_path_reads_bytes_from_disk() {
         ],
         &path_b64,
     );
-    handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    )
-    .unwrap();
+    run(&mut grid, &mut images, &mut placements, cmd).unwrap();
     let entry = images.get(ImageId(100)).expect("image stored");
     assert_eq!(entry.pixels(), pixels);
 }
@@ -2693,20 +2330,7 @@ fn transmit_via_file_path_rejects_relative_path() {
         &[(b'a', b"t"), (b'i', b"101"), (b't', b"f"), (b'f', b"32")],
         &path_b64,
     );
-    let response = handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    )
-    .unwrap();
+    let response = run(&mut grid, &mut images, &mut placements, cmd).unwrap();
     assert!(response.starts_with(b"\x1b_Gi=101;EINVAL"));
 }
 
@@ -2719,20 +2343,7 @@ fn transmit_via_file_path_rejects_parent_dir_component() {
         &[(b'a', b"t"), (b'i', b"102"), (b't', b"f"), (b'f', b"32")],
         &path_b64,
     );
-    let response = handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    )
-    .unwrap();
+    let response = run(&mut grid, &mut images, &mut placements, cmd).unwrap();
     assert!(
         response.starts_with(b"\x1b_Gi=102;EINVAL"),
         "got: {response:?}"
@@ -2748,20 +2359,7 @@ fn transmit_via_file_path_missing_file_returns_ebadf() {
         &[(b'a', b"t"), (b'i', b"103"), (b't', b"f"), (b'f', b"32")],
         &path_b64,
     );
-    let response = handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    )
-    .unwrap();
+    let response = run(&mut grid, &mut images, &mut placements, cmd).unwrap();
     assert!(
         response.starts_with(b"\x1b_Gi=103;EBADF"),
         "got: {response:?}"
@@ -2778,20 +2376,7 @@ fn transmit_via_file_path_rejects_directory_target_with_ebadf() {
         &[(b'a', b"t"), (b'i', b"105"), (b't', b"f"), (b'f', b"32")],
         &path_b64,
     );
-    let response = handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    )
-    .unwrap();
+    let response = run(&mut grid, &mut images, &mut placements, cmd).unwrap();
     assert!(
         response.starts_with(b"\x1b_Gi=105;EBADF:Failed to read image file"),
         "a directory gets the one file-medium reply, got: {response:?}",
@@ -2816,20 +2401,7 @@ fn transmit_via_temp_file_reads_then_unlinks() {
         ],
         &path_b64,
     );
-    handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    )
-    .unwrap();
+    run(&mut grid, &mut images, &mut placements, cmd).unwrap();
     let entry = images.get(ImageId(200)).expect("image stored");
     assert_eq!(entry.pixels(), pixels);
     assert!(
@@ -3007,20 +2579,7 @@ fn transmit_via_temp_file_rejects_symlink_with_nofollow() {
         ],
         &path_b64,
     );
-    let response = handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    )
-    .unwrap();
+    let response = run(&mut grid, &mut images, &mut placements, cmd).unwrap();
     assert!(
         response.starts_with(b"\x1b_Gi=201;EBADF"),
         "symlink target → EBADF under NOFOLLOW, got: {response:?}",
@@ -3040,20 +2599,7 @@ fn transmit_via_temp_file_rejects_relative_path() {
         &[(b'a', b"t"), (b'i', b"202"), (b't', b"t"), (b'f', b"32")],
         &path_b64,
     );
-    let response = handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    )
-    .unwrap();
+    let response = run(&mut grid, &mut images, &mut placements, cmd).unwrap();
     assert!(
         response.starts_with(b"\x1b_Gi=202;EINVAL"),
         "got: {response:?}"
@@ -3080,20 +2626,7 @@ fn transmit_via_file_path_oversize_file_returns_ebadf() {
         ],
         &path_b64,
     );
-    let response = handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    )
-    .unwrap();
+    let response = run(&mut grid, &mut images, &mut placements, cmd).unwrap();
     assert!(
         response.starts_with(b"\x1b_Gi=106;EBADF:Failed to read image file"),
         "an oversize file gets the one file-medium reply, got: {response:?}",
@@ -3146,20 +2679,7 @@ fn transmit_via_shm_reads_without_unlinking() {
         &name_b64,
     );
     let segment = shm_segment_name(&cmd);
-    handle_complete(
-        &mut ApcCtx {
-            grid: &mut grid,
-            images: &mut images,
-            placements: &mut placements,
-            events: &mut Vec::new(),
-            shm: &mut ShmDeferral::default(),
-            cell_pixel_w: 0,
-            cell_pixel_h: 0,
-            anchor_cursor: None,
-        },
-        cmd,
-    )
-    .unwrap();
+    run(&mut grid, &mut images, &mut placements, cmd).unwrap();
     let entry = images.get(ImageId(300)).expect("image stored");
     assert_eq!(entry.pixels(), pixels);
     assert!(
