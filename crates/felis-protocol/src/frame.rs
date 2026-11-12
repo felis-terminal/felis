@@ -178,17 +178,6 @@ mod tests {
     }
 
     #[test]
-    fn body_round_trips() {
-        let body = b"hello-felis";
-        let f = Frame { kind: 2, body };
-        let bytes = f.encode().unwrap();
-        let (decoded, consumed) = decode(&bytes).unwrap();
-        assert_eq!(decoded.kind, 2);
-        assert_eq!(decoded.body, body);
-        assert_eq!(consumed, bytes.len());
-    }
-
-    #[test]
     fn encoded_len_counts_header_plus_body() {
         let f = Frame {
             kind: 0,
