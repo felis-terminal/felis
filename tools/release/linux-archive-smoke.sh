@@ -4,7 +4,7 @@
 # Runs inside `ubuntu:24.04` with the extracted tree read-only at
 # /opt/felis and the smoke's own helpers at /opt/smoke, so anything the
 # archive still resolved from a store path would fail here. The
-# .forgejo/workflows/release.yml `linux-package` job is one caller; by
+# .forgejo/workflows/release.yml `package` job is one caller; by
 # hand it is
 #
 #   docker run --rm -v <tree>:/opt/felis:ro -v <ctx>:/opt/smoke:ro \

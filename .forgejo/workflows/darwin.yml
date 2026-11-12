@@ -9,6 +9,12 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # release.yml's gate on a tag's revision; see pr.yml.
+  workflow_call:
+    inputs:
+      release:
+        type: boolean
+        default: false
 
 # Forgejo ignores GitHub's `permissions: id-token: write` (forgejo/forgejo#10481).
 enable-openid-connect: true
@@ -16,7 +22,7 @@ enable-openid-connect: true
 # Superseding a PR commit cancels its runs; main's runs never cancel, since
 # publication is gated per revision on that revision's own jobs.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: darwin-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -28,12 +34,14 @@ jobs:
     runs-on: aarch64-darwin
     timeout-minutes: 5
     outputs:
-      relevant: ${{ steps.filter.outputs.relevant }}
+      relevant: ${{ inputs.release || steps.filter.outputs.relevant }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ !inputs.release }}
         with:
           fetch-depth: 0
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
+        if: ${{ !inputs.release }}
         id: filter
         with:
           predicate-quantifier: 'some-with-excludes'
@@ -45,10 +53,12 @@ jobs:
               - '!*.md'
 
   darwin-build:
+    # Skipped on a tag: release.yml's package job runs these checks on the
+    # same archive and attaches it.
     name: build felis (aarch64-darwin)
     runs-on: aarch64-darwin
     needs: [changes]
-    if: needs.changes.outputs.relevant == 'true'
+    if: needs.changes.outputs.relevant == 'true' && !inputs.release
     timeout-minutes: 45
     env:
       DIST_ROOT: ${{ github.workspace }}/dist
