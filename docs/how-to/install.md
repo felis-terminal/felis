@@ -10,8 +10,7 @@ through Homebrew, from the release archives, or from source.
 **Prerequisites:** the [Nix package manager](https://nixos.org/download) with flakes enabled for the flake,
 home-manager, and source-build paths; the source build takes its toolchain from the same flake. The Homebrew path needs
 [Homebrew](https://brew.sh). The Linux and macOS archives and the Windows artifact need no Nix, and a native Windows
-build needs only a Rust toolchain. Nothing else: felis needs no background service to configure, since the daemon starts
-on first use.
+build needs only a Rust toolchain. No background service needs configuring: the daemon starts on first use.
 
 ## Install from the flake
 
@@ -25,9 +24,8 @@ felis
 ```
 
 The package bundles all three binaries (`felis`, `felis-client`, `felis-daemon`) in one output, along with the
-`xterm-felis` terminfo entry in `share/terminfo`, shell completions, and `felis(1)` man pages. On Linux the GUI client
-is wrapped with required runtime GPU and windowing libraries, and a desktop entry in `share/applications` lists felis in
-application launchers.
+`xterm-felis` terminfo entry in `share/terminfo`, shell completions, and `felis(1)` man pages. On Linux a desktop entry
+in `share/applications` lists felis in application launchers.
 
 For offline documentation, the flake's `docs` package installs the markdown documentation tree under `share/doc/felis`,
 readable with a markdown pager like `glow`:
@@ -130,9 +128,8 @@ ln -sf "$(brew --prefix felis)/felis.app" /Applications/felis.app
    ln -s ~/.local/opt/felis-x86_64-linux/bin/felis ~/.local/bin/felis
    ```
 
-Move the tree whole and keep it together: `bin/` holds the three launchers, the loader they run, and nothing the
-binaries can find once they are apart. The archive needs no Nix installation; it carries its own C library, X11 and
-Wayland libraries, and runs them through its own loader wherever you unpack it.
+Move the tree whole and keep it together: the launchers in `bin/` find nothing once they are apart from it. The archive
+needs no Nix installation; it carries its own C library, X11 and Wayland libraries.
 
 Three things come from the host:
 
@@ -143,9 +140,8 @@ Three things come from the host:
   configuration names (`fc-match monospace` for the default); without the library the window does not open. On Debian
   and Ubuntu, `libfontconfig1` and `fonts-dejavu-core` are enough; `font.family` picks another face
   ([configuration](../reference/config.md#font)), and `felis fonts list` prints the names it accepts.
-- **A C library no newer than the bundled one.** The host's driver libraries and libfontconfig are loaded into a process
-  already running the archive's glibc 2.42, which works as long as they were linked against 2.42 or older. Every current
-  distribution release is; a host newer than the archive is the case to watch, and the fix is a newer archive.
+- **Host libraries linked against glibc 2.42 or older.** The host's driver libraries and libfontconfig load into a
+  process running the archive's glibc 2.42. On a host whose libraries need a newer glibc, use a newer archive.
 
 The compiled `xterm-felis` entry is at `share/terminfo`, and the daemon adds that directory to `TERMINFO_DIRS` for every
 session it starts, so programs in those sessions recognize `TERM=xterm-felis` with no setup. Only a program that reads
@@ -185,13 +181,11 @@ shell puts `bin/felis` on `PATH`, set `Exec=` in the copy to its absolute path i
 3. Run `bin/felis`, or put that directory on your `PATH`, or link `bin/felis` into a directory already on it. Open
    `felis.app` from Finder for a window.
 
-The archive is ad-hoc signed, not notarized, so macOS quarantines everything it extracts from a download and refuses to
-launch it. Clearing the attribute over the whole tree, as above, is what makes both the app and the CLI runnable.
-Right-clicking `felis.app` and choosing **Open** works as well, but it authorizes only the app's main executable, not
-the separately signed `felis` inside it, so `bin/felis` still needs the `xattr` command.
+The archive is ad-hoc signed, not notarized, so macOS refuses to launch anything extracted from the download until the
+quarantine attribute is cleared over the whole tree, as above. Right-clicking `felis.app` and choosing **Open**
+authorizes only the app, so `bin/felis` still needs the `xattr` command.
 
-Move the tree whole and keep it together: `bin/felis` runs the CLI inside `felis.app`, where it sits beside the client
-and the daemon it spawns. The app carries every library it loads from outside the system, so it needs no Nix
+Move the tree whole and keep it together: `bin/felis` runs the CLI inside `felis.app`. The archive needs no Nix
 installation.
 
 The compiled `xterm-felis` entry is at `share/terminfo`, and `felis.app` carries a copy that the daemon adds to
@@ -240,13 +234,10 @@ cargo build
 ```
 
 On Linux, add the `wayland-clipboard` feature (`cargo build --features wayland-clipboard`; the Nix flake's Linux package
-sets it). It wires `arboard` through `wl-clipboard-rs`, so Wayland sessions on wlroots-based compositors (Sway,
-Hyprland, niri) and KDE Plasma reach the system clipboard through `wlr_data_control_v1`, which is privileged and
-focus-independent: a copy issued while the window is unfocused still lands. A build without the feature falls back to
-XWayland's X11 selection, which is also what GNOME sessions use, since Mutter does not expose `wlr_data_control_v1`.
-With XWayland disabled that path fails, and felis reports `ClipboardError::Unavailable` and falls back to an in-process
-clipboard. The feature is off by default because macOS and Windows builds have no use for `wl-clipboard-rs` or its
-transitive dependencies.
+sets it), so Wayland sessions on wlroots-based compositors (Sway, Hyprland, niri) and KDE Plasma reach the system
+clipboard through `wlr_data_control_v1`, even for a copy issued while the window is unfocused. A build without the
+feature uses XWayland's X11 selection, as GNOME sessions always do; with XWayland disabled, felis falls back to an
+in-process clipboard.
 
 Installing outside Nix requires setting up the terminfo entry, shell completions, and Linux runtime library wrappers
 manually. Compile the terminfo entry once with `tic`:
@@ -257,9 +248,6 @@ tic -x crates/felis-daemon/terminfo/felis.terminfo   # writes into ~/.terminfo
 
 Verify the installation with `infocmp -x xterm-felis`. For terminfo overrides and environment configuration, see
 [terminal identity](../reference/terminal-identity.md).
-
-Platform build targets and CI validation gates are specified in
-[workspace.md](../reference/workspace.md#build-and-platform-matrix).
 
 ## Mark zsh prompts
 
@@ -278,5 +266,4 @@ nix profile install 'github:felis-terminal/felis/v0.1.0'
 ```
 
 Each tagged release attaches the Linux and macOS archives, the Windows zip, and `felis-config.schema.json` and
-`felis.proto`, which pin the config keys and the wire schema that build accepts. For the release verification gate
-specification, see [workspace.md](../reference/workspace.md#release-gate).
+`felis.proto`, which pin the config keys and the wire schema that build accepts.

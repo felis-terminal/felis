@@ -129,11 +129,11 @@ exist are fire-and-forget.
 
 - **Clipboard is write-mostly and gated.** An OSC 52 write always lands in the session-local mirror, but reaches the
   _OS_ clipboard on its own only with explicit user opt-in (`clipboard.osc_52 = "system"`, default off). The one other
-  route is the user's own chord: a `pipe` from the `osc_52` source promotes the last write, ungated, because the
-  keypress is the consent the gate stands in for. A `?` query never reads the OS clipboard; it answers that mirror of
-  the values the session itself wrote. The OS-clipboard read is not implemented, and the standing position is never:
-  whether to support clipboard _read_ from the PTY at all, and under what confirmation, is a question felis answers no
-  to until an argument reopens it.
+  route is the user's own chord: a `pipe` from the `osc_52` source promotes the last write ungated, because the bytes
+  came from a program but the chord that ships them is the user's, and that keypress is the consent the gate stands in
+  for. A `?` query never reads the OS clipboard; it answers that mirror of the values the session itself wrote. The
+  OS-clipboard read is not implemented, and the standing position is never: whether to support clipboard _read_ from the
+  PTY at all, and under what confirmation, is a question felis answers no to until an argument reopens it.
 - **Bracketed paste is never turned off silently.** The mode starts off and a program turns it on with `CSI ? 2004 h`. A
   DECRST that turns it back off raises an edge-triggered warning in the daemon's diagnostic log, so a program cannot
   strip the framing a shell relies on to tell pasted bytes from typed ones and leave no trace.
@@ -165,9 +165,8 @@ The VT/CSI/OSC/DCS/APC state machine accepts unbounded attacker input.
   O(cap) memory, not O(stream).
 - **DCS that felis does not implement is dropped at the dispatcher, not buffered.** Sixel is not supported; its DCS
   prefix is recognized and the body discarded byte-for-byte, never collected.
-- **Every decoder has a `cargo fuzz` target.** A fuzz target for the VT parser, the Kitty graphics command parser, and
-  each half of the IPC decode (the frame envelope and the protobuf/JSON body + wire→domain conversion) lives in the
-  repo. CI runs a short fuzz pass on every PR; a longer corpus runs nightly.
+- **Every decoder has a `cargo fuzz` target**: the VT parser, the Kitty graphics command parser, and each half of the
+  IPC decode (the frame envelope, and the body with its wire→domain conversion).
 
 **Test:** the parser passes a 24-hour fuzzer run with zero panics, zero OOMs, and bounded peak memory.
 
@@ -222,16 +221,15 @@ plant a FIFO at the name, so the open is additionally restricted to regular file
 object, never a FIFO), and the guard would otherwise reject every macOS segment, whose `fstat` reports no file-type
 bits.
 
-The object is `shm_unlink`ed at session teardown (`Session::drop`), not per read. mpv reuses one segment for every video
-frame, and a per-read unlink forces its next reopen to allocate a fresh `ftruncate`-zeroed inode the terminal then reads
-as a black frame. Deferring the unlink is not a containment hole: a same-UID producer can fill `/dev/shm` directly
-regardless, and the teardown sweep bounds any leak to the session's lifetime (mpv also unlinks its own segment on clean
-exit).
+The object is `shm_unlink`ed at session teardown, not per read. mpv reuses one segment for every video frame, and a
+per-read unlink forces its next reopen to allocate a fresh `ftruncate`-zeroed inode the terminal then reads as a black
+frame. Deferring the unlink is not a containment hole: a same-UID producer can fill `/dev/shm` directly regardless, and
+the teardown sweep bounds any leak to the session's lifetime (mpv also unlinks its own segment on clean exit).
 
 What the deferral must not become is a _ledger_. The names are producer-chosen, so holding one per transmission would
 let any program in the session grow the daemon by a string per escape sequence, with no segment to show for it, since a
-name that never opened was recorded too. The queue is therefore bounded and success-gated (`ShmDeferral`), which costs a
-rotating producer only the per-read unlink kitty already does.
+name that never opened was recorded too. The queue is therefore bounded and success-gated, which costs a rotating
+producer only the per-read unlink kitty already does.
 
 ## Daemon IPC
 
@@ -330,10 +328,6 @@ already admits (an account the DACL excludes cannot open the pipe to start the r
 foreign server would need its creator's pid to be reused by one of the user's own processes while the pipe stays open, a
 reuse it cannot steer. Both windows are recorded here rather than chased.
 
-The DACL, the label, and the same-user admit have runtime tests on the `x86_64-windows` runner (REQ-106a); the SID and
-integrity mismatch paths are pinned through the `admit` seam, since a single-account runner can never present a foreign
-identity to `accept`.
-
 #### The `RetargetHost` push relays existing authority, not new
 
 A same-UID caller on the `0600` socket can drive `OpsToDaemonMsg::Switch` with a `SwitchTarget::Carrier`, and the daemon
@@ -362,9 +356,8 @@ MiB argv, and one number for both is either useless on the path or wrong on the 
 
 Both peers check the same constants, so a limit is a property of the protocol rather than of whichever side happens to
 be newer: the numbers the first release ships are part of major 1, and narrowing one afterwards owes the old-peer answer
-[ipc.md](architecture/ipc.md#schema-evolution-major-minor-feature-flag) describes rather than a quiet edit.
-
-The numbers are deliberately generous, and each carries its rationale in `felis-protocol`'s `messages/limits.rs`.
+[ipc.md](architecture/ipc.md#schema-evolution-major-minor-feature-flag) describes rather than a quiet edit. The numbers
+are deliberately generous.
 
 #### Connections are admitted against a daemon-wide cap (REQ-916)
 
@@ -434,11 +427,11 @@ to be told to hold.
 
 #### Pending input is bounded per session (REQ-1011a)
 
-Each session admits a fixed budget of unwritten input (`PTY_INPUT_BUDGET`, [ipc.md](../reference/ipc.md) "Client →
-daemon: the input budget"), the connection reserves against it before handing the bytes over, and the reservation is
-released only when the PTY writer's `write_all` returns. A child that has stopped reading its stdin (stopped, wedged in
-a syscall, or simply slow) is not a reason for the daemon to grow: a same-UID `felis sessions send` loop into one would
-otherwise move arbitrary backlog into daemon memory, since nothing upstream could tell "queued" from "written".
+Each session admits a fixed budget of unwritten input ([ipc.md](../reference/ipc.md) "Client → daemon: the input
+budget"), the connection reserves against it before handing the bytes over, and the reservation is released only when
+the PTY write completes. A child that has stopped reading its stdin (stopped, wedged in a syscall, or simply slow) is
+not a reason for the daemon to grow: a same-UID `felis sessions send` loop into one would otherwise move arbitrary
+backlog into daemon memory, since nothing upstream could tell "queued" from "written".
 
 Making the session task itself block on the PTY was the rejected alternative: that task serves every subscriber and the
 parser drain, so one stuck child would freeze the grid for every mirror of that session; the cost falls on the wrong
@@ -511,19 +504,17 @@ guarantees.
   `vbscript:`, and custom schemes are explicit denies; adding a scheme is a recorded design decision, not a config knob.
 - **Activation is explicit.** Hyperlinks are not auto-launched on emission, on hover, or on focus. They open only on
   user action.
-- **Logs never carry the URI.** An activation logs only the outcome, the scheme class (`Http` / `Https` / `Mailto` /
-  `File`), and the byte length of the target on success; a refusal logs only which `ActivationRejection` variant fired.
-  `ActivationTarget`'s own `Debug` prints that same pair rather than the string, so a `?target` field added later cannot
-  reopen the disclosure. Neither carries the string itself, so a hostile or sensitive path segment never reaches the
-  log.
+- **Logs never carry the URI.** An activation logs only the outcome, the scheme class, and the byte length of the target
+  on success; a refusal logs only which rejection fired. The validated target's own `Debug` prints that same pair rather
+  than the string, so a log field added later cannot reopen the disclosure.
 - **OSC 7 hostnames are display-only.** The `file://hostname/path` hostname field reported by remote shells is shown to
   the user but never drives trust decisions on the local side.
 
 ### A typed target is re-validated at the activation boundary, not trusted from the grid
 
-The client re-parses the raw string into an `ActivationTarget` at the moment of activation, and only a successfully
-parsed target ever reaches a platform launcher. The parser's own filter (dropping any OSC body with a C0 byte or DEL) is
-not the only path a URI can take to the client: a non-felis daemon, or a future grid change, could hand the client a
+The client re-parses the raw string into a typed target at the moment of activation, and only a successfully parsed
+target ever reaches a platform launcher. The parser's own filter (dropping any OSC body with a C0 byte or DEL) is not
+the only path a URI can take to the client: a non-felis daemon, or a future grid change, could hand the client a
 `GridMsg::Hyperlink` the parser never saw.
 
 The parse re-checks the same scheme allowlist and then refuses an interior NUL, any other C0/DEL/C1 control character, a
@@ -544,10 +535,10 @@ substitute: a `https://` URL is enough to carry every one of those characters.
 ### A control-safe, bidi-safe preview shows the real target before activation
 
 Holding the Ctrl+Click activation modifier over a hyperlink cell shows the target in a bottom-anchored preview bar, so
-the visible link text is never trusted to represent the destination. The preview is the validated `ActivationTarget`
-string itself, clipped to the display width the row has: `parse` has already refused every control and bidi codepoint,
-so nothing further needs stripping. A clip always ends in `…`, because a target shortened silently would read as a whole
-one, which is the misreading this bar exists to prevent.
+the visible link text is never trusted to represent the destination. The preview is the validated target string itself,
+clipped to the display width the row has: the parse has already refused every control and bidi codepoint, so nothing
+further needs stripping. A clip always ends in `…`, because a target shortened silently would read as a whole one, which
+is the misreading this bar exists to prevent.
 
 The row the bar holds takes nothing a producer controls: no Kitty image at any `z`, and no glyph or decoration reaching
 down from the row above ([protocols/kitty-graphics.md](protocols/kitty-graphics.md) "Chrome rows are not drawable"): a
@@ -578,8 +569,7 @@ hostile caller are here.
   them, because the stamp guards against _inherited_ leakage rather than a caller's stated request.
 - **No environment content reaches a log, a diagnostic, or a refusal payload.** The refusal type carries counts and
   felis's own reserved key literals and nothing else, so the property holds by construction rather than by review; the
-  caps (`MAX_ENV_BASE_ENTRIES`, `MAX_ENV_BASE_BYTES`, and the carrier block's frozen twins) are reported as numbers
-  alone.
+  caps are reported as numbers alone.
 - **`O_CLOEXEC` everywhere.** Every fd the daemon opens (sockets, log files, image temp files) is opened with
   `O_CLOEXEC`. fork-exec must not leak the IPC socket into the child shell. The standing audit in
   [security-audits.md](../reference/security-audits.md#o_cloexec--o_nofollow-audit-standing) records the sites.

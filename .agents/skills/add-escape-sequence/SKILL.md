@@ -29,9 +29,9 @@ Before implementing, check in this order:
 Data flows one way; place each piece at its lowest correct layer:
 
 - **Parse/dispatch** — `crates/felis-vt`: the DFA recognizes the sequence and hands its parameters or string body to the
-  sink. The payload parsers (Kitty graphics, text sizing, notifications, progress, program status) are
-  `crates/felis-grid` modules, since `felis-vt` depends on no other felis crate; the Kitty keyboard encoder lives in
-  `crates/felis-daemon/src/serve/key_encode.rs`, its flag type in `felis-protocol`, and its mode state in `felis-grid`.
+  sink. The payload parsers are `crates/felis-grid` modules, since `felis-vt` depends on no other felis crate; the Kitty
+  keyboard encoder lives in `crates/felis-daemon/src/serve/key_encode.rs`, its flag type in `felis-protocol`, and its
+  mode state in `felis-grid`.
 - **State** — `crates/felis-grid`: cells, modes, scrollback, image store, damage. Most sequences end here.
 - **Daemon orchestration** — `crates/felis-daemon` only when the sequence needs session-level work (e.g. graphics APC
   bodies, notifications relay).

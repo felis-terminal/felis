@@ -4,13 +4,10 @@ sidebar:
   order: 4
 ---
 
-When `shader.post` is unset, the terminal renders directly to the swapchain without an offscreen post-processing step.
-When configured, terminal cells render into an intermediate offscreen texture that `shader.post` samples through
-[one stage](#selecting-shaders) or a [chain of up to 16](#chaining-stages), each a
-[fullscreen WGSL fragment stage](#entry-point-and-bindings) that may take [`params`](#params) (WGSL `override`
-constants) and an [`animation`](#event-animation) triggered by events, all against the [Contract v2](#contract-v2)
-uniform contract. A stage redraws only when terminal state changes or an event animation runs, unless
-[`shader.animate = "focused"`](#animation-and-the-frame-clock). Architectural design rationale is documented in
+When `shader.post` is set, terminal cells render into an offscreen texture that one stage, or a chain of up to 16,
+samples; each stage is a fullscreen WGSL fragment shader against the [Contract v2](#contract-v2) uniforms. Unset, the
+cells render straight to the swapchain. A stage redraws only when terminal state changes or an event animation runs,
+unless [`shader.animate = "focused"`](#animation-and-the-frame-clock). The design is in
 [pipeline.md](../explanation/rendering/pipeline.md).
 
 ## Selecting shaders
@@ -37,8 +34,8 @@ Each stage names its shader with exactly one selector:
 | `{ builtin = "trail" }` | Bundled cursor-trail effect                                                        |
 | `{ file = "…" }`        | Path to WGSL file (expands `~/`; relative paths resolve relative to `config.toml`) |
 
-`trail` is the only builtin shader. Bare strings (`post = "trail"`) are rejected. felis does not scan ambient
-directories; execution is strictly limited to the specified builtin or file path.
+`trail` is the only builtin shader. Bare strings (`post = "trail"`) are rejected. felis runs only the named builtin or
+file; it scans no directory for shaders.
 
 A stage table also takes two optional keys:
 
@@ -66,8 +63,7 @@ fn fs_post(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32>
 `uv` represents fragment coordinates normalized to `[0.0, 1.0]` with the origin at the **top-left** (wgpu texture
 convention).
 
-Only WGSL source text is accepted; compilation and validation are performed via naga. SPIR-V and other shading languages
-are not supported.
+Only WGSL source text is accepted, validated by naga; SPIR-V and other shading languages are not.
 
 Bind group 0 exposes four resources:
 
@@ -143,7 +139,7 @@ a run restarts it. The run plays whether or not the window has focus. Easing is 
 ## Contract v2
 
 Uniform struct fields must be declared in order from the top. Shaders may truncate the struct after the last field read;
-WebGPU calculates uniform buffer sizes from the shader declaration. Fields must not be reordered or omitted internally.
+fields must not be reordered or omitted before it.
 
 ```wgsl
 struct FelisPostUniforms {
@@ -216,8 +212,8 @@ top-left origin.
 By default, felis does not run a continuous redraw loop for shaders. Frames render on demand when terminal state changes
 (such as cursor motions or pointer input). Shaders depending strictly on `time_s` stay stationary on idle windows.
 
-`trail_corners_*` coordinates are eased on the CPU on their own frame clock, by per-corner exponential decay: animation
-arms on cursor leaps of two or more cells and stops once all corners settle within half a pixel of target bounds.
+`trail_corners_*` animate on a frame clock of their own: a cursor leap of two or more cells starts it, and it stops once
+every corner settles within half a pixel of the cursor.
 
 A stage's [event animation](#event-animation) adds frames until its run ends. For continuous animations independent of
 terminal input, configure the `animate` property:

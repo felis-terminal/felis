@@ -50,8 +50,7 @@ guards: the same "nonsense here" arms, one level down, which the type cannot rul
 
 What the split gives up is a check the single oneof made for free: a body carrying an arm of each wrapper decodes,
 through the receiving wrapper, as that wrapper's arm with the other skipped as an unknown field, so the driver has to
-look for the other wrapper's field numbers itself. It steps over field keys rather than decoding the body a second time
-as the other wrapper, so an honest frame pays one pass that builds nothing.
+look for the other wrapper's field numbers itself.
 
 ### Kind or arm?
 
@@ -64,21 +63,16 @@ bringing an opener and a lifetime of its own does not by itself make a message a
 So `Search` is a kind: matches over a session's history are a surface no other family speaks about, opened, streamed,
 and refused as a unit. `Region::Rows` is an arm even though it opens a row stream of its own, because it reads the very
 regions `Region::Request` names: it is a second read shape on a surface that already exists, and the mode and phase rows
-of the region family already cover it. `Ops::Status` is an arm, another query about the daemon and the sessions it
-holds; `Push::RetargetHost` is an arm of the pushes the daemon sends a subscriber; `Ops::Spawn` is an arm, and so is a
-future point verb. A future stream a `Window` must never see is a kind, not because its opener is new but because a
-`Window` has to be refused it before its body decodes, and the kind fold is the only gate that early.
+of the region family already cover it. `Ops::Spawn` is an arm, and so is a future point verb. A future stream a `Window`
+must never see is a kind, not because its opener is new but because a `Window` has to be refused it before its body
+decodes, and the kind fold is the only gate that early.
 
 #### The minor column is declared, not checked
 
-A new kind and a new arm are both additive changes: the effective minor both peers agreed on decides whether a sender
-may use either ("Schema evolution" below), so a kind or arm arriving that this build does not define is corruption
-rather than growth.
-
 The one column of the arm table a receiver does not enforce is the minor, which is declared rather than checked: the
-effective minor is a send-side contract, so an arm above it is the _sender's_ violation, and a receiver that also
-policed it would need the negotiation's outcome threaded into the driver to buy nothing the ledger's old-peer behavior
-does not already give.
+effective minor is a send-side contract ("Schema evolution" below), so an arm above it is the _sender's_ violation, and
+a receiver that also policed it would need the negotiation's outcome threaded into the driver to buy nothing the
+ledger's old-peer behavior does not already give.
 
 _Revisit if_ a mixed-version relay chain appears: it could deliver a frame under a minor its sender did not agree to.
 
@@ -117,8 +111,8 @@ The fold is coarse except where a family's arms all declare the same row: there 
 that. `Grid` and `Image` carry every row delta, cluster and image chunk an attached connection receives, the
 highest-volume traffic in the system, and the readers that drain a family they have no use for still owe it the table. A
 drained frame of a uniform, envelope-less family is therefore judged on the kind columns rather than walked through the
-arm's row. The shortcut is not a second policy: `MessageKind::arms_are_uniform` is asserted against the arm table, so a
-family that grows a disagreeing arm loses the shortcut rather than quietly skipping a column.
+arm's row. The shortcut is not a second policy: uniformity is asserted against the arm table, so a family that grows a
+disagreeing arm loses the shortcut rather than quietly skipping a column.
 
 What the shortcut does not skip is the decode. Dropping it there would spare the busiest stream on the link its
 deserialization, at the price of making corruption a property of the reader: the same malformed `Grid` body would end a
@@ -133,10 +127,10 @@ stay with their consumers, the reference's semantic tier ([ipc.md](../../referen
 
 #### Search and region are kinds of their own
 
-Search and region instance the rule at the kind level. Each owns a surface of its own (`Search`, `Region`), request and
-reply wrappers under one kind, so a phase can refuse the whole surface. Neither owns a terminator: their streams end in
-the shared `ConnToClientMsg::End` / `Error`, so a future streamed reply inherits the terminal rule instead of minting a
-bespoke one ("Correlation rides in the body" below).
+Each of search and region owns a surface of its own, request and reply wrappers under one kind, so a phase can refuse
+the whole surface. Neither owns a terminator: their streams end in the shared `ConnToClientMsg::End` / `Error`, so a
+future streamed reply inherits the terminal rule instead of minting a bespoke one ("Correlation rides in the body"
+below).
 
 Two other placements are rejected:
 
@@ -167,8 +161,7 @@ session exists, is registered, is listable, and has no attacher. Anything that g
 dies, the attach is refused) leaves a live shell whose id nobody was ever told. It cannot be attached (no one knows its
 id), cannot be found by the user who asked for it, and still holds a session slot. Folding the attach into the create
 closes it: the id is delivered only in the attached state, so a `Create` whose subscribe fails has left nothing behind,
-and the daemon rolls the registration back (pool entry removed, session shut down, child reaped) before it writes the
-refusal.
+and the daemon rolls the registration back before it writes the refusal.
 
 The fold alone would only shrink the window, not close it: the pool row is written by the spawn, before the subscribe
 that can still fail. So the row is _held_ until the subscribe has landed: registered, counted against the session cap,
@@ -185,12 +178,10 @@ The headless spawn rides `Ops` for attribution. The attach and create arms of `S
 connection attaches once, so its ack needs no request id. That is exactly wrong for a spawn, which is a pool operation a
 scripted peer may want several of in flight, and an uncorrelated family can serialize them only behind a single
 positional slot that refuses the second. `Ops` is the family whose every arm carries a `request_id`, so `Spawn` inherits
-attribution for free, and its refusals become a typed `SpawnOutcome` arm rather than a connection error, the same shape
-`ResolvedId` gives the prefix verbs.
+attribution for free, and its refusals become a typed outcome rather than a connection error.
 
 A lost `Spawned` reply leaves a _detached_ session the roster shows, which is what a headless spawn wanted anyway; that
-is the asymmetry that lets `Spawn` answer without attaching while `Create` cannot. A window that wants a sibling session
-it does not display opens an `Ops`-mode connection for it.
+is the asymmetry that lets `Spawn` answer without attaching while `Create` cannot.
 
 ### The two environment fields
 
@@ -200,10 +191,9 @@ origins rather than two spellings of one thing.
 
 #### Bytes for the captured base, strings for argv and cwd
 
-A value a user typed reached felis through UTF-8 arguments already; a captured one is whatever the host holds, so
-`env_base` is `bytes`. A `string` field could not carry it back out unchanged: the lossy replacement a UTF-8 conversion
-leaves turns a path into a path that does not exist, and a non-UTF-8 `SSH_AUTH_SOCK` is still the path the agent listens
-on.
+A captured environment is whatever the host holds, so `env_base` is `bytes`. A `string` field could not carry it back
+out unchanged: the lossy replacement a UTF-8 conversion leaves turns a path into a path that does not exist, and a
+non-UTF-8 `SSH_AUTH_SOCK` is still the path the agent listens on.
 
 Argv and cwd stay `string` although `execve` accepts bytes for them too, because the exposure is narrow. A Unix-native
 argv entry or path is arbitrary bytes, so it can fail to be UTF-8, but a value that reached felis because the user typed
@@ -300,11 +290,10 @@ did not ask for. What a daemon that meets an unreadable mode owes is a typed ref
 undecodable body earns: a newer peer's mode is the one handshake failure that is not corruption, so the daemon names it
 (`RefusalReason::UnknownMode`) and lets the peer report daemon skew.
 
-Naming the mode costs the daemon a second decode of the `Hello` body, which recovers the raw enum number the validated
-codec has already refused. That second read is a diagnostic for a peer that is not honoring the contract, not a
-compatibility fallback: a conforming client refuses a mode above the effective minor before it writes `Hello` at all
-(`check_mode_minor`), so ordinary skew never reaches it. `serve/tests.rs` pins both halves: an unknown mode is refused
-by name, and an unreadable `Hello` that does not name a future mode closes unanswered.
+Naming the mode costs the daemon a second decode of the `Hello` body. That second read is a diagnostic for a peer that
+is not honoring the contract, not a compatibility fallback: a conforming client refuses a mode above the effective minor
+before it writes `Hello` at all, so ordinary skew never reaches it. An unreadable `Hello` that does not name a future
+mode still closes unanswered.
 
 ### The roster queries both attach-capable modes share
 
@@ -313,22 +302,20 @@ answered for the two attach-capable modes. The line is mutation, not privilege: 
 verb's roster print both exist to show a _person_ the roster, and `Status` reports numbers about a socket its peer can
 already list.
 
-Nothing else needs them: every request that names a session carries a hex id prefix the daemon resolves itself
-(`ResolvedId` in the reply, or the `found` / `no_match` / `ambiguous` union an `Info` answers with), so no mode has to
-read the roster just to build an id. `SessionToDaemonMsg::Attach` takes a prefix on the same terms, resolved in the same
-step that takes the session handle, and keeps an exact-id form for the callers that already hold an id: the reconnect
-ladder and a roster-driven switch would otherwise pay a resolution for an id nobody shortened.
+Nothing else needs them: every request that names a session carries a hex id prefix the daemon resolves itself, so no
+mode has to read the roster just to build an id. `SessionToDaemonMsg::Attach` takes a prefix on the same terms, resolved
+in the same step that takes the session handle, and keeps an exact-id form for the callers that already hold an id: the
+reconnect ladder and a roster-driven switch would otherwise pay a resolution for an id nobody shortened.
 
-That is why the observer admits `Notify` alone: its `--session` filter rides the subscribe (`Subscribe.session_prefix`),
-and wiring `List` to a mode that never displays sessions would put the roster on a connection with no use for it.
+That is why the observer admits `Notify` alone: its `--session` filter rides the subscribe, and wiring `List` to a mode
+that never displays sessions would put the roster on a connection with no use for it.
 
 Client-side resolution (fetch the roster, match locally, send the full id) is rejected: it costs a second round-trip,
 races the pool (the matched session can die between List and the act), and forces every non-Rust peer to reimplement the
 prefix-match rules the daemon already owns.
 
-`Ops::Info` covers the one caller that owes its reader a `short_id` as well as a row, `sessions info`, so that verb
-needs no roster of its own: shortening against the pool is something only the pool's owner can do correctly, and doing
-it in the reply that already resolved the prefix costs nothing extra.
+`Ops::Info` also answers the `short_id` `sessions info` owes its reader, so that verb needs no roster of its own
+([control-surfaces.md](control-surfaces.md) "A session id is persisted whole and shown as a prefix").
 
 ## Why protobuf
 
@@ -351,17 +338,14 @@ package `felis.v1`) that any language generates a reader from with buf or protoc
 contract is a file every consumer shares rather than a Rust type only Rust can read. And the shape of a break is
 schema-shaped, not build-shaped: version selection happens in the frozen preface ("Handshake bootstrap" below) and
 additive growth rides a minor ("Schema evolution" below), so any number of builds interoperate as long as neither sends
-what the effective minor does not define. Postcard's Rust-shaped wire, by contrast, breaks with the _types_, schema or
-no.
+what the effective minor does not define.
 
-Rejected alternatives:
+The other rejected alternatives:
 
-- **Stay on postcard.** Keeps the Rust-shape coupling every non-Rust consumer pays and makes every type refactor a wire
-  event; shedding both is the deciding argument above.
 - **MessagePack / CBOR**: self-describing binary, more compact than JSON, but neither ships a schema-contract or codegen
-  story for other languages; a consumer still reverse-engineers the message shapes. CBOR is the one serde-native
-  survivor of the format scoring, and what it would win over protobuf is self-description, which `--format json` on the
-  CLI verbs already delivers in the language a scripting consumer actually wants.
+  story for other languages; a consumer still reverse-engineers the message shapes. What either would win over protobuf
+  is self-description, which `--format json` on the CLI verbs already delivers in the language a scripting consumer
+  actually wants.
 - **Cap'n Proto / FlatBuffers**: lose twice. Their zero-copy accessors pay off when a reader touches a few fields of a
   large buffer in place, while felis decodes a rehydration frame once, in full, into an owned grid it then mutates: a
   linear decode that pays their ~2× wire overhead with no random-access dividend. Both also need an external schema
@@ -375,9 +359,8 @@ A shared `.proto` makes the schema the authority rather than a projection of the
 ([the reference states how the crate is arranged](../../reference/ipc.md#application-messages)): where the two could
 disagree the schema wins, and the tests that check the protocol version and the message-kind enum against the file are
 what stops them from drifting apart quietly. What the domain types buy for that mapping is invariants the generated
-structs cannot hold (a `u128` session id, `NonZero` correlation ids) and a `felis-protocol` free of `tokio` and OS
-symbols: `prost`, `prost-types` (the well-known types the schema imports) and `bytes` are the only added dependencies,
-all pure-Rust and runtime-free.
+structs cannot hold (a `u128` session id, `NonZero` correlation ids), and the protobuf runtime keeps `felis-protocol`
+free of `tokio` and OS symbols.
 
 ### Protobuf costs no throughput against postcard
 
@@ -385,11 +368,8 @@ Protobuf costs no throughput against postcard. On the wire it is size-parity wit
 integers, protobuf adding one field-tag byte per field), so the 50 MiB rehydration budget in "Goals" is unaffected.
 
 In isolation the codec is _faster_ on byte-blob-dominated messages, because prost bulk-copies a `bytes` field where a
-serde/postcard path walks a `Vec<u8>` element-by-element; the `ipc_throughput` bench (`crates/felis-protocol/benches/`)
-measures this on the shapes the daemon emits. The image chunk payload goes further and is generated as `bytes::Bytes`
-rather than `Vec<u8>` ("Bulk payloads travel by reference" below). At full-pipeline scale the difference shrinks: the
-`end_to_end_throughput` and `client_consume` benches (`crates/felis-client-core/benches/`) sit within single-digit
-percent of a postcard codec, inside measurement noise.
+serde/postcard path walks a `Vec<u8>` element-by-element. At full-pipeline scale the difference shrinks to within
+measurement noise of a postcard codec.
 
 ### Where a wire value stops being a request
 
@@ -406,14 +386,15 @@ between them: from inside `convert/`, `SpawnArgs.dims` and `InputResize.dims` ar
 narrowed value has already lost what the policy needed to see.
 
 So the two _request_ fields decode into `RequestedDims` (`u32`, the wire's own width), and the daemon narrows them to
-`GridDims` by applying its policy: `admit()` on the create path, `clamp()` on the resize path.
+`GridDims` by applying its policy: admit on the create path, clamp on the resize path.
 
 Every other `GridDims` field on the wire reports geometry an honest peer has already put through one of those. That is a
-claim about the peer rather than a fact about the bytes, so the decode re-admits it with the same `admit()` instead of
-trusting it: a create naming a grid and a peer announcing one are asking the identical question, since a create that
-wants the daemon's default says so by omitting `SpawnArgs.dims` rather than by a zero axis. The invariant holds, and the
-types say so: a `GridDims` is admitted geometry, a `RequestedDims` is a request that has not been admitted yet, and the
-compiler is what stops one being used as the other ("Optional fields instead of in-band sentinels" below).
+claim about the peer rather than a fact about the bytes, so the decode re-admits it with the create path's admission
+instead of trusting it: a create naming a grid and a peer announcing one are asking the identical question, since a
+create that wants the daemon's default says so by omitting `SpawnArgs.dims` rather than by a zero axis. The invariant
+holds, and the types say so: a `GridDims` is admitted geometry, a `RequestedDims` is a request that has not been
+admitted yet, and the compiler is what stops one being used as the other ("Optional fields instead of in-band sentinels"
+below).
 
 Two alternatives are rejected:
 
@@ -438,14 +419,10 @@ canvas is a few dozen bytes and a `vec![0; n]` that never returns. Bounding byte
 these are checked where the number is read rather than where the body is sized.
 
 Letting the client trust the daemon is the rejected alternative, on the argument that a daemon buggy enough to announce
-a bad number is buggy enough to ship bad bytes, and the chunk writer drops what does not fit anyway. It is wrong on its
-own terms. The bytes never have to arrive, so "they would still ship them" is not the failure mode, and the chunk
-writer's bounds check runs after the buffer it bounds was allocated.
-
-It is also wrong on trust: principle 3 has the client trust the daemon for _content_, which is a statement about what to
-render, not a licence for a peer to order memory. The client already ends the connection on a frame that does not
-decode; a frame that decodes into an impossible demand gets the same answer, for the same reason: the peer has stopped
-being the authority the mirror was mirroring.
+a bad number is buggy enough to ship bad bytes, and the chunk writer drops what does not fit anyway. But the bytes never
+have to arrive, and the chunk writer's bounds check runs after the buffer it bounds was allocated. Principle 3 has the
+client trust the daemon for _content_, which is a statement about what to render, not a licence for a peer to order
+memory: a frame that decodes into an impossible demand ends the connection like one that does not decode.
 
 The region reply is the same test read the other way, and it is bounded on the sender alone. Its bytes exist and the
 daemon chose them out of its own scrollback, so the remedy is a trim to the youngest resumable boundary rather than a
@@ -543,20 +520,16 @@ A grid row is a few hundred bytes and a keystroke is a handful; an image chunk i
 whole image store, which the cap lets reach 256 MiB. On that path a copy is not a rounding error, and the daemon's shape
 multiplies it: one message is encoded per subscriber, and the pixels it carries already exist in the image store.
 
-So the image chunk payload is refcounted end to end. `just proto` generates that one field as `bytes::Bytes`
-(`buf.gen.yaml` names it explicitly), the domain `ImageMsg::Chunk` matches, and the store's frames hold `Bytes` too, so
-composing a chunk slices the store's buffer, fanning it out to N subscribers bumps a refcount N times, and the client's
-decode aliases the frame body the transport read. What remains is one copy at each end that has to exist: the daemon's
-compositor builds a fresh canvas for `a=f` / `a=c` (a `Bytes` cannot be blitted into), and the client copies each chunk
-into the pixel buffer the renderer uploads from.
+So the image chunk payload is refcounted end to end: composing a chunk slices the store's buffer, fanning it out to N
+subscribers bumps a refcount N times, and the client's decode aliases the frame body the transport read.
 
 The price is retention: a queued chunk pins its whole backing image until it is written. That is bounded by the same
 store cap that already governs image memory, plus whatever the in-flight queues hold, and it is the trade the copy-free
 path makes; the alternative pins the same bytes twice.
 
-Only that field is converted, named in `buf.gen.yaml` rather than covered by a general rule. Every other `bytes` field
-on the wire is a session id, a keystroke, or a clipboard payload, where a refcount and its atomics buy nothing over an
-inline `Vec<u8>`.
+Only that field is generated as a refcounted buffer, named explicitly rather than covered by a general rule. Every other
+`bytes` field on the wire is a session id, a keystroke, or a clipboard payload, where a refcount and its atomics buy
+nothing over an inline `Vec<u8>`.
 
 ## Carrier choices
 
@@ -606,13 +579,12 @@ login that started it must not keep its only endpoint in a directory that dies w
 `/run/user/<uid>` at the last logout of a non-lingering uid, and a daemon under it keeps its sessions while nobody can
 dial it. `/tmp` lives until the host reboots, on every Unix felis targets, with or without systemd, and identically for
 a desktop login, an SSH login and a relay. tmux made the same call for `/tmp/tmux-<uid>` and ignores `XDG_RUNTIME_DIR`
-and `TMPDIR` for this reason. A reboot ends the daemon; whether the socket inode survives depends on the mount, and
-either way the next daemon binds the same path, which is what a `FELIS_SOCKET` stamp left in a shell names.
+and `TMPDIR` for this reason. A reboot ends the daemon, and the next daemon binds the same path, which is what a
+`FELIS_SOCKET` stamp left in a shell names.
 
 macOS uses `/tmp` rather than launchd's per-user directory because that directory is neither derived from the uid alone
 nor guaranteed to live until reboot: `confstr(3)` documents that the contents of `_CS_DARWIN_USER_TEMP_DIR` may be
-deleted after three days, `_dirhelper` consults `DIRHELPER_USER_DIR_SUFFIX`, and `confstr` falls back to `TMPDIR`
-internally. tmux avoids it there too.
+deleted after three days. tmux avoids it there too.
 
 #### A shared `/tmp` is what the bind rule answers
 
@@ -650,10 +622,10 @@ detection is built.
 
 #### The cross-host carrier re-dials
 
-The cross-host carrier re-dials, not just attaches once. Its `Reconnector` descriptor carries the SSH destination and
-its ssh args, so a remote window drives the same detach → dial → attach a local one does: it session-switches, pipes,
-and re-points at another daemon (`felis window retarget`), rather than treating the first attach as its only move. The
-sequential re-dial itself, and why simultaneous multi-daemon attach is rejected, are the
+The cross-host carrier re-dials, not just attaches once. Its descriptor carries the SSH destination and its ssh args, so
+a remote window drives the same detach → dial → attach a local one does: it session-switches, pipes, and re-points at
+another daemon (`felis window retarget`), rather than treating the first attach as its only move. The sequential re-dial
+itself, and why simultaneous multi-daemon attach is rejected, are the
 [session-lifecycle decision record](session-lifecycle.md#cross-carrier-re-dial).
 
 It dials in the same `Window` mode a local one does, but not pull-paced. Demand-driven per-vsync pulls
@@ -717,9 +689,6 @@ closed one. Every preface integer is big-endian while the frame header stays lit
 deliberate: the preface is a self-contained frozen artifact where network order is the convention a reimplementer
 expects, and the frame header is decoded a million times a second on hosts that are little-endian.
 
-Nothing here defines a migration from a preface-less stream: the preface predates the compatibility freeze, and a dev
-build carries no compatibility promise, so no released felis ever meets a peer without one.
-
 ### The relay carrier block sits below the schema
 
 The frozen layer admits one more magic ahead of the client preface, `FRLY`, for the relay carrier block
@@ -757,9 +726,6 @@ Two other ways of versioning the block are rejected:
 - **A new magic per payload layout** spends the discriminator that tells a carrier block from a bare `FLIS` stream on a
   distinction the payload already makes, and would oblige every reader to carry the list of retired magics to keep
   skipping by length.
-
-A later payload format therefore lands as a new version word under the same envelope, and the caps that guard the read
-stay where they are.
 
 Skipping an unknown version is safe only while the block's whole content is a fallback the daemon has a documented
 substitute for.
@@ -832,15 +798,12 @@ felis's call-site order to interoperate. No arm needs both concepts: a future op
 _and_ a stream opener should define a deliberate conversation shape, a second named field on that arm, rather than
 widening every envelope on the wire to admit it.
 
-The `oneof` keeps tags 1 and 2, so an honest frame encodes exactly as a bare scalar does, which is what lets the two
-independent sequences, the ABA argument below, and the already-exclusive `Subject` stay as they are.
-
 Which id an arm must carry is the `correlation` column of the arm table ("Kind or arm?" above), and the driver checks
-the envelope against that column in `decode`, on every family: a wrapper that only `reserved`s field 100 still reads
-back an envelope a hand-built frame stamped onto it. Validating in the driver rather than per handler is the point: a
-handler that recovers its own mandatory id afterwards states "this arm requires a request id" once per call site and
-enforces it nowhere a peer could read. The arm's class is the single statement, and a delivered message carries the
-identity the driver validated.
+the envelope against that column on decode, on every family: a wrapper that only `reserved`s field 100 still reads back
+an envelope a hand-built frame stamped onto it. Validating in the driver rather than per handler is the point: a handler
+that recovers its own mandatory id afterwards states "this arm requires a request id" once per call site and enforces it
+nowhere a peer could read. The arm's class is the single statement, and a delivered message carries the identity the
+driver validated.
 
 The sender checks the class as well, and the redundancy is the point. A correlation violation is fatal to the
 connection, so a caller that writes one reads an EOF and nothing else: the frame left, the peer refused it, and the
@@ -850,12 +813,10 @@ addition rather than letting the peer discover it. The sender's half stops at th
 outstanding, and duplicating that ledger would give the two ends two answers to disagree about.
 
 One implementation detail is load-bearing. prost resolves a `oneof` **last-field-wins**, so a body setting both tags
-would decode as a stream envelope rather than being refused, and "both ids is malformed" would hold only for senders
-that already obey it. Mirroring field 100 as two plain scalars does not settle it either: a body writing `request_id`,
-then `stream_id`, then `request_id` again as zero leaves the mirror holding one id, so the ambiguity is gone before any
-check looks for it. The peek that lifts the envelope off a body therefore reads that submessage a tag at a time and
-refuses a body in which both tags appear at all, whatever value each last held. The schema forbids both; the peek is
-what proves a peer did not send both anyway.
+would decode as a stream envelope rather than being refused. Mirroring field 100 as two plain scalars does not settle it
+either: a later zero for one id erases the evidence before any check looks for it. The peek that lifts the envelope off
+a body therefore reads that submessage a tag at a time and refuses a body in which both tags appear at all, whatever
+value each last held.
 
 ### Two id sequences, both client-allocated
 
@@ -877,10 +838,10 @@ Three alternatives are rejected:
 The request counter is held the same way, for the same reason. A request id that skips or repeats is caught where it was
 sent rather than at whatever reply it would later have made ambiguous. Nothing on the daemon side records _which_
 requests are still unanswered: the sequence is strictly increasing, so an id is either the next one or already
-malformed, and an unanswered-request set would have to be retired on every path that writes a reply (the two `Ops`
-loops, `Region::Reply`, a typed `Conn::Error`) or grow for the connection's life while buying no check the counter does
-not already make. The client keeps its outstanding set because it needs one for a different job: matching an
-out-of-order reply to the caller waiting on it, and refusing a duplicate or late one.
+malformed, and an unanswered-request set would have to be retired on every path that writes a reply or grow for the
+connection's life while buying no check the counter does not already make. The client keeps its outstanding set because
+it needs one for a different job: matching an out-of-order reply to the caller waiting on it, and refusing a duplicate
+or late one.
 
 ### What a switch reply can report
 
@@ -902,10 +863,8 @@ Having the client report its own landing back to the origin is rejected too, bec
 worse one: it makes the client a participant in daemon bookkeeping across hosts, where every host in a chain must be
 trusted to report honestly about a session it does not own.
 
-Accepted-only is therefore the frozen semantics of the whole switch family, not a gap left for a later completion path,
-and both user-facing surfaces are worded to match: the CLI exits `0` on admission and says `not landed` in so many
-words, and a landing that fails afterwards is the target window's own business
-([control-surfaces.md](control-surfaces.md) "A relay verb reports queue admission").
+Accepted-only is therefore the frozen semantics of the whole switch family, not a gap left for a later completion path
+([control-surfaces.md](control-surfaces.md) "A relay verb reports queue admission" owns how the CLI words it).
 
 ## A corrupt frame ends the connection
 
@@ -1002,10 +961,9 @@ A `RegionToClientMsg::Reply` answering a `pipe`-to-clipboard chord and a `GridMs
 client writing bytes to the system clipboard, yet they take different paths there. `ClipboardSet` is a running program's
 `OSC 52` write, which the client treats as hostile input: it is gated behind `clipboard.osc_52`, which defaults to
 felis's own mirror, so an arbitrary program cannot silently overwrite the user's clipboard. A region reply answers the
-user's own chord (the same intent as `Ctrl+Shift+C`), so the client applies it ungated via `write_user`. Routing the
-user's pipe through `ClipboardSet` would make the pipe silently no-op under the default config, because that frame's
-gate cannot tell "the user asked" from "a program asked". The `osc_52` pipe source shows the split: the bytes came from
-a program, but the chord that ships them is the user's, so they take `write_user`.
+user's own chord (the same intent as `Ctrl+Shift+C`), so the client applies it ungated. Routing the user's pipe through
+`ClipboardSet` would make the pipe silently no-op under the default config, because that frame's gate cannot tell "the
+user asked" from "a program asked".
 
 What carries the distinction is the _request_, not a marker on the reply. The client parks the sink the chord named
 while the region is in flight and reads it back when the reply lands, so "the user asked for the clipboard" is something
@@ -1146,12 +1104,11 @@ first release makes either kind admissible, which is the same fact that keeps th
 is a major.
 
 A table alone gates review, and review is not what runs on the wire. So each row also exists as metadata beside the
-definition it authorizes: a minor option on the arm, field or closed-enum value in `felis.proto`, and `ROW_CODEC_SINCE`
-per codec version, which the schema cannot hold. The writer reads it, so a message answers what it costs to send and
-`FrameWriter` refuses one the connection's effective minor does not define. Nothing reaches the carrier except through
-that gate, including the daemon's pre-encoded fan-out and the client's send queue, which carry the requirement alongside
-the bytes because neither writer ever sees the message. A feature that wants to talk to an older peer therefore has to
-say how: map the value down, or refuse locally.
+definition it authorizes: a minor option on the arm, field or closed-enum value in `felis.proto`, and a per-version
+constant for the row codec, which the schema cannot hold. The frame writer reads it and refuses a message the
+connection's effective minor does not define, and nothing reaches the carrier except through that gate, pre-encoded
+bytes included. A feature that wants to talk to an older peer therefore has to say how: map the value down, or refuse
+locally.
 
 Fields are the addition the gate mostly does not read; most are declared for the ledger check alone. An older decoder
 skips an unknown field number, so a field sent to a peer that predates it lands that peer exactly where leaving the
@@ -1162,18 +1119,13 @@ locally instead. The default is ungated because a field that only adds detail is
 fields of payload messages only: a family's wrapper numbers are its arms, and the driver reads any of them as one, so a
 plain field there would reach an older peer as the other direction's arm. A member added to a payload message's oneof is
 not covered either: an older peer skips it and finds the oneof unset, which its decoder rejects, so such a member cannot
-be marked skippable. No payload oneof has grown yet, so a schema test pins their members and the first to grow brings
-its own send gate.
+be marked skippable and brings its own send gate.
 
 Gating the receive side instead is the obvious alternative and does not work: a receiver can see that a value is
 unknown, but not what the sender should have sent in its place, which is the whole content of a ledger row. The one
 shape the writer cannot see is a value inside a body it treats as opaque, so an enum's down-map stays a call at the
-construction site; what keeps that honest is the coverage test, which fails naming any value the ledger and the metadata
+construction site; what keeps that honest is a coverage test that fails naming any value the ledger and the metadata
 disagree about.
-
-Conversations that exercise every row in both directions are the natural next gate. The first release has one row and no
-older peer to protect, so the first minor added past the freeze is where that earns its cost, and the send-gate test is
-the template it fills.
 
 ### Narrowing a decoder is not a minor
 
@@ -1204,15 +1156,13 @@ codegen (`just proto`) are the record.
 hangs on are invisible to it: a field whose meaning changes under an unchanged number and type, which is the semantic
 break the major exists for, and the row bytes inside `packed_cells`, which reach it as one `bytes` field ("The tooling
 gap this leaves" below). That is why the ledger sync test and the row-codec golden vectors stay separate gates beside it
-rather than folding into the schema comparison; [testing.md](../../reference/testing.md#wire-compatibility-gates) lists
-the three with what each covers.
+rather than folding into the schema comparison ([testing.md](../../reference/testing.md#wire-compatibility-gates)).
 
 The comparison is only as good as its base, which is why the CI gate is a job that resolves one from the event (the PR's
-merge-base, the push's prior revision, and on the tag path the newest published final release, which `release.yml` takes
-on every tag) on a full-history checkout, and fails when it cannot. Running the `buf-breaking` pre-commit hook under
-`nix flake check` would not do: the sandbox evaluates a store copy with no `.git`, where a hook can only skip, and a CI
-checkout is `HEAD` itself, so even with history the hook would compare the schema with itself. That hook stays as the
-developer's early warning (work tree against `HEAD`), which is the one place that comparison means something.
+merge-base, the push's prior revision, the newest published final release on a tag) on a full-history checkout, and
+fails when it cannot. Running the `buf-breaking` pre-commit hook under `nix flake check` would not do: the sandbox has
+no `.git`, and a CI checkout is `HEAD` itself, so the hook would compare the schema with itself. The hook stays as the
+developer's early warning (work tree against `HEAD`), the one place that comparison means something.
 
 An intended pre-release break is acknowledged in a committed file naming the base it was written against. The file is
 visible in the diff, in `git log -p`, and to a release workflow, which is what lets the acknowledgment carry a rule
@@ -1283,12 +1233,10 @@ so it does not depend on a header field a future reader might mistake for a deli
 
 `InputMsg::NextGridFrame` is payload-free: it arms the next dirty cycle and says nothing about what the client has
 already applied. A pull that races a frame still in flight is therefore not detectable as redundant, and does not need
-to be. `ship_sub_at` composes its diff off the per-subscriber dirty state, so a pull with nothing new emits nothing; the
-redundant frame the acknowledgement position would suppress never gets composed in the first place.
-
-A dedup that did act on such a position would need the session task to tally, per subscriber, the grid frames it has
-handed the write pump, the only counter comparable with a client's own tally. Until that counter exists, an
-acknowledgement field on the wire is a number no code can read, so the pull carries none.
+to be. The daemon composes its diff off the per-subscriber dirty state, so a pull with nothing new emits nothing; the
+redundant frame the acknowledgement position would suppress never gets composed in the first place. An acknowledgement
+field would also need a daemon-side per-subscriber frame tally to compare against, which nothing keeps, so it would be a
+number no code can read.
 
 ## Row codec: why a hand-written RLE payload
 
@@ -1298,10 +1246,9 @@ the Rust types. Two decisions, argued in that order below. The blob rides as an 
 `RowDelta`, a grid-internal packing the protocol crate never interprets, so both arguments are independent of the
 envelope encoding.
 
-Attributes are run-length encoded because serializing them per cell is the daemon's single largest emit cost: a samply
-profile of the end-to-end bench's daemon-side plaintext-scroll case under a per-cell codec puts ~44 % of self-time into
-serializing `Color` / `Attributes` / `Cell` (an 80-column `cat` line pays the three-`Color`-plus-flags serialize 80
-times for one pen), and the plaintext stream is daemon-produce bound, so that serialize is the binding constraint on
+Attributes are run-length encoded because serializing them per cell is the daemon's single largest emit cost: under a
+per-cell codec a plaintext scroll spends ~44 % of daemon self-time serializing the pen (an 80-column `cat` line pays it
+80 times for one pen), and the plaintext stream is daemon-produce bound, so that serialize is the binding constraint on
 throughput. A uniform row collapses to a single attribute run, so the pen serializes once per row; the per-column
 grapheme stream stays, but a grapheme record is a cheap 1–2 bytes that never re-serializes the pen.
 
@@ -1337,9 +1284,8 @@ directions. It is rejected for three reasons, all about the contract rather than
   reader can name. Those are the three properties [Row codec](../../reference/row-codec.md) makes normative.
 
 Writing the bytes by hand is not the more expensive path either: daemon-side emit measures 18–29 % below the derived
-path across all three input shapes (criterion `--quick`, one machine), which matters because the RLE decision itself was
-made on a bench. The cost is that the layout has to be maintained deliberately, which is the point, and is what the
-golden vectors and the fuzz target guard.
+path, which matters because the RLE decision itself was made on a bench. The cost is that the layout has to be
+maintained deliberately, which is the point, and is what the golden vectors and the fuzz target guard.
 
 Also rejected: publishing a serde format's framing as the spec instead of writing the bytes. Postcard is a stable
 format, but the spec would then have to describe how serde maps Rust enums and `Option`s onto it, so the Rust
@@ -1352,20 +1298,17 @@ The envelope's field-numbered compatibility stops at this `bytes` field. `buf br
 row payload inside it, so no schema tooling reaches the cell shape: adding a `Cell` attribute or reshaping the payload
 is a layout change a peer on an older codec version misreads. Such a change rides the codec's own version tag and the
 minor that authorizes it ("Schema evolution" above), with no `buf breaking` safety net to catch a forgotten bump. The
-spec's golden vectors, the layout pins in `wire.rs`, and the row round-trip tests are the guard instead. Keeping cells
-opaque trades that tooling coverage for the hand-tuned RLE packing above.
+spec's golden vectors and the row round-trip tests are the guard instead. Keeping cells opaque trades that tooling
+coverage for the hand-tuned RLE packing above.
 
-Schema-governed cells have a measured price rather than a hypothetical one. A spike swapped the row codec to a native
-protobuf `Row` / `Cell` model (field-numbered, so `buf breaking` would guard it) and ran the end-to-end benches. The
-encode side is free: the daemon's emit path (the daemon-side group of `felis-client-core`'s `end_to_end_throughput`
-bench) moves within noise, because parse, grid-diff, and framing dominate the producer.
-
-The decode side is not, because the row is decoded on every client's consume hot path where nothing else hides it:
-`client_consume` regresses about 140 %, the full single-cycle round trip 40–60 %, the batched production path 13–16 %,
-and each row ships 1.4–1.95× more bytes. Native cells would leave the producer flat and make every attached client
-slower to mirror the grid. A JSON-only row is worse still: proto3-JSON base64-inflates the per-cell data to roughly
-11–13× the bytes and 10× the decode. So the compact RLE payload stays until cell churn makes schema-governed cell
-compatibility worth that client-side cost.
+Schema-governed cells have a measured price rather than a hypothetical one. Swapping the row codec to a native protobuf
+`Row` / `Cell` model (field-numbered, so `buf breaking` would guard it) leaves the daemon's emit path within noise,
+because parse, grid-diff, and framing dominate the producer. The decode side is not free, because the row is decoded on
+every client's consume hot path where nothing else hides it: client consume regresses about 140 %, the full round trip
+40–60 %, and each row ships 1.4–1.95× more bytes. Native cells would leave the producer flat and make every attached
+client slower to mirror the grid. A JSON-only row is worse still: proto3-JSON base64-inflates the per-cell data to
+roughly 11–13× the bytes and 10× the decode. So the compact RLE payload stays until cell churn makes schema-governed
+cell compatibility worth that client-side cost.
 
 ## Open extensibility considerations
 

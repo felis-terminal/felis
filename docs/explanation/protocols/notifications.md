@@ -74,16 +74,13 @@ connection mode that admits them) lives in [`ipc.md`](../../reference/ipc.md).
 
 ### The opt-in home-manager relay
 
-For Nix users, that filter ships as the opt-in home-manager option `programs.felis.notifications.enable`
-(`nix/hm-module.nix`); the precedent for distributing a reference helper this way is the `tic`-installed
-`crates/felis-daemon/terminfo/felis.terminfo` ([`terminal-identity.md`](../architecture/terminal-identity.md)). It
+For Nix users, that filter ships as the opt-in home-manager option `programs.felis.notifications.enable`, the way the
+terminfo entry ships as a reference artifact ([`terminal-identity.md`](../architecture/terminal-identity.md)). It
 generates the same `subscribe`-to-notifier bridge and wires it as a **user service** (a systemd user unit on Linux, a
-launchd agent on macOS), so the per-OS daemonization that the shell recipe leaves to the reader is expressed once.
-`notifier` defaults to a `notify-send` / `terminal-notifier` wrapper and takes any `<title> <body> <urgency>` command;
-`onlyDetached` keeps the `attached == false` filter. It subscribes to the local daemon by default, and
-`host = "user@remote"` points it at a _remote_ daemon over SSH instead: cross-host attach bridges every connection to
-the one persistent per-UID daemon on the remote ([`ipc.md`](../../reference/ipc.md) "Cross-host carrier: SSH stdio"), so
-the persistent subscriber shares that daemon's broadcast hub with any `--host` window and reaches the same sessions.
+launchd agent on macOS), so the per-OS daemonization that the shell recipe leaves to the reader is expressed once. It
+can also subscribe to a _remote_ daemon over SSH: cross-host attach bridges every connection to the one persistent
+per-UID daemon on the remote ([`ipc.md`](../../reference/ipc.md) "Cross-host carrier: SSH stdio"), so the subscriber
+reaches the same sessions as any `--host` window.
 
 This does **not** breach the bright line. The line guards the felis _binary_ auto-spawning a helper; here the _user_
 declares the service (the option defaults off and is independent of `programs.felis.enable`), it runs one process

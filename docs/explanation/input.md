@@ -38,9 +38,9 @@ felis tracks on a per-session flag stack.
 A keystroke crosses the wire as the facts a keyboard delivers, not as bytes: `InputMsg::Key` carries the logical key,
 the OS-composed text, the modifiers, press / repeat / release, and the key location. The daemon encodes it against the
 flag stack and mode snapshot it has already parsed, under the same lock a mouse event is encoded under. The encoder is
-platform-free and lives in `crates/felis-daemon/src/serve/key_encode.rs`; each front-end only has to name the key (the
-GUI client's `crates/felis-client/src/input.rs` binds `winit`; a browser-hosted front-end would bind `KeyboardEvent`),
-so every front-end shares one encoding policy without linking an encoder.
+platform-free and lives in the daemon; each front-end only has to name the key (the GUI client binds `winit`; a
+browser-hosted front-end would bind `KeyboardEvent`), so every front-end shares one encoding policy without linking an
+encoder.
 
 The alternative, the client encoding from modes the daemon mirrors to it, loses a race it cannot win. Mode changes reach
 the client as grid frames, and a producer can enable a keyboard mode and then read input in the window before that frame
@@ -167,17 +167,16 @@ with, which buys a validator, a warning class, and a documented failure row for 
 spelling of `file` or an unwritable-in-TOML null. A command sink is an argv vector, never a shell string: no `sh -c`
 eval lives in the action surface (principle 1); a user who wants a pipeline points the binding at their own script.
 
-The `selection` source is client-owned (the daemon grid has no selection), so the **client** serializes it, via
-`felis_grid::Selection::extract_text` over the same `logical_line_spans` soft-wrap rule the daemon encoders use
-([scrollback](data-model/scrollback.md) "Selection source: client-side serialization"), and feeds those bytes straight
-to the sink instead of asking for a region (`RegionToDaemonMsg::Request`): the selection is presentation the client owns
-(principle 3), so the client is the only side that can read it.
+The `selection` source is client-owned (the daemon grid has no selection), so the **client** serializes it, under the
+same soft-wrap rule the daemon encoders use ([scrollback](data-model/scrollback.md) "Selection source: client-side
+serialization"), and feeds those bytes straight to the sink instead of asking for a region: the selection is
+presentation the client owns (principle 3), so the client is the only side that can read it.
 
 The `osc_52` source is client-owned too: it is the last `OSC 52` clipboard write the daemon routed to this window, held
 by the client, not the session cache that answers `OSC 52 ; c ; ?`. Reading that cache instead would let one window's
 chord, or any `sessions capture` caller, take a write another window's user drove, which per-client clipboard scope
-forbids ([security-model.md](security-model.md) "Per-client clipboard scope"). The price is that the value lives and
-dies with the window. An empty source (no selection, no OSC 133 marks, no OSC 52 write yet) is a no-op.
+forbids ([security-model.md](security-model.md) "Per-client clipboard scope"). An empty source (no selection, no OSC 133
+marks, no OSC 52 write yet) is a no-op.
 
 `ansi` defaults off because the tools a region is usually handed to (hint pickers, editors, text utilities) re-parse it
 as data, where embedded escapes corrupt the match. Color is the exception a color-rendering sink asks for.
@@ -399,10 +398,9 @@ no one binding to default; the manual gives samples instead. `run` follows the s
 
 ### A menu instead of a prefix
 
-felis has no leader / prefix key: chords are single strokes
-([`crates/felis-client-core/src/keymap/chord.rs`](../../crates/felis-client-core/src/keymap/chord.rs)), and
-multiplexer-style keymaps belong to the WM. When a `pipe`-heavy setup would otherwise want one chord per workflow and
-run the chord space dry, bind **one** chord to `run` a menu and let the menu hold the fan-out:
+felis has no leader / prefix key: chords are single strokes, and multiplexer-style keymaps belong to the WM. When a
+`pipe`-heavy setup would otherwise want one chord per workflow and run the chord space dry, bind **one** chord to `run`
+a menu and let the menu hold the fan-out:
 
 ```toml
 [keymap]
@@ -424,11 +422,10 @@ The gesture inventory is in [keybindings](../reference/keybindings.md) § "Mouse
 which buttons are forwarded, are in [key-encoding](../reference/protocols/key-encoding.md). What follows is why the
 gestures are drawn that way.
 
-- Notch-wheel scrollback scrolling scales by `[mouse] scroll_multiplier`. Linux delivers a wheel notch as
-  `LineDelta(0, ±1)` with no OS scroll acceleration (winit Wayland `axis_discrete` / X11 core buttons 4/5), so the bare
-  one-notch-one-row mapping crawls; the multiplier restores a usable feel. Touchpad pixel-deltas are already
-  velocity-scaled and ignore it, and so does everything that is not a scrollback row: Shift+wheel half-pages, alt-screen
-  arrow translation, and mouse-protocol button events stay one-event-per-notch.
+- Notch-wheel scrollback scrolling scales by `[mouse] scroll_multiplier`. Linux delivers a wheel notch as one line with
+  no OS scroll acceleration, so the bare one-notch-one-row mapping crawls; the multiplier restores a usable feel.
+  Touchpad pixel-deltas are already velocity-scaled and ignore it, and so does everything that is not a scrollback row:
+  Shift+wheel half-pages, alt-screen arrow translation, and mouse-protocol button events stay one-event-per-notch.
 - The zoom-vs-scroll choice is _latched_ at the start of each wheel stream (a finger gesture plus the trackpad inertia
   it spawns) and held for the whole stream, so a Ctrl press landing during leftover momentum cannot reclassify an
   in-flight scroll as a zoom. Rationale: macOS delivers inertia as ordinary wheel events and winit 0.30 collapses the
@@ -460,10 +457,8 @@ before it is worth those frames.
 
 ## Selection
 
-The selection model is client-side pure data
-([`crates/felis-client-core/src/selection.rs`](../../crates/felis-client-core/src/selection.rs)): the App owns the
-mouse-down / drag / up lifecycle against the shadow screen, the highlight and the copied text are computed locally, and
-no selection state crosses the wire.
+The selection model is client-side pure data: the App owns the mouse-down / drag / up lifecycle against the shadow
+screen, the highlight and the copied text are computed locally, and no selection state crosses the wire.
 
 - The line the triple-click streak selects is the _logical_ one: the clicked row plus the rows its `soft_wrap_continued`
   bits tie to it, clipped to the visible screen. The wrap bit rides the `RowDelta` row codec
@@ -473,7 +468,7 @@ no selection state crosses the wire.
 - A wide character is selected as a whole: a range that reaches either of its two cells highlights and copies all of it,
   in linear and rectangle mode alike, so what is highlighted is what is copied.
 - Word class is fixed, not configurable: alphanumeric characters or `_` (Unicode `is_alphanumeric()`) form a word run,
-  whitespace is its own run, everything else is per-cell punctuation (`crates/felis-client-core/src/selection.rs`).
+  whitespace is its own run, everything else is per-cell punctuation.
 - Rectangle selection has two gestures deliberately, because each covers the other's dead spot: Alt+drag is the macOS
   convention (Terminal.app; iTerm2 defaults to Cmd+Option+drag) and the natural trackpad gesture, while many Linux
   window managers grab Alt+drag for window moves; there the right button still works. The mode is fixed at press time,
@@ -512,10 +507,8 @@ clipboard is **off by default**: it is a known foot-gun (a pasted command can re
 opt in. The **read** of the OS clipboard is not implemented at all (REQ-802), so a hostile program cannot exfiltrate
 clipboard contents even with the write gate open ([security-model.md](security-model.md) "Output-to-input injection").
 
-The gate stops a program from writing the system clipboard on its own; it does not strand what the program meant to
-copy. A `pipe` binding with `source = "osc_52"` and `target = "clipboard"` promotes the program's last write when the
-user presses it, so a yank in a remote editor reaches the system clipboard without the program ever holding the write
-permission.
+A `pipe` from the `osc_52` source to the clipboard is the user's route past the write gate
+([security-model.md](security-model.md) "Clipboard, bracketed paste, and OSC control bytes").
 
 The system clipboard and the Linux PRIMARY selection stay independent in both directions: a `Paste { from: System }` on
 an empty `CLIPBOARD` does not fall back to `PRIMARY`, because a paste whose source depends on which buffer happens to be
@@ -572,8 +565,7 @@ The three bars share one row and cannot stack, so an order decides which one pai
 and confirm outrank the preview: both are the user's own deliberate action (typing a query, answering a prompt), while a
 hover is incidental to moving the pointer and can arrive under either. Search and confirm can both be live (a chord arms
 a confirmation before the search bar sees the keystroke), so the question outranks the search bar too, and a search that
-loses the row keeps only its hit highlights. Two bars in one row would not stack: every foreground quad draws after
-every background one, so their glyphs would interleave instead of one hiding the other.
+loses the row keeps only its hit highlights.
 
 An active IME composition outranks it for the same reason. The preedit panel is drawn in place at the cursor, so it
 collides with the preview only when the cursor sits on the bottom row. There every foreground quad is emitted after

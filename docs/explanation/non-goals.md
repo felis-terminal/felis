@@ -132,14 +132,13 @@ Single-user SSH stdio attach is implemented, and the protocol is transport-plugg
   there and links this rule. A shim is no precedent for OS-gated _convenience_: it meets the same intent on every
   target.
 
-The rule covers behavior a user would get on one OS and not another. Window-identity metadata is outside it: the
-per-window identity a platform's window managers match (a Wayland app ID, an X11 `WM_CLASS`, a Win32 window class) is
-set wherever the platform defines one and left unset where the platform has no per-window counterpart. No application
-can offer the missing half there, so nothing is gated.
-
 The in-place daemon upgrade is such a shim. Its intent, an update that keeps the sessions, is the same on every
 platform; Unix carries the state through `execve`, and Windows, which has no exec, hands it to a successor process
 ([overview.md](architecture/overview.md) "In-place upgrade").
+
+The rule covers behavior a user would get on one OS and not another. Window-identity metadata is outside it: the
+per-window identity a platform's window managers match is set wherever the platform defines one and left unset where the
+platform has no per-window counterpart. No application can offer the missing half there, so nothing is gated.
 
 ## Future revisits (require a recorded decision to lift)
 

@@ -46,13 +46,9 @@ felis --host user@remote attach "$ID"         # attach in a local window
 
 ### SSH agent forwarding persistence
 
-The remote daemon keeps `SSH_AUTH_SOCK` usable across disconnects: remote shells see a symlink the daemon owns
-(`<daemon socket>.agent`), which it points at the newest live connection's forwarded agent socket. Reconnecting with
-`felis --host user@remote` restores agent access in existing shells without restarting sessions or exporting new
-variables:
-
-- While disconnected, the agent socket is unavailable to the remote shell.
-- On reconnect, agent access resumes automatically in the processes of the daemon the reconnect reaches.
+The remote daemon keeps `SSH_AUTH_SOCK` usable across disconnects: while disconnected, the agent is unavailable to the
+remote shell, and reconnecting with `felis --host user@remote` restores it in existing shells without restarting
+sessions or exporting new variables.
 
 Enable agent forwarding for the target host in your SSH configuration:
 
@@ -61,8 +57,8 @@ Host remote
     ForwardAgent yes
 ```
 
-Without agent forwarding, remote shells run without an agent. On Windows, OpenSSH agent uses a persistent named pipe, so
-socket proxying is not required.
+Without agent forwarding, remote shells run without an agent. On a Windows host, the OpenSSH agent's named pipe needs
+none of this.
 
 ### Keep SSH variables current after reattaching
 
@@ -148,10 +144,9 @@ configuration, see [Get notified when a job finishes](enable-notifications.md).
 ## Operational notes
 
 - **Remote windows support local actions:** session switching chords, `pipe` actions, and `run` actions operate within
-  `--host` windows, and switching sessions redials the transport. The commands themselves run on the client machine; to
-  reach the remote one, branch on the host and working directory the action carries in its environment
-  ([keybindings.md](../reference/keybindings.md)). To run a command on the remote host of a `--host` window, have the
-  script branch on `$FELIS_HOST`:
+  `--host` windows. The commands themselves run on the client machine; to run one on the remote host, have the script
+  branch on the `$FELIS_HOST` and `$FELIS_CWD` the action carries in its environment
+  ([keybindings.md](../reference/keybindings.md)):
 
   ```sh
   #!/bin/sh

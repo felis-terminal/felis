@@ -15,15 +15,14 @@ Programs under felis read `TERM=xterm-felis`, so a host with no `xterm-felis` en
 Run `felis doctor` to see whether this host has the entry and which file path it found (see
 [cli.md](../reference/cli.md#doctor)). An obsolete copy in `~/.terminfo` can shadow the packaged entry.
 
-The Nix package bundles the compiled terminfo entry, and so do the Linux and macOS archives; the daemon adds the copy
-shipped beside it to `TERMINFO_DIRS` for every session it starts. When `felis doctor` finds the entry but a session
-reports an unknown terminal, run `echo $TERMINFO_DIRS` in that session. If it does not name the felis tree you
-installed, the session belongs to a daemon from another install or an older build: stop it with `felis daemon stop` and
-open a new window. If it does, the first line of `infocmp xterm-felis` names the file that answers, which is how a stale
-copy under `TERMINFO` or `~/.terminfo` shows itself; an error instead means no directory in the search holds an entry
-that reader can parse. On a system built from source, compile the entry with `tic` as shown in
-[Install](install.md#build-from-source); for a remote host, see the next section. Because `~/.terminfo` takes precedence
-over `TERMINFO_DIRS`, an entry compiled there by hand shadows later updates to the packaged one, so leave that directory
+The Nix package and the Linux and macOS archives bundle the compiled entry, and the daemon adds it to `TERMINFO_DIRS`
+for every session it starts. When `felis doctor` finds the entry but a session reports an unknown terminal, run
+`echo $TERMINFO_DIRS` in that session. If it does not name the felis tree you installed, the session belongs to a daemon
+from another install or an older build: stop it with `felis daemon stop` and open a new window. If it does, the first
+line of `infocmp xterm-felis` names the file that answers, which shows a stale copy under `TERMINFO` or `~/.terminfo`;
+an error instead means no directory in the search holds an entry that reader can parse. On a system built from source,
+compile the entry with `tic` as shown in [Install](install.md#build-from-source); for a remote host, see the next
+section. An entry compiled by hand into `~/.terminfo` shadows later updates to the packaged one, so leave that directory
 alone on a system where Nix manages felis.
 
 If you cannot install terminfo entries on a remote system, configure the daemon to advertise a compatible generic
@@ -100,12 +99,9 @@ infocmp -x xterm-felis | ssh <host> -- tic -x -
 
 ## On macOS, /usr/bin programs say unknown terminal but Nix ones work
 
-When running macOS system utilities (such as `/usr/bin/vim` or `tput lines`), tools may report an unknown terminal while
-Nix-installed tools function correctly. macOS system tools use an older ncurses version that cannot parse 32-bit
-terminfo formats or entries exceeding 4096 bytes. felis compiles its packaged entry to conform to both limits (see
-[terminal-identity.md](../reference/terminal-identity.md)).
-
-If an older manually installed entry exists in `~/.terminfo`, it shadows the package entry. Remove any manual copies:
+macOS system utilities (such as `/usr/bin/vim` or `tput lines`) use an older ncurses that cannot read every terminfo
+format. The packaged entry is compiled for it ([terminal-identity.md](../reference/terminal-identity.md)), but an older
+copy you installed by hand into `~/.terminfo` shadows it. Remove any manual copies:
 
 ```sh
 rm -f ~/.terminfo/x/xterm-felis ~/.terminfo/78/xterm-felis
@@ -116,9 +112,8 @@ window row count.
 
 ## An app gates Kitty-protocol features on the terminal's identity
 
-Some applications check `TERM` or `TERM_PROGRAM` for specific terminal names rather than querying terminal capabilities
-dynamically. Although felis identifies truthfully by default, configure the daemon environment to provide compatibility
-overrides:
+Some applications check `TERM` or `TERM_PROGRAM` for specific terminal names rather than querying terminal capabilities.
+Set compatibility overrides in the daemon's environment:
 
 ```fish
 set -gx FELIS_TERM xterm-kitty

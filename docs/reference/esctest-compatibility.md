@@ -12,25 +12,21 @@ The PTY integration test harness at `crates/felis-pty/tests/esctest_smoke.rs` ex
 [`esctest2`](https://invisible-island.net/esctest/) suite (79 modules, 568 cases) inside a felis-spawned PTY.
 
 - **Suite flags**: `--expected-terminal=xterm` (iTerm2-specific cases count as known bugs rather than failures),
-  `--max-vt-level=4` (matches the VT420-class DA1 reply), `--no-print-logs` (the per-test stdout dump would land on the
-  grid under test), `--timeout=1` (an unanswered query would otherwise stall a case for the full default timeout),
-  `--logfile=<per-run path>` (the default `/tmp/esctest.log` collides across parallel test processes), and
-  `--xterm-reverse-wrap=383` (selects xterm post-2023 split reverse-wrap expectations). Both `--no-print-logs` and
-  `--timeout=1` shape the pass count.
-- **Environment**: Built by the `esctest` derivation in `dev/packages/esctest.nix`, which `dev/flake-module.nix` puts on
-  the dev shell's `PATH`. The derivation removes the window-op cases' waits for a window manager.
-- **Invocation**: `cargo nextest run -p felis-pty --test esctest_smoke` (it fails without the `esctest` binary; full run
-  ≈ 10 s). `ESCTEST_BIN` names a binary to use instead of the one on `PATH`, and `ESCTEST_INCLUDE` passes an
-  `--include=` pattern so a single module can be re-run while iterating.
+  `--max-vt-level=4` (matches the VT420-class DA1 reply), `--no-print-logs`, `--timeout=1`, a per-run `--logfile`, and
+  `--xterm-reverse-wrap=383` (xterm's split reverse-wrap expectations). Both `--no-print-logs` and `--timeout=1` shape
+  the pass count.
+- **Environment**: The dev shell puts the `esctest` derivation (`dev/packages/esctest.nix`) on `PATH`; the derivation
+  removes the window-op cases' waits for a window manager.
+- **Invocation**: `cargo nextest run -p felis-pty --test esctest_smoke` (it fails without the `esctest` binary).
+  `ESCTEST_BIN` names a binary to use instead of the one on `PATH`, and `ESCTEST_INCLUDE` passes an `--include=` pattern
+  so a single module can be re-run while iterating.
 
 ## Invariant and baseline
 
 The `PASS_BASELINE` constant in `esctest_smoke.rs` acts as a regression floor: any commit that flips esctest cases to
 pass must raise the floor to the new pass count in the same commit. A drop below the floor fails CI.
 
-The commit that raises the floor names the sequence behaviors it implemented and lists the newly passing case names, so
-the git log of `esctest_smoke.rs` records conformance progress. One commit may raise it by several cases when a parser
-feature unblocks a whole escape-sequence family.
+The commit that raises the floor names the sequence behaviors it implemented and lists the newly passing case names.
 
 ## Case breakdown
 

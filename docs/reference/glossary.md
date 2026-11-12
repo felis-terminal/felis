@@ -39,8 +39,7 @@ sidebar:
 - **Daemon** — The persistent background felis process managing PTYs, screen grids, scrollback storage, image stores,
   and sessions.
 
-- **DCS** — Device Control String. ANSI escape prefix (`ESC P ... ESC \`). felis answers DECRQSS and XTGETTCAP; any
-  other DCS body is dropped at the dispatcher.
+- **DCS** — Device Control String. ANSI escape prefix (`ESC P ... ESC \`).
 
 - **Detach** — Disconnecting a client from a session while leaving the daemon session and child process alive.
 
@@ -53,8 +52,8 @@ sidebar:
 - **Eviction** — Forcefully detaching all attached clients from a session via `felis sessions evict`
   (`OpsToDaemonMsg::ForceDetach`), returning the session to an unattached state.
 
-- **Frozen preface** — The fixed-size handshake block exchanged before IPC framing begins: 8 bytes from the client and
-  10 bytes from the daemon, encoding magic bytes and protocol version numbers ([ipc.md](ipc.md)).
+- **Frozen preface** — The fixed-size handshake block exchanged before IPC framing begins, encoding magic bytes and
+  protocol version numbers ([ipc.md](ipc.md)).
 
 - **Grid** — The two-dimensional cell matrix maintained by the daemon representing the active screen state.
 

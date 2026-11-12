@@ -66,9 +66,8 @@ proptest (unbounded random), fuzz (unbounded totality of orchestration), or inst
    an unwinding assertion; bump N. A passing run with unwinding assertions green means N is provably sufficient (sound).
    Derived/slice equality lowers to the builtin `memcmp`, whose loop sits OUTSIDE `#[kani::unwind]`'s reach; compare
    struct fields and slice elements with an explicit indexed loop instead.
-5. **Run** `just kani` (verifies felis-vt + felis-protocol + felis-grid + felis-client-core + felis-shaping, under
-   `--no-default-features` for felis-client-core's sake; pass `--harness <name>` for one). x86_64-linux only. A crate's
-   first proof also adds the crate to the recipe's `-p` list in the `justfile`.
+5. **Run** `just kani` (crate list and flags in the `justfile`; pass `--harness <name>` for one). x86_64-linux only. A
+   crate's first proof also adds the crate to the recipe's `-p` list in the `justfile`.
 6. **Commit** with the crate as scope (`vt: prove ...`), the body naming the property and what it guards.
 
 ```rust

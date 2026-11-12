@@ -5,11 +5,9 @@ sidebar:
 ---
 
 felis's implementation of the Kitty graphics protocol: wire format, transmission media, placement, animation, and
-resource limits.
-
-Architectural design rationale, upstream differences, and implementation tradeoffs are detailed in
-[kitty-graphics.md](../../explanation/protocols/kitty-graphics.md). The upstream Kitty graphics specification is
-published at <https://sw.kovidgoyal.net/kitty/graphics-protocol/>.
+resource limits. The rationale and the deviations from kitty are in
+[kitty-graphics.md](../../explanation/protocols/kitty-graphics.md); the upstream specification is
+<https://sw.kovidgoyal.net/kitty/graphics-protocol/>.
 
 ## Wire format
 
@@ -33,11 +31,9 @@ kitten emits.
 
 ## Transmission methods
 
-Transmission method support (`t=d/f/t/s`) is summarized in the
-[protocol support matrix](support-matrix.md#kitty-graphics). On Unix targets, four methods are implemented: `t=d`
-(direct), `t=f` (file), `t=t` (temp file), and `t=s` (POSIX shared memory). On Windows (`x86_64-pc-windows-msvc`), only
-`t=d` is supported; `t=f`, `t=t`, and `t=s` return `ENOTSUP`, allowing producer `a=q` probes to fall back to direct
-transmission; see [kitty-graphics.md](../../explanation/protocols/kitty-graphics.md).
+On Unix targets, four methods are implemented: `t=d` (direct), `t=f` (file), `t=t` (temp file), and `t=s` (POSIX shared
+memory). On Windows (`x86_64-pc-windows-msvc`), only `t=d` is; `t=f`, `t=t`, and `t=s` return `ENOTSUP`, so an `a=q`
+probe learns to fall back to direct transmission.
 
 All three Unix methods read the range `S=` bytes long from offset `O=`; an absent or zero `S=` reads to the end. An `O=`
 or `O=+S=` past the end of the file or segment is refused with the one file-medium failure reply; a temp file felis
@@ -46,21 +42,17 @@ could open is still deleted when the `t=t` deletion rule admits it
 
 Shared-memory transfer (`t=s`) behavior:
 
-- The daemon opens named segments read-only and copies the selected range into internal buffers.
-- Segment names are not unlinked per read; unlinking is deferred to session teardown. A session defers up to 16
-  successfully completed transfers; adding a seventeenth immediately unlinks the oldest name.
-- Names are accepted with or without a leading slash. On non-Linux Unix platforms, a leading slash is added
-  (`normalize_shm_name`) before `shm_open`. Names containing `/`, `.`, or `..` within the body are rejected with
-  `EINVAL`.
-- Data copying is split by platform: Linux uses `pread` (safe against concurrent truncations); macOS uses `mmap` (see
-  `copy_shm_range_mmap` in `crates/felis-daemon/src/graphics/image_decode.rs`).
+- The daemon opens named segments read-only and copies the selected range.
+- Segment names are not unlinked per read; unlinking is deferred to session teardown, for up to 16 successfully
+  completed transfers per session, the oldest name unlinked at once when a seventeenth arrives.
+- Names are accepted with or without a leading slash; on non-Linux Unix platforms a missing leading slash is added
+  before the open. Names containing `/`, `.`, or `..` within the body are rejected with `EINVAL`.
 - Raw payloads (`f=24`/`f=32`) longer than `s × v × bpp` keep the leading bytes and trim trailing padding (e.g.
   page-boundary rounding on macOS). Payloads shorter than expected get the one file-medium failure reply
   ([File transmission safety](#file-transmission-safety-tf--tt)).
 
 Chunking: `m=` only applies to `t=d`. A command specifying `t=f`, `t=t`, or `t=s` completes immediately regardless of
-`m=1` and aborts any active in-flight direct stream. Design details are documented in
-[kitty-graphics.md](../../explanation/protocols/kitty-graphics.md).
+`m=1` and aborts any active in-flight direct stream.
 
 ## Image formats and compression
 
@@ -79,7 +71,7 @@ Images reside in the daemon's image store and are indexed by:
 
 Transmissions (`a=t` or `a=T`) may omit both IDs: felis allocates an ID from the top of the `u32` range and sends no
 reply. An explicit `i=0` or `I=0` is the same as an omitted key. `a=p` and the ID-targeted deletes (`a=d` with `d=i`/`I`
-or `d=f`/`F`) require an explicit ID (see [kitty-graphics.md](../../explanation/protocols/kitty-graphics.md)).
+or `d=f`/`F`) require an explicit ID.
 
 A transmission with `I=` always stores a new image, under the lowest image ID from `1` up that no image holds, and its
 reply carries both: `i=<assigned>,I=<number>`. Several images may share a number. Any other command that names an image
@@ -118,15 +110,14 @@ placements of the one coming up.
 Images remain anchored to text across scroll operations. felis models this using signed, live-relative anchor rows: row
 `1` represents the top live screen row, row `0` the most recent scrollback row, and `-(n-1)` the `n`-th scrollback row.
 
-Anchor positions shift as text scrolls: `Placements::shift_up` preserves entries within the scrollback ring and evicts
-entries pushed beyond the retention horizon. The alternate screen operates with `retain_rows = 0`, evicting placements
-as they leave the live viewport.
+Anchor positions shift as text scrolls: a placement survives while its anchor stays in the retained scrollback and is
+evicted once the anchor scrolls past it. The alternate screen retains no rows, so its placements are evicted as they
+leave the live viewport.
 
-A full-screen scroll triggers `ImageMsg::PlacementsShifted { lines }` to notify client shadows of anchor adjustments
-([ipc.md](../ipc.md)). The client never drops placements unilaterally, waiting for `PlacementRemoved` from the daemon.
-Live queries (`ED`, `d=c/p/q/x/y`) operate in live coordinate space, ignoring non-visible scrollback placements unless
-their extents cross into the viewport. Coordinate transformation details are in
-[kitty-graphics.md](../../explanation/protocols/kitty-graphics.md).
+A full-screen scroll sends `ImageMsg::PlacementsShifted { lines }` to attached clients ([ipc.md](../ipc.md)). The client
+never drops placements unilaterally, waiting for `PlacementRemoved` from the daemon. Live queries (`ED`, `d=c/p/q/x/y`)
+operate in live coordinate space, ignoring non-visible scrollback placements unless their extents cross into the
+viewport.
 
 ## Scroll regions
 
@@ -199,10 +190,9 @@ felis supports `a=f` (frame transmission and editing), `a=a` (animation control)
 
 ### Frame model
 
-Images maintain ordered lists of frames; `frames[0]` is the root image (frame 1 in Kitty 1-based numbering), and `a=f`
-appends or modifies subsequent frames. felis stores pre-coalesced frames where each frame is a complete `width × height`
-buffer composite of base frame (`c=`) and new rectangle (`x, y, s, v`). Storage specifics are detailed in
-`crates/felis-daemon/src/graphics/` and [image-store.md](../../explanation/data-model/image-store.md).
+An image holds an ordered list of frames; the root image is frame 1 in Kitty's 1-based numbering, and `a=f` appends or
+modifies subsequent frames. Each frame is a complete `width × height` canvas: the base frame (`c=`) with the new
+rectangle (`x, y, s, v`) composited onto it.
 
 ### `a=f`: Transmit or edit a frame
 
@@ -240,8 +230,7 @@ looping according to configured bounds. Animations continue advancing when detac
 
 Frame transitions emit `ShowFrame { id, number }` to clients. Frame pixel data transfers once via `Header` → `Chunk*` →
 `Complete` sequences using 1-based Kitty frame numbers ([ipc.md](../ipc.md#image-kind--3)); an in-place edit (`a=f` with
-`r=`, `a=c`) ships only the rectangles it changed to a minor-4 window that opts in. Clients track frame presentation
-without computing tick intervals locally.
+`r=`, `a=c`) ships only the rectangles it changed to a minor-4 window that opts in. Clients compute no tick intervals.
 
 ## Z-ordering
 
@@ -262,7 +251,7 @@ cells draw after them, in row-major order. The daemon numbers both orders (`Imag
 [ipc.md](../ipc.md)), so a reattached window stacks as one attached throughout.
 
 Interface chrome (search, confirmation, or link preview bars) clips all image rendering; images do not draw into chrome
-rows at any z-index (see [kitty-graphics.md](../../explanation/protocols/kitty-graphics.md)).
+rows at any z-index.
 
 ## File transmission safety (`t=f` / `t=t`)
 
@@ -278,8 +267,8 @@ File-based transfers enforce path traversal defenses before I/O:
   the parent resolves under `/tmp`, `/dev/shm`, or `$TMPDIR` and the path contains `tty-graphics-protocol` (kitty's
   rule); any other `t=t` file is read and left in place.
 
-Outside those locations, `t=f` reads any absolute path readable by the daemon's effective UID; threat model and
-privilege boundaries are detailed in [security-model.md](../../explanation/security-model.md).
+Outside those locations, `t=f` reads any absolute path readable by the daemon's effective UID
+([security-model.md](../../explanation/security-model.md) carries the threat model).
 
 On Unix, once a `t=f`, `t=t` or `t=s` command passes the checks on its own bytes (base64, UTF-8, an absolute path
 without `..`, a valid shm name), every failure from reading its source on gets the one reply
@@ -317,10 +306,10 @@ carries `i=`, and its reply echoes `i=` alone. A command with an unknown `a=` is
 
 ### Querying
 
-Producers query capabilities with `a=q`. Probes invoke the decoder path to guarantee parity with transmission. On Unix
-targets, direct (`t=d`), file (`t=f`), temporary file (`t=t`), and shared memory (`t=s`) report success; on Windows,
-only `t=d` succeeds. RGB, RGBA, PNG formats, zlib compression, Unicode placeholders, and animation controls report
-support identically across all supported targets.
+Producers query capabilities with `a=q`. A probe runs the same decoder path as a transmission. On Unix targets, direct
+(`t=d`), file (`t=f`), temporary file (`t=t`), and shared memory (`t=s`) report success; on Windows, only `t=d`
+succeeds. RGB, RGBA, PNG formats, zlib compression, Unicode placeholders, and animation controls report support
+identically across all supported targets.
 
 ### Feature queries (`e=`)
 
@@ -352,7 +341,7 @@ table. A delete (`a=d`) is never answered, whether it succeeds or fails, unless 
 A `G` escape whose controls do not parse is dropped without a reply. A chunked `t=d` transfer exceeding 64 MiB is
 answered with `EINVAL`, honoring the first chunk's ids and the `q=` in effect.
 
-Non-`G` APC escapes are silently ignored to prevent interfering with unrelated APC protocol handlers.
+Non-`G` APC escapes are silently ignored.
 
 ## Limits
 
@@ -371,13 +360,9 @@ Non-`G` APC escapes are silently ignored to prevent interfering with unrelated A
 - Maximum placements: 16384 per screen, direct and Unicode-placeholder placements together. A put past it removes the
   screen's oldest placement (emitting `PlacementRemoved`), and an image without an id that loses its last placement this
   way is deleted (emitting `Delete`). kitty has no such cap.
-- APC command queue: at most 64 APC bodies and 1 MiB buffered between daemon drains. The body that fills the queue
-  pauses the PTY parse until the daemon drains it, so a burst of any length arrives whole.
+- APC command queue: bounded; the body that fills it pauses the PTY parse until the daemon drains it, so a burst of any
+  length arrives whole.
 - Decodes off the session task: one per session. A command decoding a `t=f`, `t=t` or `t=s` source, a PNG, or a zlib
   payload that declares at least 256 KiB of pixels (`s=`×`v=`×bytes per pixel) pauses the PTY parse until it is stored
-  and answered. Meanwhile a window's pulls, stats reads, a shutdown, and input that changes no size or input owner while
-  nothing is held and no daemon report is owed run at once; every other session command applies after it, in arrival
-  order. The child-exit check, the daemon's own focus, color-scheme and resize reports, and search walks resume once the
-  output after the image has been drained.
-- Shared-memory unlinks: Up to 16 deferred segment names per session. Subsequent segments trigger immediate unlinking of
-  the oldest entry.
+  and answered; keystrokes still reach the program meanwhile.
+- Shared-memory unlinks: up to 16 deferred segment names per session (see `t=s` above).

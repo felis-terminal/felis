@@ -4,16 +4,14 @@ sidebar:
   order: 1
 ---
 
-The client owns all rendering. This page covers how that rendering is organized: the process model and the per-frame
-flow, the GPU resources, how frames are paced across the IPC boundary, window chrome, the optional post-process chain,
-and the prior art behind the draw and atlas choices.
+The client owns all rendering.
 
 ## Process model
 
 The client is one OS process whose screen state has a single owner. A tokio task reads grid, image, and control frames
-from the daemon and forwards each one to the winit event loop as a user event (`AppEvent`); the event loop applies it to
-the in-memory **shadow screen**, and the renderer runs synchronously inside the redraw callback. Reader and renderer
-never touch the shadow at the same time, so it needs no lock: running both on the event loop serializes "apply a frame"
+from the daemon and forwards each one to the winit event loop as a user event; the event loop applies it to the
+in-memory **shadow screen**, and the renderer runs synchronously inside the redraw callback. Reader and renderer never
+touch the shadow at the same time, so it needs no lock: running both on the event loop serializes "apply a frame"
 against "paint a frame" by construction.
 
 A lock over a shared shadow is the alternative, and it costs more than it saves. The populate walk reads the grid and
@@ -40,9 +38,9 @@ redraw request, so a burst of frames costs one paint ([damage-tracking.md](damag
 5. The renderer issues draw calls inside one render pass, in the
    layered order:
      a. clear (load op) + images z below the bg tier
-     b. cell backgrounds other than the default, which the clear
-        already holds (incl. cursor/selection markers, which are
-        background-layer instances, not a separate pass)
+     b. cell backgrounds other than the default (incl.
+        cursor/selection markers, which are background-layer
+        instances, not a separate pass)
      c. images z below text but above bg
      d. cell glyphs (incl. box-drawing and hyperlink underlines)
      e. SGR line decorations (underline family, strikethrough,
@@ -61,20 +59,19 @@ nothing occludes anything. A bar a producer can paint over guarantees nothing; s
 How a cell looks is decided before any instance exists. The cell painter in `felis-render-core` resolves each cell's
 colors (reverse video, cursor, selection, the bidi warning, faint, minimum contrast), its decorations, the overlays and
 bottom bars, and the chrome clip, and emits each row as a display list of rectangles, glyph draws and decorations in
-physical pixels. The per-cell part of that is a row-level function over a slice of cells, built without felis-shaping,
-so a client that draws text with its own fonts (a DOM or canvas view) can call it and paint a cell's colors and
-decorations by the same rules. `felis-render-wgpu` encodes that list into the instance records of the tiers below and
-caches the encoded rows. The display list is the seam a backend other than wgpu draws from; why it is data rather than a
-trait the painter calls is recorded in [the architecture overview](../architecture/overview.md) "Workspace: the
-crate-boundary decision record".
+physical pixels. The per-cell part is built without felis-shaping, so a client that draws text with its own fonts (a DOM
+or canvas view) can paint a cell's colors and decorations by the same rules. `felis-render-wgpu` encodes that list into
+the instance records of the tiers below. The display list is the seam a backend other than wgpu draws from; why it is
+data rather than a trait the painter calls is recorded in [the architecture overview](../architecture/overview.md)
+"Workspace: the crate-boundary decision record".
 
 ## wgpu surface and resources
 
 ### Backend and surface format
 
 wgpu maps to one native backend per platform (Metal on macOS, Vulkan on Linux, DX12 on Windows) while all three share a
-single WGSL shader path ([`shader.wgsl`](../../../crates/felis-render-wgpu/src/shader.wgsl)). One codebase, three
-platforms; see [the implementation doc](../implementation.md) for why wgpu over a per-platform native renderer.
+single WGSL shader path; see [the implementation doc](../implementation.md) for why wgpu over a per-platform native
+renderer.
 
 The surface format is whatever the surface advertises as sRGB-capable first, falling back to its first advertised format
 when none is, rather than a hard-coded BGRA8. Hard-coding it is the thing that works on the developer's machine and
@@ -97,23 +94,19 @@ foreground and the background it takes the coverage at which the linear blend re
 would. Colors still mix in linear space; only the weight moves. This is ghostty's `linear-corrected`
 [`alpha-blending`](https://github.com/ghostty-org/ghostty/blob/main/src/config/Config.zig), the same mapping as kitty's
 `legacy` [`text_composition_strategy`](https://github.com/kovidgoyal/kitty/blob/master/kitty/options/definition.py). A
-mask draw is anything whose pixels are a coverage tinted by the foreground: font glyphs, the built-in box-drawing glyphs
-and the line decorations. Color glyphs, images and backgrounds carry their own color and blend unchanged.
-`felis_render_core::blend` is the reference the shader mirrors. The renderer turns the remap on only for an sRGB target:
-a surface that falls back to a non-sRGB format already blends encoded values, and the remap would correct twice.
+mask draw is one whose pixels are a coverage tinted by the foreground; color glyphs, images and backgrounds carry their
+own color and blend unchanged. The renderer turns the remap on only for an sRGB target: a surface that falls back to a
+non-sRGB format already blends encoded values, and the remap would correct twice.
 
 The background the remap assumes is the resolved background of the draw's own cell (reverse video, cursor and selection
 applied), and for the default background of a translucent window its configured opaque color. The remap is about text
-against its own background; what the compositor shows behind the window is outside felis. Four cases blend over
-something else: ink overhanging into a neighbor cell of another background, a Kitty image placed between the background
-and text layers, a search highlight laid under a match, and the backdrop of a translucent window. Only edge pixels are
-affected, by the difference between the assumed and the real background. The painter does not know where images sit, and
-search highlights are an overlay on cached rows, so tracking them would repaint every row per search keystroke; the
-error is accepted rather than tracked.
+against its own background; what the compositor shows behind the window is outside felis. Where text blends over
+something other than its cell background (an overhang into a neighbor, an image between the layers, a search highlight,
+a translucent backdrop), only edge pixels differ, and the error is accepted rather than tracked.
 
-macOS keeps plain linear blending, as ghostty does there. CoreText's font smoothing already dilates the mask
-(text-shaping.md, "macOS outlines"), and blended linearly it lands within 10% of Terminal.app's ink in both a dark and a
-light theme; the remap on top adds 12% too much in the light one. The rejected alternatives:
+macOS keeps plain linear blending, as ghostty does there: CoreText's font smoothing already dilates the mask
+([text-shaping.md](text-shaping.md) "macOS outlines"), and the remap on top over-darkens light themes. The rejected
+alternatives:
 
 - **Plain linear blending everywhere.** The weight shift above, in both directions at once.
 - **sRGB-space blending.** It matches the fonts' tuning, but mixing encoded values darkens the edge between saturated
@@ -168,32 +161,27 @@ rings of three CPU-mappable buffers written in place, and glyph and image bitmap
 pass that reads the texels from a mappable storage buffer, instead of `Queue::write_buffer` and `Queue::write_texture`.
 
 Both of those stage the data and copy it with a blit, and Apple's GPU driver charges the process a blit working set of
-about 160 MB, on top of about 240 MB for render passes, until a second passes with no blit. A blinking cursor or a
-workload that meets new glyphs keeps that set resident (measured on an M4: a focused, blinking, otherwise idle window at
-424 MB against 264 MB, a sustained flood peaking at 460 MB against 302 MB). Uploading through a render pass adds only
-draws the frame's working set already covers.
+about 160 MB until a second passes with no blit, which a blinking cursor or a workload meeting new glyphs never allows.
+Uploading through a render pass adds only draws the frame's working set already covers.
 
 A discrete GPU keeps the staged path, since a mappable buffer there lives in host memory the GPU reads across the bus.
-Its texels go through a staging belt the renderer reuses across frames and copies from in the frame's encoder, not
-through `Queue::write_texture`, which allocates a staging buffer per call: on a discrete NVIDIA GPU that allocation and
-its unmap cost a 2500 × 1400 video frame more than the copy itself.
+Its texels go through a staging belt the renderer reuses across frames, not through `Queue::write_texture`, whose
+per-call staging allocation costs a large video frame more than the copy itself.
 
 ### Image quad sizing
 
 Each placement is one textured quad, bilinear-sampled from the atlas. A _naturally_ sized placement (`c=`/`r=` absent)
 is drawn at the image's **native pixel size**, not stretched to the rounded-up cell box. The daemon resolves natural
-sizing to a cell count of `ceil(px / cell)` for cursor and clip bookkeeping, so the renderer would otherwise blow, say,
-a 1690-px mpv frame up to 212×8 = 1696 px: a non-integer resample that leaves a faint **vertical seam** wherever a
-high-contrast edge crosses a half-texel boundary. It is invisible on flat color and a visible line on video, and
-vertical because a producer lands the height on a cell multiple but not the width.
+sizing to a cell count of `ceil(px / cell)` for cursor and clip bookkeeping, so stretching to that box would be a
+non-integer resample that leaves a faint **vertical seam** on video wherever a high-contrast edge crosses a half-texel
+boundary (vertical because a producer lands the height on a cell multiple but not the width).
 
 The placement message therefore carries the `c=`/`r=` the put asked for beside the resolved count, and the renderer
 draws kitty's destination rectangle from it: an automatic axis at native pixels, or at the image's aspect ratio against
 a requested one; the last partial cell shows a few px of background, as kitty's does. Inferring the request from the
 count is rejected: an explicit `c=` that happens to equal `ceil(native)` reads the same as an automatic one, and a
-derived axis's width (40.4 px for a 101×100 image two 20-px rows tall) is no whole number of cells. That inference
-survives only for a daemon that sends no request, which collapses a box of exactly `ceil(native)` to native pixels. An
-explicit `c=`/`r=` pair is scaled to fill its box, since there the producer has said what it wants.
+derived axis's width is generally no whole number of cells. That inference survives only for a daemon that sends no
+request. An explicit `c=`/`r=` pair is scaled to fill its box, since there the producer has said what it wants.
 
 Box-drawing and block-element glyphs (U+2500–U+259F) take the opposite treatment for the same reason: they are
 CPU-rasterized to the exact cell box rather than scaled from a font outline, so adjacent rows' lines connect instead of
@@ -204,11 +192,9 @@ landing a fraction of a pixel apart.
 The shadow screen is the client's local copy of what the daemon believes is on screen.
 
 When a producer enters synchronized output mode (`CSI ? 2026 h`), the daemon holds diff emission: dirty rows accumulate
-and nothing ships until the matching `CSI ? 2026 l` or a 150 ms deadline (`Grid::SYNC_OUTPUT_TIMEOUT`) flushes them, so
-a producer that crashes mid-update cannot freeze the screen. The client carries no synchronized mode of its own: it
-renders whatever arrives, and a synchronized update arrives as one batch.
-
-This guarantees that, e.g., a TUI rewriting a dozen rows in a single update appears as one frame, not as a partial
+and nothing ships until the matching `CSI ? 2026 l` or a fixed 150 ms deadline flushes them, so a producer that crashes
+mid-update cannot freeze the screen. The client carries no synchronized mode of its own: it renders whatever arrives,
+and a synchronized update arrives as one batch, so a TUI rewriting a dozen rows appears as one frame, not as a partial
 paint.
 
 ## Frame pacing
@@ -228,9 +214,8 @@ frame-callback model (`wl_surface.frame`, <https://wayland-book.com/surfaces/fra
 
 The daemon advances the grid as PTY data arrives (the producer blocking on a full PTY buffer is the desired
 backpressure, and is preserved), but emits a grid diff **only when a client pull is pending**. The client sends
-`InputMsg::NextGridFrame` on the existing input wire once per painted frame, at the end of the `RedrawRequested`
-handler, so winit's vsync paces the pulls; a per-connection `pull_pending` flag in the daemon's serve loop records that
-the next dirty cycle should emit.
+`InputMsg::NextGridFrame` on the existing input wire once per painted frame, at the end of the redraw handler, so
+winit's vsync paces the pulls.
 
 The unit that answers one pull is a **cycle**, and the daemon states its end on the wire with `GridMsg::CycleEnd`
 ([ipc.md](../../reference/ipc.md) "Grid (kind = 2)"), which lists what a cycle contains. The client holds both its
@@ -267,20 +252,19 @@ Everything accumulated since the last emission coalesces: the shifts of a band i
 since into one `RowDelta` batch ([ipc.md](../../reference/ipc.md); the marks that make the two agree are
 [damage-tracking.md](damage-tracking.md) "From damage to the wire"). A band shifted by its whole height drops its
 directive and ships as rows, so the per-pull cost is bounded at ~screen-height rows no matter how many rows scrolled in
-between: ~150 KB/s and <1% CPU even at 144 Hz.
+between.
 
-The grid advance is fully decoupled from emission: the parser runs on the PTY **parse thread**
-(`felis_daemon::parse_sink`; see [implementation.md](../implementation.md) "Tokio (multi-thread)"), so it drains the PTY
-at full speed regardless of pull cadence, and the child blocks on `write` only when the parse falls a full swap buffer
-behind, the desired backpressure. The owner's async task only replays the parsed grid effects and composes diffs, gated
-to emit on a pending pull.
+The grid advance is fully decoupled from emission: the parser runs on the PTY **parse thread** (see
+[implementation.md](../implementation.md) "Tokio (multi-thread)"), so it drains the PTY at full speed regardless of pull
+cadence, and the child blocks on `write` only when the parse falls a full swap buffer behind, the desired backpressure.
+The owner's async task only replays the parsed grid effects and composes diffs, gated to emit on a pending pull.
 
 Because the parse is not on a Tokio task at all, a parse-bound flood cannot keep an always-ready read arm monopolizing a
 runtime worker and starving the connection pump: the screen scrolls smoothly even when the parser is the bottleneck,
 with no scheduler-yield workaround required.
 
-Decoupling advance from emission means the diff must compose correctly across many intervening scrolls: the
-`pending_scrolls` accounting in [ipc.md](../../reference/ipc.md) has to survive the gap, not just one tick.
+Decoupling advance from emission means the diff must compose correctly across many intervening scrolls, not just one
+tick.
 
 #### The effect replay coalesces to a ~4 ms window
 
@@ -305,10 +289,8 @@ window stops repainting while the child keeps writing.
 
 The grid therefore sits behind `parking_lot::Mutex`, whose eventual fairness forces a hand-off to a waiter on average
 about every 0.5 ms (<https://docs.rs/parking_lot/0.12/parking_lot/type.Mutex.html>). That is an average, not a deadline,
-and liveness is all a pull needs.
-
-In a pull-paced window on Linux, a 10 s DOOM-fire flood gets 3 pulls answered behind the std lock and 161 behind the
-fair one, while DOOM-fire's frame rate (1,120 against 1,095 fps) and a 150 MB `cat` stay within run-to-run noise.
+and liveness is all a pull needs: under a DOOM-fire flood the fair lock answers about fifty times as many pulls as the
+std one, with parse throughput unchanged.
 
 #### The owner task takes the lock once per cycle
 
@@ -320,9 +302,8 @@ reads the grid again (a cycle with an eviction therefore takes the lock a second
 report, whose write reads the grid for the geometry it states).
 
 Letting each step take the lock for itself makes a pull wait out one fairness slice per step, about six per answered
-pull. In a pull-paced window on Linux (a 188x82 grid on a 60 Hz output) under a 16 s DOOM-fire flood, that answers 12 to
-14 pulls per second against 50 to 53 with one acquisition per cycle and the coalescing window counted from the drain's
-end, while DOOM-fire's frame rate stays within run-to-run noise.
+pull: under a DOOM-fire flood on a 60 Hz output that answers about a quarter of the pulls one acquisition per cycle
+does.
 
 #### Rejected ways to keep the pull answerable
 
@@ -339,14 +320,12 @@ end, while DOOM-fire's frame rate stays within run-to-run noise.
 
 #### Client demand is the only clock that is correct everywhere
 
-- The daemon is headless; the refresh rate exists only on the client (winit reports it via
-  `MonitorHandle::refresh_rate_millihertz`,
-  <https://docs.rs/winit/latest/winit/monitor/struct.MonitorHandle.html#method.refresh_rate_millihertz>). No daemon-side
-  rate can serve 60, 120, and 144 Hz panels at once.
+- The daemon is headless; the refresh rate exists only on the client. No daemon-side rate can serve 60, 120, and 144 Hz
+  panels at once.
 - Variable-refresh displays (ProMotion / G-Sync / FreeSync) have no fixed rate; only a live per-frame pull can track
   them.
-- One daemon serves several clients; each connection paces independently through its own `pull_pending` gate, and
-  dragging a window between monitors changes its rate for free (a monitor change is a resize; see below).
+- One daemon serves several clients; each connection paces independently, and dragging a window between monitors changes
+  its rate for free.
 - An occluded or minimized window stops pulling, so the daemon stops emitting: idle-zero-redraw holds across the IPC
   boundary.
 
@@ -451,7 +430,7 @@ Principle 1 rejects any runtime evaluator inside the felis process ([principles.
 the terminal did something belongs in a separate process. That is a control-plane boundary. A post-process shader sits
 outside it: it is a pure function from typed uniforms and the rendered frame to pixels. It cannot emit actions, cannot
 observe anything beyond its uniform block, and has no I/O. The only in-process work performed on user input is naga
-validation, the same bounded pass felis's own shader goes through (`felis-render-wgpu`'s shader-validation test).
+validation, the same bounded pass felis's own shader goes through.
 
 The user's code executes on the GPU, where non-termination is contained by the driver's watchdog reset (e.g. Windows
 TDR, <https://learn.microsoft.com/en-us/windows-hardware/drivers/display/timeout-detection-and-recovery>): WGSL has no
@@ -481,9 +460,8 @@ the top-left.
 
 The frame-pacing invariant above (idle: zero redraws) is this design's binding constraint, and the two prior arts sit on
 either side of it. kitty animates custom shaders through a dedicated event machinery (`animation_start` /
-`animation_stop` directives with easing curves; kitty `docs/custom-shaders.rst`). ghostty instead runs a continuous draw
-timer whenever a custom shader is loaded and the window is focused (`custom-shader-animation` in ghostty's
-`src/config/Config.zig`; the timer in `src/renderer/Thread.zig`), because the host cannot tell when a Shadertoy-style
+`animation_stop` directives with easing curves). ghostty instead runs a continuous draw timer whenever a custom shader
+is loaded and the window is focused (`custom-shader-animation`), because the host cannot tell when a Shadertoy-style
 shader has visually finished: the shader is a pure function of elapsed time, and only it knows its own duration.
 
 felis closes that gap by keeping the animation state on the CPU, where the host can see the motion end. The trail's
@@ -537,15 +515,14 @@ run". The rest of a chain still runs, since each stage reads only what the stage
 inside a device validation scope, so a shader the device refuses (a feature it did not enable, a fragment interface that
 does not match the fixed vertex stage) drops its stage like one naga refuses, and the window keeps painting either way;
 the failure rows are in [shaders.md](../../reference/shaders.md) "Failure handling". ghostty's failure mode is the
-counterexample: an invalid shader can black the window and the error reaches only the log (ghostty
-`src/config/Config.zig`, the `custom-shader` doc comment).
+counterexample: an invalid shader can black the window and the error reaches only the log.
 
 ### Rejected alternatives
 
-- **In-process runtime compilation of a source language.** kitty bundles `slangc` and compiles Slang at startup
-  (`kitty/shaders/slang.py`); ghostty bundles glslang plus spirv-cross and compiles Shadertoy GLSL on load
-  (`src/renderer/shadertoy.zig`). Either shape brings a compiler toolchain into the felis process for a job the user can
-  run offline; accepting WGSL directly needs no dependency wgpu does not already carry (naga).
+- **In-process runtime compilation of a source language.** kitty bundles `slangc` and compiles Slang at startup; ghostty
+  bundles glslang plus spirv-cross and compiles Shadertoy GLSL on load. Either shape brings a compiler toolchain into
+  the felis process for a job the user can run offline; accepting WGSL directly needs no dependency wgpu does not
+  already carry (naga).
 - **A closed enum of built-in effects, no user shaders.** A smaller surface (no user file, no contract), but it reopens
   this decision for every new effect and delivers none of the customization that motivated the feature. With a contract,
   the decision is made once and effects become data.
@@ -578,9 +555,9 @@ _Revisit if_ a real consumer needs the vertex stage.
   On the client, anything that changes sets one sticky redraw request, and the next frame rebuilds the rows the shadow
   marked ([damage-tracking.md](damage-tracking.md)). felis does not skip frames for energy reasons (a screen with a
   blinking cursor still ticks).
-- **A background quad per run, not per cell.** A cell on the default background draws no quad, and a row's run of one
-  background color draws one. A software adapter (llvmpipe, WARP) pays per quad more than per pixel, and a quad per cell
-  made the background tier most of its frame.
+- **A background quad per run, not per cell.** A cell on the default background draws no quad, since the clear already
+  holds it, and a row's run of one background color draws one, because a software adapter (llvmpipe, WARP) pays per quad
+  more than per pixel.
 
 ## Prior art and alternatives considered
 
@@ -640,17 +617,13 @@ change, and on a shelf that fills mid-frame) rather than leaving the new glyph p
 
 A full sheet bounds the slot map only as tightly as the glyphs are large. The output picks the slot keys (every
 character in every OSC 66 sizing and style is a separate one), and a producer walking fractional sizings rasterizes each
-character to a pixel or two, millions of which fit one sheet. So the sheets also count as full once 65 536 placed slots
-exist, and recycle the same way. The cap is twice the one-cell slots of an 8×16 cell that a 2048² sheet holds, so text
-at a readable size fills the sheet before it reaches the count, and the map's table stays under 8 MiB, spare hash
-capacity included. A per-entry eviction is not an option: the shelf packer frees no single slot, so dropping an entry
-would leave its pixels allocated.
+character to a pixel or two, millions of which fit one sheet. So the sheets also count as full past a slot count, set
+high enough that text at a readable size fills the sheet first, and recycle the same way. A per-entry eviction is not an
+option: the shelf packer frees no single slot, so dropping an entry would leave its pixels allocated.
 
-The slot map also remembers which glyphs rasterize blank, so a screen of spaces does not rasterize again every frame.
-Those entries need a bound of their own: a blank takes no sheet space, so no recycle clears them, and the output picks
-the key (each OSC 66 sizing and style of a space is a separate one). Past 4096 blank entries the map drops all of them
-at once and keeps the placed slots. Dropping one cannot change a frame, since a missing slot and a blank one both draw
-nothing; the next walk that meets the key resolves it again.
+The slot map also remembers which glyphs rasterize blank, so a screen of spaces does not rasterize again every frame. A
+blank takes no sheet space, so no recycle clears those entries; past a count of its own the map drops all of them at
+once. Dropping one cannot change a frame, since a missing slot and a blank one both draw nothing.
 
 A mid-frame reset invalidates the slots the frame's populate walk has already handed out, so the walk runs a second time
 before instances are built. Without it those cells paint blank and stay blank: the client repaints only when something
@@ -681,9 +654,9 @@ bytes and reships them on rehydration.
 
 An image is uploaded only once one of its draws shows: a draw wholly under a later draw of an opaque (`f=24`) image does
 not. mpv's `--vo=kitty` places each video frame as a new image over the last, so uploading every image that arrived
-since the previous redraw sends frames nobody sees, and a redraw slowed by them lets more pile up for the next; at a
-2500 × 1400 frame that spiral held the window to a few redraws a second. A hidden image stays pending until a draw of it
-is uncovered. An `f=32` image never hides another, since proving it opaque would mean scanning its alpha.
+since the previous redraw sends frames nobody sees, and a redraw slowed by them lets more pile up for the next, a spiral
+that held a large video to a few redraws a second. A hidden image stays pending until a draw of it is uncovered. An
+`f=32` image never hides another, since proving it opaque would mean scanning its alpha.
 
 There is no per-image eviction. A sheet that fills is recycled whole, and every shown image a live placement references
 is re-uploaded before the same frame is built; the client already holds every live image's pixels in its image shadow,

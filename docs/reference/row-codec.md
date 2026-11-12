@@ -9,27 +9,22 @@ as opaque `bytes`; this specification defines its internal binary representation
 is in `crates/felis-grid/src/wire.rs`. Architectural rationale for a custom per-row codec is documented in
 [ipc.md](../explanation/architecture/ipc.md).
 
-This page governs the packed bytes alone. A consumer that reads a row as JSON reads the JSON protocol, whose row DTO
-(`felis-grid::row_json`) spells out the decoded row and is versioned with the rest of that protocol
-([json-protocol.md](json-protocol.md)); nothing outside the socket carries these bytes.
+This page governs the packed bytes alone. A consumer that reads a row as JSON reads the JSON protocol, whose row object
+is versioned with the rest of that protocol ([json-protocol.md](json-protocol.md)); nothing outside the socket carries
+these bytes.
 
 ## Conventions
 
-- **Endianness.** Every multi-byte integer is little-endian. This matches the frame header and differs from the version
-  preface, which is big-endian because it is a magic-prefixed network preface.
-- **Widths are fixed** except where this page says varint. A count or index that describes a grid dimension is `u16`,
-  because grid dimensions are `u16`, and the cap sits under the field width at the admitted geometry ("Limits" below).
-  Fixed widths also let an encoder reserve a count and back-patch it after one pass over the columns, which is why the
-  attribute-run count is not a varint.
+- **Endianness.** Every multi-byte integer is little-endian, like the frame header and unlike the big-endian version
+  preface.
+- **Widths are fixed** except where this page says varint. A count or index that describes a grid dimension is `u16`.
 - **Varints** are unsigned LEB128: seven payload bits per byte, little-endian groups, high bit set on every byte but the
-  last. Only the cluster handle uses one, where the values are small in practice and a fixed `u32` would cost three
-  wasted bytes on exactly the rows that carry many of them. A varint is in **shortest form**: a value has one spelling,
-  and a decoder rejects any other.
+  last. Only the cluster handle uses one. A varint is in **shortest form**: a value has one spelling, and a decoder
+  rejects any other.
 - **Text.** The payload carries no length-prefixed string. Cluster text and hyperlink URIs live in their own registry
   messages, bounded by `OSC_BUFFER_LIMIT` there; the only text-domain value here is a single Unicode scalar, encoded as
   UTF-8 and validated as such.
-- **Reserved bits and undefined tags are errors**, never ignored: a decoder that masked them off would round-trip to a
-  different row than the sender encoded.
+- **Reserved bits and undefined tags are errors**, never ignored.
 
 ## Layout
 
@@ -45,9 +40,6 @@ A payload is exactly the following, in order, with nothing before or after it.
 | attribute runs   | `run_count` × 10–19 bytes | [Attribute runs](#attribute-runs), in column order.                                           |
 | `sized_count`    | `u16`                     | Number of OSC 66 side-band entries that follow.                                               |
 | sized cells      | `sized_count` × 8 bytes   | [Sized cells](#sized-cells).                                                                  |
-
-The soft-wrap bit rides the row codec rather than the `RowDelta` message so that every row-carrying path (delta, batch,
-rehydrate, composed viewport) ships it without the protobuf schema learning about it.
 
 ### Grapheme records
 
@@ -65,23 +57,18 @@ One record per column: a `u8` tag, then the payload the tag names.
 Tags `6` and above are errors.
 
 The UTF-8 payload's length comes from its lead byte, and the sequence is then validated as UTF-8: an overlong form, a
-surrogate, or a value past `U+10FFFF` is an error. Without that rule a naive reassembler would accept two byte strings
-for one cell.
+surrogate, or a value past `U+10FFFF` is an error.
 
-The codec does not police which variant a producer chose for a given character; it validates each variant's payload. A
-decoder therefore reproduces the sender's variant exactly, which is what makes the encoding round-trip byte-for-byte.
+The codec does not police which variant a producer chose for a given character; it validates each variant's payload, and
+a decoder reproduces the sender's variant exactly.
 
-Tag `1` is the one payload narrowed below its byte range, to the printable subset. It is not a general byte channel but
-the compact spelling of the character an ASCII column holds, and a decoder that accepted `ESC` there would produce a
-cell whose text (through a selection copy or an ANSI re-encode) is a live control sequence in whatever consumes it. Tag
-`2` carries no such restriction: a Unicode scalar is any scalar, control scalars included, because a cell can
-legitimately hold one.
+Tag `1` is the one payload narrowed below its byte range, to the printable subset. Tag `2` carries any Unicode scalar,
+control scalars included.
 
 ### Attribute runs
 
-Cells carry their pen as a grid-local interned handle, which does not survive the hop, so each run carries the
-**resolved** attribute values, and the receiver interns them into its own registry. Runs are in column order and cover
-the columns consecutively.
+Each run carries the **resolved** attribute values, which the receiver interns into its own registry. Runs are in column
+order and cover the columns consecutively.
 
 | Field             | Encoding | Notes                                                                               |
 | ----------------- | -------- | ----------------------------------------------------------------------------------- |
@@ -103,8 +90,7 @@ A run is therefore 10 bytes when all three colors are `Default`, and 19 when all
 
 ### Sized cells
 
-The sparse OSC 66 side-band: entries for the columns whose text sizing is not the default. Sizing rides here rather than
-the cell stream because it is rare and per-run rather than per-cell.
+The sparse OSC 66 side-band: entries for the columns whose text sizing is not the default.
 
 | Field        | Encoding | Notes                                                      |
 | ------------ | -------- | ---------------------------------------------------------- |
@@ -117,8 +103,7 @@ the cell stream because it is rare and per-run rather than per-cell.
 | `halign`     | `u8`     | `0` left, `1` right, `2` center.                           |
 
 The parameters pass the same range check as an [kitty-text-sizing.md](protocols/kitty-text-sizing.md) parse, including
-the fractional rule `d == 0 || n < d`; a combination outside them is an error, so nothing downstream re-validates a
-sizing that came off the wire.
+the fractional rule `d == 0 || n < d`; a combination outside them is an error.
 
 ## Limits
 
@@ -128,37 +113,33 @@ sizing that came off the wire.
 | Attribute runs     | 2048  | `run_count`   |
 | Sized-cell entries | 2048  | `sized_count` |
 
-Each cap is `MAX_GRID_COLS` ([ipc.md](ipc.md) "Semantic limits"), the widest row the admitted geometry holds: a run
-covers at least one column, so there can be no more runs than columns, and the same bound covers the side-band. A count
-above it is an error before the decoder reserves for it, since no grid could have produced the row.
+Each cap is `MAX_GRID_COLS` ([ipc.md](ipc.md) "Semantic limits"). A count above it is an error before the decoder
+reserves for it.
 
-The cap alone does not bound memory (2048 is still a claim a three-byte payload can make), so the allocation bound is a
-second, tighter rule, checked **before** any reservation the count would drive:
+The allocation bound is a second, tighter rule, checked **before** any reservation the count would drive:
 
 - before reading the graphemes, the payload must hold at least `cols` more bytes (a grapheme record is at least its tag
   byte);
 - before reading the runs, at least `run_count × 10` more bytes;
 - before reading the side-band, at least `sized_count × 8` more bytes.
 
-A payload that fails one of these is truncated, and the decoder says so without having reserved anything. The effect is
-that a decoder's working memory is bounded by the length of the bytes it was handed, never by a number inside them.
+A payload that fails one of these is truncated, and the decoder says so without having reserved anything, so its working
+memory is bounded by the length of the bytes it was handed, never by a number inside them.
 
 ## Decoding rules
 
 A decode either yields exactly one row or fails; there is no partial success and no skipping.
 
-- **Exact consumption.** Bytes left over after the side-band are an error. Slack would mean the payload and the decoder
-  disagree about the layout, which is precisely what a silent tail hides.
+- **Exact consumption.** Bytes left over after the side-band are an error.
 - **Side-band columns.** Every sized-cell entry names a column of the row it rides, so a `col` at or past `cols` is an
   error rather than an entry the writer ignores.
 - **Coverage.** The run lengths must sum to exactly `cols`. A run that would reach past the last column fails at that
-  run; runs that end short of it fail after the last one. Neither is clamped: a desync must not shift every later
-  column.
+  run; runs that end short of it fail after the last one. Neither is clamped.
 - **Order of checks.** Version, then flags, then each field in layout order, with the limit check for a count
   immediately before the reads it governs.
 - **Errors name the field.** Every rejection carries what was expected and what was found: the version, the field that
   ran out of bytes and by how much, the count and the cap it broke, the tag that named nothing. A corrupt row closes the
-  connection, so the error is the only account of why.
+  connection.
 
 ## Canonical form
 
@@ -175,11 +156,9 @@ identical adjacent ones is valid and decodes to the same row; it is merely large
 The leading `version` byte identifies the codec version. A version a decoder does not implement is an error, not
 something to skip past.
 
-The tag identifies; it never authorizes. A new codec version is an addition like any other and is gated on the
-connection's effective minor ([ipc.md](ipc.md) § "Versioning"): a peer may only send a version the effective minor
-defines, which `felis-protocol`'s `ROW_CODEC_SINCE` states version by version for the send gate to read. Between honest
-peers an unknown version therefore cannot occur, which is why receiving one is treated as corruption rather than as a
-newer peer to accommodate.
+A new codec version is gated on the connection's effective minor ([ipc.md](ipc.md) § "Versioning"): a peer may only send
+a version the effective minor defines (`felis-protocol`'s `ROW_CODEC_SINCE` states which), so receiving an unknown
+version is corruption, not a newer peer to accommodate.
 
 ## Golden vectors
 
@@ -200,8 +179,7 @@ Zero columns: the header and three zero counts.
 
 ### An ASCII row
 
-`hi` in the default pen, no link, no sizing, the shape a line of `cat` output is made of. There is a single run: the pen
-is written once for the row, not once per column.
+`hi` in the default pen, no link, no sizing: a single run.
 
 ```
 01                    version = 1
@@ -256,9 +234,7 @@ The two runs do not coalesce because their link slots differ.
 
 ## Rejected vectors
 
-Every decoder must reject each of these. They are derived from the vectors above by the stated edit. Every row is pinned
-by a unit test in `felis-grid`'s `wire` module, and seeds for the boundary classes ship in `fuzz/seeds/row_codec/` to
-start the fuzzer near them.
+Every decoder must reject each of these. They are derived from the vectors above by the stated edit.
 
 | Edit                                                    | Rejected as                          |
 | ------------------------------------------------------- | ------------------------------------ |

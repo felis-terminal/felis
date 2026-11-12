@@ -131,9 +131,10 @@ ghostty bare at 82×160 has not been measured, so the user-observed ~100 fps def
 The unified viewport-into-history ring is in: the live viewport is a window _into_ the history ring, so an evicted row
 is never copied; decision record in `docs/explanation/data-model/scrollback.md` "Unified viewport-into-history ring". It
 removed the `Scrollback::push_prefix` copy that was the entire primary-vs-alt gap (~9 ns/line: half cold destination
-miss in the 38 MiB ring, half call/copy). Interior regions rotate as a band (see the same doc, "Interior scroll band"),
-which records the two codegen traps (in-band wrap must stay `%`, not a conditional subtract, −8%; the materialize guard
-must be an `#[inline]` shim over a `#[cold]` body, −9%).
+miss in the 38 MiB ring, half call/copy). Interior regions rotate as a band (see the same doc, "Interior scroll band");
+the comments on `phys_row_at` and `materialize_band` in `crates/felis-grid/src/screen.rs` record the two codegen traps
+(in-band wrap must stay `%`, not a conditional subtract, −8%; the materialize guard must be an `#[inline]` shim over a
+`#[cold]` body, −9%).
 
 Post-ring numbers, 137×35: sparse scroll floor ~140 MiB/s, ascii CRLF floor ~360, e2e sparse drain ~103 (+41%, wire
 frames −30%), real window ~98 MB/s; region-scroll floor ~153 MiB/s, parity with full-screen.

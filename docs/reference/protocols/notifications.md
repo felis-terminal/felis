@@ -7,10 +7,9 @@ sidebar:
 Wire formats, conformance scopes, and the JSONL relay contract of the desktop notification protocols (OSC 9, OSC 99, OSC
 777).
 
-felis adopts a **decode-and-relay** architecture: it decodes OSC 9, OSC 99, and OSC 777 into typed notification events
-and exposes them on its extension surface, but it never renders popups directly or links OS notification backends.
-Architectural design rationale is documented in [notifications.md](../../explanation/protocols/notifications.md).
-Feature support is tracked in the protocol [support matrix](support-matrix.md#osc).
+felis decodes OSC 9, OSC 99, and OSC 777 into typed notification events and relays them on IPC; it draws no popup and
+links no OS notification backend. The rationale is in [notifications.md](../../explanation/protocols/notifications.md);
+the verdict rows are in the [support matrix](support-matrix.md#osc).
 
 Upstream protocol references:
 
@@ -94,15 +93,11 @@ Statuses are the [support matrix](support-matrix.md) legend's; `—` marks a sur
 | Action buttons                          | —            | —       | 🚫 rejected by design        |
 | Icons / sound / auto-expire             | —            | —       | ⚠️ accepted and ignored      |
 
-Design rationale for deferred and rejected features is detailed in
-[notifications.md](../../explanation/protocols/notifications.md).
-
 ## Surfacing: `felis notifications subscribe`
 
 Decoded notifications reach two surfaces:
 
-1. **Window attention**: Sessions with attached GUI clients trigger taskbar/dock urgency hints via
-   `Window::request_user_attention` (matching BEL semantics).
+1. **Window attention**: Sessions with attached GUI clients raise the taskbar/dock urgency hint, as BEL does.
 2. **Subscription stream**: `felis notifications subscribe` connects an observer to the daemon and streams notifications
    from all sessions.
 
@@ -130,9 +125,6 @@ Stream lifecycle events carry an `event` field:
 | `{"v":1,"event":"lag","dropped":N}`                          | Slow reader dropped N events from daemon ring buffer    |
 | `{"v":1,"event":"end","count":N}`                            | Clean stream termination reporting total events emitted |
 | `{"v":1,"event":"error","error":{"kind":"…","message":"…"}}` | Stream error termination                                |
-
-The stream operates over a bounded buffer ring; lagging consumers receive explicit `lag` events rather than silently
-missed items.
 
 Filter and lifecycle flags (`--session`, `--once`, `--timeout`) and exit codes are specified in [cli.md](../cli.md) §
 "Other verbs".

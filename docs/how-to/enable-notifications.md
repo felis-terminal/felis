@@ -96,8 +96,7 @@ Manager module:
 programs.felis.notifications.enable = true;
 ```
 
-Available options include `notifier`, `onlyDetached`, and `host` (for subscribing to a remote daemon). The module design
-is documented in [notifications.md](../explanation/protocols/notifications.md).
+Available options include `notifier`, `onlyDetached`, and `host` (for subscribing to a remote daemon).
 
 ## Remote jobs, local desktop
 

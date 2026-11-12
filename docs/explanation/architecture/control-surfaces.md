@@ -294,8 +294,8 @@ in [cli.md](../../reference/cli.md) "Auto-spawning".
 
 A retarget is the one form that dials twice, and the two halves take different sides of this split: the source dial
 drives a daemon that is already holding the window, while the landing on the target host is a window asking for a daemon
-to hold it. So the landing spawns over SSH, and on a cold local socket it fails instead, because `Reconnector::land`
-opens that socket directly rather than through `connect_or_spawn_daemon`.
+to hold it. So the landing spawns over SSH, and on a cold local socket it fails instead, because it opens that socket
+directly rather than through the spawn-then-retry policy.
 
 #### A diagnostic names what it found and changes nothing
 
@@ -335,10 +335,9 @@ roster is bounded and answered in one frame, so it is a point result with the wh
 Framing the roster as a stream is the rejected alternative. It obliges every consumer to accumulate lines and watch for
 a terminal to learn a thing the daemon already knows in full.
 
-Arrivals and departures are a stream verb of their own, `sessions events`, and its items are hints to list again rather
-than a mirror of the roster. A mirror, a snapshot followed by deltas, is the rejected alternative: it needs the snapshot
-and the first delta taken atomically against the pool, which the pool lock does not give, while subscribing before
-listing needs only that each change is published after it lands.
+A mirror of the roster on `sessions events`, a snapshot followed by deltas, is rejected as well: it needs the snapshot
+and the first delta taken atomically against the pool, which the pool lock does not give, while hints to list again need
+only that each change is published after it lands.
 
 #### A proposed verb names its class before it is built
 
@@ -503,7 +502,7 @@ making, so the verb keeps its documented always-present `short_id` without an `O
 only party that can shorten correctly, since it is the only one holding the authoritative roster.
 
 Human output still shows a prefix, because a display is where brevity is wanted and no script parses it. The computation
-itself lives beside the resolver in `felis-protocol` (`session_prefix`), so display and resolution cannot drift apart.
+itself lives beside the resolver in `felis-protocol`, so display and resolution cannot drift apart.
 
 #### Scrollback-aware row indices are negative-from-top
 
@@ -736,11 +735,10 @@ write-path label.
 
 #### The tag set is bounded
 
-The label set is **bounded** (32 tags per session, 128 bytes per tag; the caps live in `felis-protocol` next to the
-messages): tags are marginalia, and anything past those caps is content wearing a label's name: an unbounded store would
-let one same-UID script inflate every roster read (each `list` clones and re-encodes the set) toward the 64-MiB frame
-limit. A delta that would breach a cap is refused whole with a typed reason (`TagsUpdated.denied`), never partially
-applied, so the reply's `tags` snapshot stays honest.
+The label set is **bounded** (32 tags per session, 128 bytes per tag): tags are marginalia, and anything past those caps
+is content wearing a label's name: an unbounded store would let one same-UID script inflate every roster read (each
+`list` clones and re-encodes the set) toward the 64-MiB frame limit. A delta that would breach a cap is refused whole
+with a typed reason (`TagsUpdated.denied`), never partially applied, so the reply's `tags` snapshot stays honest.
 
 Classifying tags as an unbounded trusted-user store is the rejected alternative: same-UID trust already gates the
 socket, but "trusted" is an argument about _who_, not about what the roster surface can absorb per read.
@@ -817,8 +815,8 @@ roster's pixel fields report as unknown.
 
 Unlike a keystroke, a mouse event has a state in which the program discards it: with no mouse reporting on, the encoder
 writes nothing, and a caller that clicked a button would read success while nothing happened. So the CLI checks each
-event against the `ModeFlags` mouse protocol and the grid before it writes, and refuses the whole command. This narrows
-the stale-mode window without closing it: a mode change after the check still drops an event behind a successful fence.
+event against the session's mouse mode and the grid before it writes, and refuses the whole command. This narrows the
+stale-mode window without closing it: a mode change after the check still drops an event behind a successful fence.
 Closing it would need a per-event outcome on the fence, a wire change no consumer has needed, and programs set their
 mouse modes once at start-up.
 

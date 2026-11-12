@@ -44,11 +44,9 @@ the generated `.zshrc`'s default-order setup, where home-manager's prompt-theme 
 a later `lib.mkOrder` can drop the marks, so load it earlier.
 
 The script adds its marks to `PS1` before every prompt, so a theme that rebuilds `PS1` each time keeps them as long as
-the theme's hook runs first, which loading the theme earlier in `~/.zshrc` arranges. On zsh 5.10 it switches off zsh's
-own marks and directory reports and sends its own, since those carry no exit code and garble non-ASCII paths. The
-sequences are the subset other terminals read too, so the same `~/.zshrc` works outside felis. A terminal that injects
-its own zsh integration, such as kitty or Ghostty, then receives each command mark twice, which marks the same place
-twice and changes nothing.
+the theme's hook runs first, which loading the theme earlier in `~/.zshrc` arranges. On zsh 5.10 it replaces zsh's own
+marks and directory reports. The sequences are the subset other terminals read too, so the same `~/.zshrc` works outside
+felis.
 
 ## Verify
 

@@ -19,8 +19,7 @@ felis sessions list --format json \
   | xargs -rn1 felis sessions kill
 ```
 
-Attached sessions carry no `idle_seconds`. `jq` sorts `null` below every number, so `> 3600` alone already skips them;
-the `!= null` test states that exclusion outright rather than leaving it to the sort order.
+Attached sessions carry no `idle_seconds`, so the filter skips them.
 
 To end every session that carries one tag, see
 [Label sessions with tags](label-sessions-with-tags.md#end-every-session-with-a-tag).

@@ -48,8 +48,7 @@ placement matrix in [cli.md](cli.md) "Global options".
 ## Naming conventions
 
 The map covers operations that reach the daemon or a CLI verb. Keymap kinds the client answers by itself (`copy`,
-`paste`, `reload`, `font_size`, `toggle_fullscreen`, `unbind`) have no row, since neither of the other two columns can
-hold one.
+`paste`, `reload`, `font_size`, `toggle_fullscreen`, `unbind`) have no row.
 
 CLI flags and enum values use `kebab-case`. Keymap tokens use `snake_case` (for example, keymap `command_output` maps to
 CLI `--source command-output`). Meaning is preserved across surfaces; see

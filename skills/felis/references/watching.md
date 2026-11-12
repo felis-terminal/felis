@@ -74,22 +74,24 @@ A full-screen TUI agent (Claude Code etc.) emits no OSC 133 marks, so `send --wa
 `--session --once` is its completion signal only when it is configured to emit OSC 9/99/777. A plain build emits no OSC
 9, so `send --wait` is the tool there.
 
-`sessions events` streams what happens to sessions instead of a poll: `added`, `exited` (with `exit_code` or `signal`)
-and `removed`, every `program_status` change, `prompt_shown` and `command_finished` from OSC 133, and `changed` naming
-the row `fields` to re-read. `--kind` is required and names what to stream (`lifecycle`, `program_status`, `prompt`,
-`meta`, `notification`); omitting it is exit `2`. Items are hints, not a mirror: subscribe first, then `sessions list`,
-and list again after a `lag` event.
+`sessions events` streams what happens to sessions instead of a poll. `--kind` is required; the kinds and their items
+are in `felis sessions events --help` and
+[cli.md "Verb details"](https://github.com/felis-terminal/felis/blob/main/docs/reference/cli.md#verb-details). Items are
+hints, not a mirror: start the stream, then `sessions list`, and list again after a `lag` event.
+
+A producer that reports OSC 7501 status is the cheapest to wait on: poll until it holds a status and none of it is
+`working`. The loop also ends on `blocked`, which means the producer waits on input, so read the states before acting:
 
 ```sh
-felis sessions events --session "$ID" --kind program_status,lifecycle --format jsonl |
-  jq -c 'select(.type == "removed" or (.type == "program_status" and (.records | length > 0)
-         and all(.records[]; .state != "working")))' | head -n1
+deadline=$((SECONDS + 600))
+while :; do
+  status=$(felis sessions info "$ID" --format json) || { rc=2; break; }   # session gone, daemon lost
+  echo "$status" | jq -e '.program_status | length > 0 and all(.[]; .state != "working")' >/dev/null && { rc=0; break; }
+  [ "$SECONDS" -ge "$deadline" ] && { rc=1; break; }
+  sleep 2
+done
+echo "$status" | jq '.program_status'
 ```
-
-A producer that reports OSC 7501 status is the cheapest to wait on: the pipeline above ends on the first set with no
-`working` record, or on the session's removal. It also ends on `blocked`, which means the producer waits on input, so
-read the states before acting. Against a daemon too old for `sessions events` (exit `2`, `unsupported`), poll
-`sessions info` for `program_status` instead.
 
 When a producer emits none of these, poll the visible grid against a deadline: `search --source visible` exits `0` on a
 match and `1` on none. Retry only on `1`; a `2` (a daemon too old for `--source visible`, a lost connection) does not

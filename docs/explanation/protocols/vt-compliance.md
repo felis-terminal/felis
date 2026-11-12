@@ -44,7 +44,7 @@ If a sequence is not used by any tool in this list, it is a candidate for remova
   refused, as is its `rgbi:` intensity form. Every colorimetric space needs its own matrix and gamma transform, and
   kitty implements none of the colorimetric forms either, so programs running under Kitty already carry the fallback.
   `rgbi:` is a normalized RGB triple and would cost only a scale, but felis refuses it for the same reason: the
-  producers felis targets emit `#hex` or `rgb:`. esctest exercises these forms (21 cases, recorded as rejected in the
+  producers felis targets emit `#hex` or `rgb:`. esctest exercises these forms (recorded as rejected in the
   [esctest compatibility reference](../../reference/esctest-compatibility.md)), but that is xterm's coverage of an xterm
   extension, not producer demand.
 - **DECARM** (auto-repeat): permanently reset in DECRQM; auto-repeat lives in the OS, not the terminal.

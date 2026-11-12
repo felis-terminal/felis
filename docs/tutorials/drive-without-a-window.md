@@ -8,9 +8,6 @@ In [Your first session](first-session.md) you saw that a session outlives its wi
 of the same idea: a session does not need a window _at all_. The felis daemon can hold a running shell that you create,
 drive, and read entirely from the command line; the window is just one optional way to look at it.
 
-By the end you will have built and steered a session without ever opening a window, then opened one at the very end to
-see the result waiting for you.
-
 Follow the steps in order. You need one terminal you already have open; we will call it your **launching terminal**.
 Everything here runs there.
 
@@ -24,7 +21,7 @@ echo "$ID"
 ```
 
 `spawn` starts the session in the daemon and prints its id; no window opens. If no daemon was running yet, `spawn`
-starts one for you. The `echo` just shows you the id you captured.
+starts one for you.
 
 ## Step 2: Confirm it exists
 
@@ -32,8 +29,7 @@ starts one for you. The `echo` just shows you the id you captured.
 felis sessions list
 ```
 
-Your new session appears in the roster, even though nothing is on screen. It is a real shell, running, waiting for
-input, just headless.
+Your new session appears in the roster, even though nothing is on screen: a shell, running and waiting for input.
 
 ## Step 3: Send it some work
 
@@ -81,9 +77,9 @@ Only now, attach a window to the session you built:
 felis attach "$ID"
 ```
 
-A window opens onto the same `/bin/sh`, with your `finished` line still on screen. The window did not create anything:
-it gave you a view of a session that was already there. Close the window when you are done looking; the session keeps
-running. Typing `exit` ends the `/bin/sh` you spawned, and with it the session: that is the one action that does.
+A window opens onto the same `/bin/sh`, with your `finished` line still on screen. Close the window when you are done
+looking; the session keeps running. Typing `exit` ends the `/bin/sh` you spawned, and with it the session: that is the
+one action that does.
 
 ## Step 6: Clean up
 

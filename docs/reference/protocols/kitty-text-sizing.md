@@ -5,12 +5,8 @@ sidebar:
 ---
 
 felis's implementation of the Kitty text sizing protocol (OSC 66): wire syntax, metadata keys, scaling parameters, and
-limits.
-
-Architectural design rationale (daemon vs client partitioning, cell storage, registry reclamation, and reflow) is
-documented in the companion explanation document
-[kitty-text-sizing.md](../../explanation/protocols/kitty-text-sizing.md). The upstream Kitty specification is published
-at <https://sw.kovidgoyal.net/kitty/text-sizing-protocol/>.
+limits. The rationale is in [kitty-text-sizing.md](../../explanation/protocols/kitty-text-sizing.md); the upstream
+specification is <https://sw.kovidgoyal.net/kitty/text-sizing-protocol/>.
 
 ## Wire format
 
@@ -33,8 +29,8 @@ REQ-408 in [spec.md](../spec.md)):
 
 Each character of a run occupies `(w · s) × s` cells (`w = 0` derives from its grapheme width). Rendered glyph size is
 `s × n/d` of base font size when fractional scaling is active (`d > 0`), otherwise `s`. Because the parser enforces
-`d > n`, fractional factors are strictly less than 1 and only scale downward (e.g. `n=1:d=2` yields 0.5×; see
-[kitty-text-sizing.md](../../explanation/protocols/kitty-text-sizing.md)). `text` is the run to render.
+`d > n`, fractional factors are strictly less than 1 and only scale downward (e.g. `n=1:d=2` yields 0.5×). `text` is the
+run to render.
 
 Each `OSC 66` defines a self-contained run; no persistent sizing mode is maintained for subsequent writes. The legacy
 `CSI Pn:...:Pn t` sequence is not supported ([support-matrix.md](support-matrix.md#kitty-text-sizing-osc-66)). Size

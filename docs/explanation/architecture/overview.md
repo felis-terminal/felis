@@ -100,13 +100,10 @@ came out of the PTY. It does not interpret them as "the user's red" or "backgrou
 protocol-level color to actual pixels.
 
 A config change on the client (theme reload, palette swap) does not invalidate any grid state in the daemon. The one
-deliberate exception to "the daemon does not know": the client reports its _resolved_ default fg/bg/cursor and its
-configured palette slots on attach (`SessionToDaemonMsg::ConfigureTheme`) and its OS light/dark preference
-(`InputMsg::ColorScheme`), because the daemon owns the query surface: a program's `OSC 4 ; n ; ?`, `OSC 10/11/12 ; ?` or
-`DSR ? 996 n` must answer with the colors the window paints, and the program talks to the daemon, not the client. The
-daemon stores the reports opaquely (it still never interprets a color) and **per window**, then resolves the one answer
-a query gets along a fixed candidate chain. Which mirror's colors a program sees is therefore a property of the chain,
-not of whose attach frame landed last, and a parked session keeps answering what the chain last resolved
+deliberate exception to "the daemon does not know": the client reports its _resolved_ default colors, its configured
+palette and its OS light/dark preference on attach, because the daemon owns the query surface: a program's
+`OSC 10/11/12 ; ?` must answer with the colors the window paints, and the program talks to the daemon, not the client.
+The daemon stores the reports opaquely, never interpreting a color, and resolves which window's report answers
 ([session-lifecycle.md](session-lifecycle.md) "Client-derived presentation state").
 
 #### The daemon is font-blind
@@ -249,12 +246,11 @@ new outcome in every stream verb, to cover a case the update procedure already t
 Windows has no exec to survive, so there the upgrade does cross a process boundary: the successor is a new process with
 a new PID, and the sessions are handed to it. A ConPTY pseudoconsole lives for as long as some process holds its signal
 pipe, and the embedded host ("ConPTY host" in [implementation.md](../implementation.md)) rebuilds a pseudoconsole from
-its handles in another process (`ConptyPackPseudoConsole`). The barrier, the quiesce, and the dump run as above. The
-predecessor then starts the successor, duplicates into it each session's console handles, the two pipe ends it reads and
-writes, and the child's process handle, and sends it the dump over a private pipe. Nothing is inherited, so no other
-child can come to hold a handle the upgrade carries. The successor adopts everything without starting any of it (no
-read, no write, no resize), joins the daemon's pipe name, and reports ready; only after the predecessor's commit and its
-exit does it start the sessions and accept.
+its handles in another process. The barrier, the quiesce, and the dump run as above. The predecessor then starts the
+successor, duplicates each session's handles into it, and sends it the dump over a private pipe. Nothing is inherited,
+so no other child can come to hold a handle the upgrade carries. The successor adopts everything without starting any of
+it, joins the daemon's pipe name, and reports ready; only after the predecessor's commit and its exit does it start the
+sessions and accept.
 
 The hand-over is reversible up to that commit, which `execve` is not, so the dump probe becomes the successor's own
 adoption, and the commit is the single point that settles which side may end the other. Before it, only the predecessor
@@ -278,9 +274,9 @@ while the upgrade ran.
 
 Only the embedded host can rebuild a pseudoconsole, so a daemon on the inbox host (any daemon not at Medium integrity)
 refuses the upgrade and keeps drain-and-restart. Nothing exports a pseudoconsole's handles, so the predecessor reads
-them from the struct the pinned `conpty.dll` allocates, whose layout a test pins against what `ConptyPackPseudoConsole`
-stores. A long-lived process holding the pseudoconsoles in front of the daemon is rejected: it is a third process with
-its own lifetime and protocol, and the hand-over needs nothing to outlive the daemon but its successor.
+them from the struct the pinned `conpty.dll` allocates. A long-lived process holding the pseudoconsoles in front of the
+daemon is rejected: it is a third process with its own lifetime and protocol, and the hand-over needs nothing to outlive
+the daemon but its successor.
 
 Running each upgrade as a new daemon generation on its own endpoint, with its predecessor serving its sessions until
 they end, is rejected. It needs no dump, but it leaves exactly the long-lived sessions on the predecessor's binary for
@@ -403,14 +399,12 @@ problem on every crossing, and restarts (upgrades included) are what paces the f
 
 The crash recorder must not itself crash. Routing panics through `tracing` makes the recorder write to the same sinks
 the running daemon does, including a stderr that may be a broken pipe. Two guards keep a sink failure from turning a
-contained panic into a process abort. The subscriber runs with `log_internal_errors(false)`, so a failed write is
-dropped instead of `eprintln!`d onto the same broken stderr (whose own failure would panic), and the file sink still
-records the event first, since `Tee` writes both halves before it propagates the error.
-
-The panic hook then wraps its `tracing::error!` in `catch_unwind`: a panic raised _while_ a panic is already unwinding
-aborts unconditionally ([`std::panic`](https://doc.rust-lang.org/std/panic/index.html)), so the second panic is
-swallowed and the first still reaches `prev` and unwinds into the watchdog that cleans the session up
-([session-lifecycle.md](session-lifecycle.md) "Session-task panics").
+contained panic into a process abort. A failed log write is dropped rather than reported on the same broken stderr
+(whose own failure would panic), after the file sink has recorded the event. And the panic hook catches a panic raised
+while it logs: a panic raised _while_ a panic is already unwinding aborts unconditionally
+([`std::panic`](https://doc.rust-lang.org/std/panic/index.html)), so the second panic is swallowed and the first still
+unwinds into the watchdog that cleans the session up ([session-lifecycle.md](session-lifecycle.md) "Session-task
+panics").
 
 ## Prior art and alternatives considered
 
@@ -448,10 +442,9 @@ where they do.
 
 Each crate is a seam: a boundary that a future repository split, or a non-Rust client, must be able to reuse in
 isolation. The "MUST-NOT-depend-on" column of the crate map is the load-bearing one: it is the extraction criterion. The
-renderer is two seams: `felis-render-core` holds the backend-neutral pieces (the palette, the box-drawing rasterizer,
-the glyph index and its atlas packer, the frame-state types, and the cell painter that decides how each cell looks), and
-`felis-render-wgpu` holds the wgpu pipeline, the instance records its shaders read, and the encoder that turns the
-painter's output into them. While wgpu is the only backend, the split costs a small amount of API plumbing (items public
+renderer is two seams: `felis-render-core` holds the backend-neutral pieces, among them the cell painter that decides
+how each cell looks, and `felis-render-wgpu` holds the wgpu pipeline and the encoder that turns the painter's output
+into its instance records. While wgpu is the only backend, the split costs a small amount of API plumbing (items public
 across a boundary one consumer crosses); that is the accepted price of a CPU backend or another client reusing those
 pieces instead of re-deriving how a cell looks, where each port drifts on the rules it misses. The appearance resolver
 takes a row of cells and a style table rather than a `ScreenBuffer` because a browser client's scrollback rows exist
@@ -501,15 +494,13 @@ would remove that pass at the cost of putting each backend's record shape back i
 
 ### The felis-client-core / felis-client seam
 
-The client side is two crates, split GPU-free / GPU. `felis-client-core` (`crates/felis-client-core/src`) holds the
-portable session logic: the shadow screen, the daemon connector and retry policy, pull pacing, keymap and action
-resolution, selection, the session roster, viewport state, daemon spawn, and config. `felis-client`
-(`crates/felis-client/src`) is the winit/wgpu shell around it: the event loop and window (`event_handler`,
-`macos_window`), the OS clipboard, and the render wiring. The seam exists because the session logic is reused by
-consumers that have no window or GPU: `felis-cli`'s headless verbs, a browser view's wasm core, and a host-terminal
-client all link the core and substitute their own front end. `connect_or_spawn_daemon` sits in the core for the same
-reason: both front-door binaries share one autospawn policy without dragging the daemon backend into the client
-extraction set.
+The client side is two crates, split GPU-free / GPU. `felis-client-core` holds the portable session logic: the shadow
+screen, the daemon connector and retry policy, pull pacing, keymap and action resolution, selection, the session roster,
+viewport state, daemon spawn, and config. `felis-client` is the winit/wgpu shell around it: the event loop and window,
+the OS clipboard, and the render wiring. The seam exists because the session logic is reused by consumers that have no
+window or GPU: `felis-cli`'s headless verbs, a browser view's wasm core, and a host-terminal client all link the core
+and substitute their own front end. `connect_or_spawn_daemon` sits in the core for the same reason: both front-door
+binaries share one autospawn policy without dragging the daemon backend into the client extraction set.
 
 The same holds for the renderer state a grid message changes beyond the shadow (theme and palette overrides, reverse
 video): `renderer_effect` maps each message to a `RendererEffect` value that every frontend applies to its own renderer.
@@ -608,8 +599,7 @@ stream does not bound the one queue the embedder shares among its streams, whose
 The re-encoder sits in `felis-grid` rather than in `felis-protocol` because it reads `Cell`, `StyleTable`, and the
 cluster and hyperlink tables, the per-cell layout `felis-protocol` is deliberately opaque to. The host-specific
 decisions (256-color down-map, clip and pad to a column count, blank the Kitty Unicode-placeholder cells the caller
-covers with an image) are caller-supplied options, so the daemon still makes no presentation choice (principle 3). A
-round-trip test driving the emitted bytes back through the real parser keeps it honest in-repo.
+covers with an image) are caller-supplied options, so the daemon still makes no presentation choice (principle 3).
 
 Two alternatives are rejected:
 
