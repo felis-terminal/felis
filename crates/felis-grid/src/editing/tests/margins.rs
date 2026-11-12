@@ -33,18 +33,9 @@ fn decbi_and_decfi_scroll_only_within_decstbm_x_decslrm_rectangle() {
     }
     drive(&mut p, &mut g, b"\x1b[?69h\x1b[3;5s\x1b[4;6r\x1b[5;3H");
     drive(&mut p, &mut g, b"\x1b6");
-    let row_str = |g: &Grid, row: u16| -> String {
-        (0..g.screen.cols)
-            .map(|c| match g.cell(row, c).unwrap().grapheme {
-                Grapheme::Ascii(b) => char::from(b),
-                Grapheme::Empty => ' ',
-                _ => '?',
-            })
-            .collect()
-    };
-    assert_eq!(row_str(&g, 2), " abcde ");
-    assert_eq!(row_str(&g, 3), " f ghj ");
-    assert_eq!(row_str(&g, 6), " uvwxy ");
+    assert_eq!(logical_row(&g, 2), " abcde ");
+    assert_eq!(logical_row(&g, 3), " f ghj ");
+    assert_eq!(logical_row(&g, 6), " uvwxy ");
 }
 
 /// CHT clamps at `right_margin` under DECLRMM regardless of the start

@@ -530,10 +530,10 @@ fn assert_ring_consistent(g: &Grid) {
 
 fn surface_text(g: &Grid) -> (Vec<String>, Vec<String>) {
     let live = (0..g.screen.rows)
-        .map(|r| row_text_trim(g.row_content(r).unwrap(), &ClusterTable::default()))
+        .map(|r| row_text_trim(g.row_content(r).unwrap(), g.cluster_table()))
         .collect();
     let sb = (0..g.scrollback().len())
-        .map(|i| row_text_trim(g.scrollback().row(i).unwrap(), &ClusterTable::default()))
+        .map(|i| row_text_trim(g.scrollback().row(i).unwrap(), g.cluster_table()))
         .collect();
     (live, sb)
 }

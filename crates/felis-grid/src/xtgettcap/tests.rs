@@ -1,7 +1,7 @@
 use felis_vt::Parser;
 use proptest::prelude::*;
 
-use crate::test_support::{drive, responses};
+use crate::test_support::{drive, drive_new, reply_text, responses};
 use crate::*;
 
 /// esctest's `GetIndexedColors()` probes `Co` (hex `436f`) to pick the
@@ -11,14 +11,11 @@ fn xtgettcap_reply_covers_co_and_unknown_caps() {
     let mut g = Grid::new(4, 8);
     let mut p = Parser::new();
     drive(&mut p, &mut g, b"\x1bP+q436f\x1b\\");
-    let r = responses(&mut g);
-    assert_eq!(
-        std::str::from_utf8(&r[0]).unwrap(),
-        "\x1bP1+r436f=323536\x1b\\"
-    );
+    let r = reply_text(&mut g);
+    assert_eq!(r[0], "\x1bP1+r436f=323536\x1b\\");
     drive(&mut p, &mut g, b"\x1bP+q7878\x1b\\");
-    let r = responses(&mut g);
-    assert_eq!(std::str::from_utf8(&r[0]).unwrap(), "\x1bP0+r7878\x1b\\");
+    let r = reply_text(&mut g);
+    assert_eq!(r[0], "\x1bP0+r7878\x1b\\");
 }
 
 #[test]
@@ -26,17 +23,11 @@ fn xtgettcap_multi_cap_query_joins_replies_and_collapses_status() {
     let mut g = Grid::new(4, 8);
     let mut p = Parser::new();
     drive(&mut p, &mut g, b"\x1bP+q436f;6c69\x1b\\");
-    let r = responses(&mut g);
-    assert_eq!(
-        std::str::from_utf8(&r[0]).unwrap(),
-        "\x1bP1+r436f=323536;6c69=34\x1b\\"
-    );
+    let r = reply_text(&mut g);
+    assert_eq!(r[0], "\x1bP1+r436f=323536;6c69=34\x1b\\");
     drive(&mut p, &mut g, b"\x1bP+q436f;7878\x1b\\");
-    let r = responses(&mut g);
-    assert_eq!(
-        std::str::from_utf8(&r[0]).unwrap(),
-        "\x1bP0+r436f=323536;7878\x1b\\"
-    );
+    let r = reply_text(&mut g);
+    assert_eq!(r[0], "\x1bP0+r436f=323536;7878\x1b\\");
 }
 
 #[test]
@@ -44,17 +35,11 @@ fn xtgettcap_long_name_dimension_aliases_answer() {
     let mut g = Grid::new(4, 8);
     let mut p = Parser::new();
     drive(&mut p, &mut g, b"\x1bP+q636f6c73\x1b\\");
-    let r = responses(&mut g);
-    assert_eq!(
-        std::str::from_utf8(&r[0]).unwrap(),
-        "\x1bP1+r636f6c73=38\x1b\\"
-    );
+    let r = reply_text(&mut g);
+    assert_eq!(r[0], "\x1bP1+r636f6c73=38\x1b\\");
     drive(&mut p, &mut g, b"\x1bP+q6c696e6573\x1b\\");
-    let r = responses(&mut g);
-    assert_eq!(
-        std::str::from_utf8(&r[0]).unwrap(),
-        "\x1bP1+r6c696e6573=34\x1b\\"
-    );
+    let r = reply_text(&mut g);
+    assert_eq!(r[0], "\x1bP1+r6c696e6573=34\x1b\\");
 }
 
 proptest! {
@@ -101,18 +86,15 @@ fn xtgettcap_reply_reports_live_dimensions() {
     let mut g = Grid::new(4, 8);
     let mut p = Parser::new();
     drive(&mut p, &mut g, b"\x1bP+q636f\x1b\\");
-    let r = responses(&mut g);
-    assert_eq!(std::str::from_utf8(&r[0]).unwrap(), "\x1bP1+r636f=38\x1b\\");
+    let r = reply_text(&mut g);
+    assert_eq!(r[0], "\x1bP1+r636f=38\x1b\\");
     drive(&mut p, &mut g, b"\x1bP+q6c69\x1b\\");
-    let r = responses(&mut g);
-    assert_eq!(std::str::from_utf8(&r[0]).unwrap(), "\x1bP1+r6c69=34\x1b\\");
+    let r = reply_text(&mut g);
+    assert_eq!(r[0], "\x1bP1+r6c69=34\x1b\\");
     g.resize(30, 100);
     drive(&mut p, &mut g, b"\x1bP+q636f\x1b\\");
-    let r = responses(&mut g);
-    assert_eq!(
-        std::str::from_utf8(&r[0]).unwrap(),
-        "\x1bP1+r636f=313030\x1b\\"
-    );
+    let r = reply_text(&mut g);
+    assert_eq!(r[0], "\x1bP1+r636f=313030\x1b\\");
 }
 
 #[test]
@@ -123,16 +105,12 @@ fn xtgettcap_tn_and_name_report_the_stamped_term_verbatim() {
         let mut p = Parser::new();
         let hex = String::from_utf8(ascii_to_hex(term.as_bytes())).unwrap();
         drive(&mut p, &mut g, b"\x1bP+q544e\x1b\\");
-        let r = responses(&mut g);
-        assert_eq!(
-            std::str::from_utf8(&r[0]).unwrap(),
-            format!("\x1bP1+r544e={hex}\x1b\\"),
-            "TN for {term}"
-        );
+        let r = reply_text(&mut g);
+        assert_eq!(r[0], format!("\x1bP1+r544e={hex}\x1b\\"), "TN for {term}");
         drive(&mut p, &mut g, b"\x1bP+q6e616d65\x1b\\");
-        let r = responses(&mut g);
+        let r = reply_text(&mut g);
         assert_eq!(
-            std::str::from_utf8(&r[0]).unwrap(),
+            r[0],
             format!("\x1bP1+r6e616d65={hex}\x1b\\"),
             "name for {term}"
         );
@@ -141,11 +119,9 @@ fn xtgettcap_tn_and_name_report_the_stamped_term_verbatim() {
 
 #[test]
 fn xtgettcap_tn_is_unknown_until_the_host_stamps_a_term() {
-    let mut g = Grid::new(4, 8);
-    let mut p = Parser::new();
-    drive(&mut p, &mut g, b"\x1bP+q544e\x1b\\");
-    let r = responses(&mut g);
-    assert_eq!(std::str::from_utf8(&r[0]).unwrap(), "\x1bP0+r544e\x1b\\");
+    let mut g = drive_new(4, 8, b"\x1bP+q544e\x1b\\");
+    let r = reply_text(&mut g);
+    assert_eq!(r[0], "\x1bP0+r544e\x1b\\");
 }
 
 #[test]
@@ -156,24 +132,16 @@ fn ris_keeps_the_stamped_term_for_xtgettcap_tn() {
     drive(&mut p, &mut g, b"\x1bc");
     assert_eq!(g.term_name(), Some("xterm-felis"));
     drive(&mut p, &mut g, b"\x1bP+q544e\x1b\\");
-    let r = responses(&mut g);
+    let r = reply_text(&mut g);
     let hex = String::from_utf8(ascii_to_hex(b"xterm-felis")).unwrap();
-    assert_eq!(
-        std::str::from_utf8(&r[0]).unwrap(),
-        format!("\x1bP1+r544e={hex}\x1b\\")
-    );
+    assert_eq!(r[0], format!("\x1bP1+r544e={hex}\x1b\\"));
 }
 
 #[test]
 fn xtgettcap_undecodable_name_is_answered_empty_not_echoed() {
-    let mut g = Grid::new(4, 8);
-    let mut p = Parser::new();
-    drive(&mut p, &mut g, b"\x1bP+q436f;\nid\n\x1b\\");
-    let r = responses(&mut g);
-    assert_eq!(
-        std::str::from_utf8(&r[0]).unwrap(),
-        "\x1bP0+r436f=323536;\x1b\\"
-    );
+    let mut g = drive_new(4, 8, b"\x1bP+q436f;\nid\n\x1b\\");
+    let r = reply_text(&mut g);
+    assert_eq!(r[0], "\x1bP0+r436f=323536;\x1b\\");
 }
 
 proptest! {

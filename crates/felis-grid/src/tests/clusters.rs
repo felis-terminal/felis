@@ -104,10 +104,7 @@ fn combining_mark_attaches_to_previous_cell_as_cluster() {
     let mut p = Parser::new();
     let mut g = Grid::new(1, 4);
     drive(&mut p, &mut g, "e\u{0301}".as_bytes());
-    let Grapheme::Cluster(id) = g.cell(0, 0).unwrap().grapheme else {
-        panic!("cell 0,0 should hold a cluster");
-    };
-    assert_eq!(g.cluster_str(id), Some("e\u{0301}"));
+    assert_eq!(cluster_at(&g, 0, 0), Some("e\u{0301}"));
     assert_eq!(g.cell(0, 1).unwrap().grapheme, Grapheme::Empty);
     assert_eq!(g.cursor().col, 1);
 }
@@ -117,10 +114,7 @@ fn second_combining_mark_extends_the_existing_cluster() {
     let mut p = Parser::new();
     let mut g = Grid::new(1, 4);
     drive(&mut p, &mut g, "e\u{0301}\u{0327}".as_bytes());
-    let Grapheme::Cluster(id) = g.cell(0, 0).unwrap().grapheme else {
-        panic!("cell 0,0 should hold a cluster");
-    };
-    assert_eq!(g.cluster_str(id), Some("e\u{0301}\u{0327}"));
+    assert_eq!(cluster_at(&g, 0, 0), Some("e\u{0301}\u{0327}"));
     assert_eq!(g.cursor().col, 1);
 }
 
@@ -132,10 +126,7 @@ fn zwj_emoji_sequence_forms_one_wide_cluster() {
     let mut p = Parser::new();
     let mut g = Grid::new(1, 8);
     drive(&mut p, &mut g, "\u{1F469}\u{200D}\u{1F4BB}".as_bytes());
-    let Grapheme::Cluster(id) = g.cell(0, 0).unwrap().grapheme else {
-        panic!("cell 0,0 should hold the joined cluster");
-    };
-    assert_eq!(g.cluster_str(id), Some("\u{1F469}\u{200D}\u{1F4BB}"));
+    assert_eq!(cluster_at(&g, 0, 0), Some("\u{1F469}\u{200D}\u{1F4BB}"));
     assert_eq!(g.cell(0, 1).unwrap().grapheme, Grapheme::Spacer);
     assert_eq!(g.cell(0, 2).unwrap().grapheme, Grapheme::Empty);
     assert_eq!(g.cursor().col, 2);
@@ -151,11 +142,8 @@ fn zwj_family_emoji_chains_into_one_cluster() {
         &mut g,
         "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}".as_bytes(),
     );
-    let Grapheme::Cluster(id) = g.cell(0, 0).unwrap().grapheme else {
-        panic!("cell 0,0 should hold the joined family cluster");
-    };
     assert_eq!(
-        g.cluster_str(id),
+        cluster_at(&g, 0, 0),
         Some("\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}")
     );
     assert_eq!(g.cell(0, 1).unwrap().grapheme, Grapheme::Spacer);
@@ -168,10 +156,7 @@ fn stray_zwj_does_not_swallow_following_ascii() {
     let mut p = Parser::new();
     let mut g = Grid::new(1, 8);
     drive(&mut p, &mut g, "\u{1F469}\u{200D}X".as_bytes());
-    let Grapheme::Cluster(id) = g.cell(0, 0).unwrap().grapheme else {
-        panic!("cell 0,0 should hold the woman+ZWJ cluster");
-    };
-    assert_eq!(g.cluster_str(id), Some("\u{1F469}\u{200D}"));
+    assert_eq!(cluster_at(&g, 0, 0), Some("\u{1F469}\u{200D}"));
     assert_eq!(g.cell(0, 2).unwrap().grapheme, Grapheme::Ascii(b'X'));
     assert_eq!(g.cursor().col, 3);
 }
@@ -203,10 +188,7 @@ fn tab_disarms_a_pending_zwj() {
         &mut g,
         format!("\x1b[1;6H{WOMAN_ZWJ}\t{LAPTOP}").as_bytes(),
     );
-    let Grapheme::Cluster(id) = g.cell(0, 5).unwrap().grapheme else {
-        panic!("cell 0,5 should hold the woman+ZWJ cluster");
-    };
-    assert_eq!(g.cluster_str(id), Some(WOMAN_ZWJ));
+    assert_eq!(cluster_at(&g, 0, 5), Some(WOMAN_ZWJ));
     assert_eq!(g.cell(1, 0).unwrap().grapheme, Grapheme::Char(LAPTOP));
 }
 
@@ -236,10 +218,7 @@ fn line_feed_vt_and_ff_disarm_a_pending_zwj() {
             &mut g,
             format!("\x1b[2;1H{WOMAN_ZWJ}\x1b[1;1H{WOMAN_ZWJ}{ctrl}{LAPTOP}").as_bytes(),
         );
-        let Grapheme::Cluster(id) = g.cell(1, 0).unwrap().grapheme else {
-            panic!("cell 1,0 should hold the woman+ZWJ cluster");
-        };
-        assert_eq!(g.cluster_str(id), Some(WOMAN_ZWJ), "{ctrl:?}");
+        assert_eq!(cluster_at(&g, 1, 0), Some(WOMAN_ZWJ), "{ctrl:?}");
         assert_eq!(
             g.cell(1, 2).unwrap().grapheme,
             Grapheme::Char(LAPTOP),
@@ -257,10 +236,7 @@ fn bell_keeps_a_pending_zwj_armed() {
         &mut g,
         format!("{WOMAN_ZWJ}\x07{LAPTOP}").as_bytes(),
     );
-    let Grapheme::Cluster(id) = g.cell(0, 0).unwrap().grapheme else {
-        panic!("cell 0,0 should hold the joined cluster");
-    };
-    assert_eq!(g.cluster_str(id), Some("\u{1F469}\u{200D}\u{1F4BB}"));
+    assert_eq!(cluster_at(&g, 0, 0), Some("\u{1F469}\u{200D}\u{1F4BB}"));
 }
 
 #[test]
@@ -270,10 +246,7 @@ fn skin_tone_modifier_folds_into_emoji_base() {
     let mut p = Parser::new();
     let mut g = Grid::new(1, 8);
     drive(&mut p, &mut g, "\u{1F44B}\u{1F3FD}".as_bytes());
-    let Grapheme::Cluster(id) = g.cell(0, 0).unwrap().grapheme else {
-        panic!("cell 0,0 should hold the wave+skin cluster");
-    };
-    assert_eq!(g.cluster_str(id), Some("\u{1F44B}\u{1F3FD}"));
+    assert_eq!(cluster_at(&g, 0, 0), Some("\u{1F44B}\u{1F3FD}"));
     assert_eq!(g.cell(0, 1).unwrap().grapheme, Grapheme::Spacer);
     assert_eq!(g.cell(0, 2).unwrap().grapheme, Grapheme::Empty);
     assert_eq!(g.cursor().col, 2);
@@ -286,10 +259,7 @@ fn regional_indicator_pair_forms_one_flag_cluster() {
     let mut p = Parser::new();
     let mut g = Grid::new(1, 8);
     drive(&mut p, &mut g, "\u{1F1EF}\u{1F1F5}".as_bytes());
-    let Grapheme::Cluster(id) = g.cell(0, 0).unwrap().grapheme else {
-        panic!("cell 0,0 should hold the flag cluster");
-    };
-    assert_eq!(g.cluster_str(id), Some("\u{1F1EF}\u{1F1F5}"));
+    assert_eq!(cluster_at(&g, 0, 0), Some("\u{1F1EF}\u{1F1F5}"));
     assert_eq!(g.cell(0, 1).unwrap().grapheme, Grapheme::Spacer);
     assert_eq!(g.cell(0, 2).unwrap().grapheme, Grapheme::Empty);
     assert_eq!(g.cursor().col, 2);
@@ -306,14 +276,8 @@ fn two_flags_pair_independently() {
         &mut g,
         "\u{1F1EF}\u{1F1F5}\u{1F1F0}\u{1F1F7}".as_bytes(),
     );
-    let Grapheme::Cluster(jp) = g.cell(0, 0).unwrap().grapheme else {
-        panic!("cell 0,0 should hold the JP flag");
-    };
-    let Grapheme::Cluster(kr) = g.cell(0, 2).unwrap().grapheme else {
-        panic!("cell 0,2 should hold the KR flag");
-    };
-    assert_eq!(g.cluster_str(jp), Some("\u{1F1EF}\u{1F1F5}"));
-    assert_eq!(g.cluster_str(kr), Some("\u{1F1F0}\u{1F1F7}"));
+    assert_eq!(cluster_at(&g, 0, 0), Some("\u{1F1EF}\u{1F1F5}"));
+    assert_eq!(cluster_at(&g, 0, 2), Some("\u{1F1F0}\u{1F1F7}"));
     assert_eq!(g.cell(0, 1).unwrap().grapheme, Grapheme::Spacer);
     assert_eq!(g.cell(0, 3).unwrap().grapheme, Grapheme::Spacer);
     assert_eq!(g.cursor().col, 4);
@@ -326,9 +290,10 @@ fn odd_regional_indicator_stays_a_lone_letter() {
     let mut p = Parser::new();
     let mut g = Grid::new(1, 8);
     drive(&mut p, &mut g, "\u{1F1EF}\u{1F1F5}\u{1F1F0}".as_bytes());
-    let Grapheme::Cluster(_) = g.cell(0, 0).unwrap().grapheme else {
-        panic!("cell 0,0 should hold the flag cluster");
-    };
+    assert!(
+        cluster_at(&g, 0, 0).is_some(),
+        "cell 0,0 should hold the flag cluster"
+    );
     assert_eq!(g.cell(0, 2).unwrap().grapheme, Grapheme::Char('\u{1F1F0}'));
     assert_eq!(g.cursor().col, 3);
 }
@@ -341,10 +306,7 @@ fn vs16_widens_a_narrow_base_to_two_cells() {
     let mut p = Parser::new();
     let mut g = Grid::new(1, 8);
     drive(&mut p, &mut g, "\u{2764}\u{FE0F}".as_bytes());
-    let Grapheme::Cluster(id) = g.cell(0, 0).unwrap().grapheme else {
-        panic!("cell 0,0 should hold the heart+VS16 cluster");
-    };
-    assert_eq!(g.cluster_str(id), Some("\u{2764}\u{FE0F}"));
+    assert_eq!(cluster_at(&g, 0, 0), Some("\u{2764}\u{FE0F}"));
     assert_eq!(g.cell(0, 1).unwrap().grapheme, Grapheme::Spacer);
     assert_eq!(g.cursor().col, 2);
 }
@@ -356,10 +318,7 @@ fn keycap_sequence_forms_a_two_cell_cluster() {
     let mut p = Parser::new();
     let mut g = Grid::new(1, 8);
     drive(&mut p, &mut g, "1\u{FE0F}\u{20E3}".as_bytes());
-    let Grapheme::Cluster(id) = g.cell(0, 0).unwrap().grapheme else {
-        panic!("cell 0,0 should hold the keycap cluster");
-    };
-    assert_eq!(g.cluster_str(id), Some("1\u{FE0F}\u{20E3}"));
+    assert_eq!(cluster_at(&g, 0, 0), Some("1\u{FE0F}\u{20E3}"));
     assert_eq!(g.cell(0, 1).unwrap().grapheme, Grapheme::Spacer);
     assert_eq!(g.cursor().col, 2);
 }
@@ -375,10 +334,10 @@ fn heart_on_fire_joins_despite_width_one_base() {
         &mut g,
         "\u{2764}\u{FE0F}\u{200D}\u{1F525}".as_bytes(),
     );
-    let Grapheme::Cluster(id) = g.cell(0, 0).unwrap().grapheme else {
-        panic!("cell 0,0 should hold the heart-on-fire cluster");
-    };
-    assert_eq!(g.cluster_str(id), Some("\u{2764}\u{FE0F}\u{200D}\u{1F525}"));
+    assert_eq!(
+        cluster_at(&g, 0, 0),
+        Some("\u{2764}\u{FE0F}\u{200D}\u{1F525}")
+    );
     assert_eq!(g.cell(0, 1).unwrap().grapheme, Grapheme::Spacer);
     assert_eq!(g.cell(0, 2).unwrap().grapheme, Grapheme::Empty);
     assert_eq!(g.cursor().col, 2);
@@ -391,10 +350,7 @@ fn heart_on_fire_joins_without_vs16() {
     let mut p = Parser::new();
     let mut g = Grid::new(1, 8);
     drive(&mut p, &mut g, "\u{2764}\u{200D}\u{1F525}".as_bytes());
-    let Grapheme::Cluster(id) = g.cell(0, 0).unwrap().grapheme else {
-        panic!("cell 0,0 should hold the VS16-less heart-on-fire cluster");
-    };
-    assert_eq!(g.cluster_str(id), Some("\u{2764}\u{200D}\u{1F525}"));
+    assert_eq!(cluster_at(&g, 0, 0), Some("\u{2764}\u{200D}\u{1F525}"));
     assert_eq!(g.cell(0, 1).unwrap().grapheme, Grapheme::Spacer);
     assert_eq!(g.cell(0, 2).unwrap().grapheme, Grapheme::Empty);
     assert_eq!(g.cursor().col, 2);
@@ -437,10 +393,7 @@ fn a_vs15_after_a_wide_emoji_folds_into_one_wide_cluster() {
     let mut p = Parser::new();
     let mut g = Grid::new(1, 8);
     drive(&mut p, &mut g, "\u{2B50}\u{FE0E}x".as_bytes());
-    let Grapheme::Cluster(id) = g.cell(0, 0).unwrap().grapheme else {
-        panic!("cell 0,0 should hold the star and its selector");
-    };
-    assert_eq!(g.cluster_str(id), Some("\u{2B50}\u{FE0E}"));
+    assert_eq!(cluster_at(&g, 0, 0), Some("\u{2B50}\u{FE0E}"));
     assert_eq!(g.cell(0, 1).unwrap().grapheme, Grapheme::Spacer);
     assert_eq!(g.cell(0, 2).unwrap().grapheme, Grapheme::Ascii(b'x'));
 }

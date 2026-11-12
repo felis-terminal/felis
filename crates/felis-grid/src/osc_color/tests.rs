@@ -1,5 +1,5 @@
 use super::*;
-use crate::test_support::{drive, responses};
+use crate::test_support::{drive, drive_new, reply_text, responses};
 use crate::*;
 use felis_vt::Parser;
 
@@ -74,26 +74,18 @@ fn osc_4_set_then_query_round_trips_via_rgb_form() {
         &mut g,
         b"\x1b]4;0;rgb:f0f0/f0f0/f0f0\x1b\\\x1b]4;0;?\x1b\\",
     );
-    let responses = responses(&mut g);
+    let responses = reply_text(&mut g);
     assert_eq!(responses.len(), 1);
-    assert_eq!(
-        std::str::from_utf8(&responses[0]).unwrap(),
-        "\x1b]4;0;rgb:f0f0/f0f0/f0f0\x1b\\"
-    );
+    assert_eq!(responses[0], "\x1b]4;0;rgb:f0f0/f0f0/f0f0\x1b\\");
 }
 
 /// esctest's `test_ChangeColor_Hash3`: X11 Hash3 sets `(0xF0, 0xF0,
 /// 0xF0)`, echoed back as the doubled-byte rgb form.
 #[test]
 fn osc_4_set_via_hash3_form_then_query_echoes_top_byte_doubled() {
-    let mut g = Grid::new(4, 8);
-    let mut p = Parser::new();
-    drive(&mut p, &mut g, b"\x1b]4;0;#fff\x1b\\\x1b]4;0;?\x1b\\");
-    let responses = responses(&mut g);
-    assert_eq!(
-        std::str::from_utf8(&responses[0]).unwrap(),
-        "\x1b]4;0;rgb:f0f0/f0f0/f0f0\x1b\\"
-    );
+    let mut g = drive_new(4, 8, b"\x1b]4;0;#fff\x1b\\\x1b]4;0;?\x1b\\");
+    let responses = reply_text(&mut g);
+    assert_eq!(responses[0], "\x1b]4;0;rgb:f0f0/f0f0/f0f0\x1b\\");
 }
 
 /// Each query echoes as its own response frame so the producer can
@@ -108,16 +100,10 @@ fn osc_4_multi_pair_set_then_multi_pair_query_emits_one_response_per_pair() {
         b"\x1b]4;0;rgb:f0f0/f0f0/f0f0;1;rgb:f0f0/0000/0000\x1b\\\
           \x1b]4;0;?;1;?\x1b\\",
     );
-    let responses = responses(&mut g);
+    let responses = reply_text(&mut g);
     assert_eq!(responses.len(), 2);
-    assert_eq!(
-        std::str::from_utf8(&responses[0]).unwrap(),
-        "\x1b]4;0;rgb:f0f0/f0f0/f0f0\x1b\\"
-    );
-    assert_eq!(
-        std::str::from_utf8(&responses[1]).unwrap(),
-        "\x1b]4;1;rgb:f0f0/0000/0000\x1b\\"
-    );
+    assert_eq!(responses[0], "\x1b]4;0;rgb:f0f0/f0f0/f0f0\x1b\\");
+    assert_eq!(responses[1], "\x1b]4;1;rgb:f0f0/0000/0000\x1b\\");
 }
 
 /// esctest's `ResetColorTests.test_ResetColor_Standard`.
@@ -154,14 +140,11 @@ fn osc_104_with_no_index_resets_every_slot() {
           \x1b]104\x1b\\\
           \x1b]4;0;?;1;?\x1b\\",
     );
-    let responses = responses(&mut g);
-    assert_eq!(
-        std::str::from_utf8(&responses[0]).unwrap(),
-        "\x1b]4;0;rgb:0000/0000/0000\x1b\\"
-    );
+    let responses = reply_text(&mut g);
+    assert_eq!(responses[0], "\x1b]4;0;rgb:0000/0000/0000\x1b\\");
     let default_red_top = format_doubled_rgb(default_palette_color(1));
     let expected_1 = format!("\x1b]4;1;rgb:{default_red_top}\x1b\\");
-    assert_eq!(std::str::from_utf8(&responses[1]).unwrap(), expected_1);
+    assert_eq!(responses[1], expected_1);
 }
 
 /// The client applies deltas one slot at a time, so a batch that
@@ -273,16 +256,10 @@ fn osc_10_multi_spec_advances_channel_per_spec() {
         b"\x1b]10;rgb:f0f0/f0f0/f0f0;rgb:f0f0/0000/0000\x1b\\\
           \x1b]10;?;?\x1b\\",
     );
-    let r = responses(&mut g);
+    let r = reply_text(&mut g);
     assert_eq!(r.len(), 2);
-    assert_eq!(
-        std::str::from_utf8(&r[0]).unwrap(),
-        "\x1b]10;rgb:f0f0/f0f0/f0f0\x1b\\"
-    );
-    assert_eq!(
-        std::str::from_utf8(&r[1]).unwrap(),
-        "\x1b]11;rgb:f0f0/0000/0000\x1b\\"
-    );
+    assert_eq!(r[0], "\x1b]10;rgb:f0f0/f0f0/f0f0\x1b\\");
+    assert_eq!(r[1], "\x1b]11;rgb:f0f0/0000/0000\x1b\\");
 }
 
 /// esctest's `ChangeSpecialColor2` + `ResetSpecialColor_Single2`.
@@ -296,17 +273,11 @@ fn osc_5_set_query_reset_round_trips_the_special_color_table() {
         b"\x1b]5;0;rgb:8080/8080/8080\x1b\\\x1b]5;0;?\x1b\\\
           \x1b]105;0\x1b\\\x1b]5;0;?\x1b\\",
     );
-    let responses = responses(&mut g);
-    assert_eq!(
-        std::str::from_utf8(&responses[0]).unwrap(),
-        "\x1b]5;0;rgb:8080/8080/8080\x1b\\"
-    );
+    let responses = reply_text(&mut g);
+    assert_eq!(responses[0], "\x1b]5;0;rgb:8080/8080/8080\x1b\\");
     // The default is (0,0,0); pinned so a real renderer default would
     // surface here.
-    assert_eq!(
-        std::str::from_utf8(&responses[1]).unwrap(),
-        "\x1b]5;0;rgb:0000/0000/0000\x1b\\"
-    );
+    assert_eq!(responses[1], "\x1b]5;0;rgb:0000/0000/0000\x1b\\");
 }
 
 fn format_doubled_rgb((r, g, b): (u8, u8, u8)) -> String {

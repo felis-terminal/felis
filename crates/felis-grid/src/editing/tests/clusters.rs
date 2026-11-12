@@ -27,10 +27,7 @@ fn a_mark_stream_stops_folding_at_the_cluster_cap() {
     // the 128-byte cap.
     let marks = "\u{0301}".repeat(4096);
     drive(&mut p, &mut g, marks.as_bytes());
-    let Grapheme::Cluster(id) = g.cell(0, 0).unwrap().grapheme else {
-        panic!("the marks that did fit must leave a Cluster");
-    };
-    let text = g.cluster_str(id).expect("resolvable");
+    let text = cluster_at(&g, 0, 0).expect("the marks that did fit must leave a Cluster");
     assert!(text.len() <= ClusterText::CAP, "held {} bytes", text.len());
     assert_eq!(text.chars().count(), 64, "base + 63 marks fills the cap");
     assert_eq!(g.cluster_count(), 63);
@@ -70,8 +67,8 @@ fn the_longest_real_emoji_sequence_still_folds() {
         &mut g,
         "👨\u{200D}👩\u{200D}👧\u{200D}👦".as_bytes(),
     );
-    let Grapheme::Cluster(id) = g.cell(0, 0).unwrap().grapheme else {
-        panic!("the family sequence must fold into one cluster");
-    };
-    assert_eq!(g.cluster_str(id), Some("👨\u{200D}👩\u{200D}👧\u{200D}👦"));
+    assert_eq!(
+        cluster_at(&g, 0, 0),
+        Some("👨\u{200D}👩\u{200D}👧\u{200D}👦")
+    );
 }

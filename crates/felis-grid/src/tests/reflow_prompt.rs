@@ -334,13 +334,6 @@ fn printed_beside_cursor(g: &Grid) -> (usize, usize) {
     (above, below)
 }
 
-fn driven(bytes: &[u8], size: (u16, u16)) -> Grid {
-    let mut p = Parser::new();
-    let mut g = Grid::new(size.0, size.1);
-    drive(&mut p, &mut g, bytes);
-    g
-}
-
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(1024))]
 
@@ -356,11 +349,11 @@ proptest! {
         size in (3u16..=8, 2u16..=10),
         new_size in (1u16..=7, 1u16..=10),
     ) {
-        let mut marked = driven(&shell_bytes(&pieces, climb, true), size);
-        let mut unmarked = driven(&shell_bytes(&pieces, climb, false), size);
+        let mut marked = drive_new(size.0, size.1, &shell_bytes(&pieces, climb, true));
+        let mut unmarked = drive_new(size.0, size.1, &shell_bytes(&pieces, climb, false));
         let prompt = youngest_prompt(&pieces);
         let start_on_screen = prompt.as_ref().is_some_and(|p| {
-            let at_start = driven(&shell_bytes(&pieces[..p.pieces_before], 0, true), size);
+            let at_start = drive_new(size.0, size.1, &shell_bytes(&pieces[..p.pieces_before], 0, true));
             let line = at_start.scrollback_total_pushed + u64::from(at_start.cursor().row);
             line.checked_sub(marked.scrollback_total_pushed)
                 .is_some_and(|row| row <= u64::from(marked.cursor().row))

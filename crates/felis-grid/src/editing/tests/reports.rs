@@ -9,12 +9,12 @@ fn decset_2031_and_dsr_996_report_color_scheme() {
     drive(&mut p, &mut g, b"\x1b[?2031h");
     assert!(g.color_scheme_notify());
     drive(&mut p, &mut g, b"\x1b[?996n");
-    let r = responses(&mut g);
-    assert_eq!(std::str::from_utf8(&r[0]).unwrap(), "\x1b[?997;2n");
+    let r = reply_text(&mut g);
+    assert_eq!(r[0], "\x1b[?997;2n");
     g.set_os_dark(true);
     drive(&mut p, &mut g, b"\x1b[?996n");
-    let r = responses(&mut g);
-    assert_eq!(std::str::from_utf8(&r[0]).unwrap(), "\x1b[?997;1n");
+    let r = reply_text(&mut g);
+    assert_eq!(r[0], "\x1b[?997;1n");
     drive(&mut p, &mut g, b"\x1b[?2031l");
     assert!(!g.color_scheme_notify());
 }
@@ -51,8 +51,8 @@ fn decrqm_reports_2048_state() {
         "\x1b[?2048;1$y"
     );
     drive(&mut p, &mut g, b"\x1b[?2048l\x1b[?2048$p");
-    let r = responses(&mut g);
-    assert_eq!(std::str::from_utf8(&r[0]).unwrap(), "\x1b[?2048;2$y");
+    let r = reply_text(&mut g);
+    assert_eq!(r[0], "\x1b[?2048;2$y");
 }
 
 /// DECRQM round-trips mode 2031 as a functional mode (Ps=1 set /
@@ -63,12 +63,12 @@ fn decrqm_reports_2031_state() {
     let mut p = Parser::new();
     drive(&mut p, &mut g, b"\x1b[?2031h");
     drive(&mut p, &mut g, b"\x1b[?2031$p");
-    let r = responses(&mut g);
-    assert_eq!(std::str::from_utf8(&r[0]).unwrap(), "\x1b[?2031;1$y");
+    let r = reply_text(&mut g);
+    assert_eq!(r[0], "\x1b[?2031;1$y");
     drive(&mut p, &mut g, b"\x1b[?2031l");
     drive(&mut p, &mut g, b"\x1b[?2031$p");
-    let r = responses(&mut g);
-    assert_eq!(std::str::from_utf8(&r[0]).unwrap(), "\x1b[?2031;2$y");
+    let r = reply_text(&mut g);
+    assert_eq!(r[0], "\x1b[?2031;2$y");
 }
 
 /// `CSI Pn t` with Pn >= 24 (DECSLPP) is consumed silently without
@@ -83,8 +83,8 @@ fn csi_pn_t_ge_24_is_consumed_and_decslpp_is_unsupported() {
     drive(&mut p, &mut g, b"\x1b[27t");
     assert_eq!(responses(&mut g), Vec::<Vec<u8>>::new());
     drive(&mut p, &mut g, b"\x1b[11t");
-    let r = responses(&mut g);
-    assert_eq!(std::str::from_utf8(&r[0]).unwrap(), "\x1b[1t");
+    let r = reply_text(&mut g);
+    assert_eq!(r[0], "\x1b[1t");
 }
 
 /// DECRQM is swallowed at conformance level 2 (esctest's
@@ -104,44 +104,32 @@ fn decrqm_returns_no_reply_at_conformance_level_below_three() {
             .collect::<Vec<_>>()
     );
     drive(&mut p, &mut g, b"\x1b[64;1\"p\x1b[4$p");
-    let r = responses(&mut g);
-    assert_eq!(std::str::from_utf8(&r[0]).unwrap(), "\x1b[4;2$y");
+    let r = reply_text(&mut g);
+    assert_eq!(r[0], "\x1b[4;2$y");
 }
 
 /// DECRQCRA: bold subtracts one from the checksum.
 #[test]
 fn decrqcra_bold_attribute_subtracts_one_from_checksum() {
-    let mut g = Grid::new(4, 8);
-    let mut p = Parser::new();
-    drive(&mut p, &mut g, b"\x1b[1ma\x1b[3;1;1;1;1;1*y");
-    let responses = responses(&mut g);
-    assert_eq!(
-        std::str::from_utf8(&responses[0]).unwrap(),
-        "\x1bP3!~FF9E\x1b\\"
-    );
+    let mut g = drive_new(4, 8, b"\x1b[1ma\x1b[3;1;1;1;1;1*y");
+    let responses = reply_text(&mut g);
+    assert_eq!(responses[0], "\x1bP3!~FF9E\x1b\\");
 }
 
 /// DECRQCRA: missing rectangle params default to the whole grid.
 #[test]
 fn decrqcra_missing_rect_params_default_to_full_grid() {
-    let mut g = Grid::new(4, 8);
-    let mut p = Parser::new();
-    drive(&mut p, &mut g, b"\x1b[4*y");
-    let responses = responses(&mut g);
-    assert_eq!(
-        std::str::from_utf8(&responses[0]).unwrap(),
-        "\x1bP4!~FC00\x1b\\"
-    );
+    let mut g = drive_new(4, 8, b"\x1b[4*y");
+    let responses = reply_text(&mut g);
+    assert_eq!(responses[0], "\x1bP4!~FC00\x1b\\");
 }
 
 /// DECRQSS `s` reports the current margins as 1-based inclusive.
 #[test]
 fn decrqss_s_reports_left_right_margins() {
-    let mut g = Grid::new(4, 16);
-    let mut p = Parser::new();
-    drive(&mut p, &mut g, b"\x1b[?69h\x1b[5;10s\x1bP$qs\x1b\\");
-    let r = responses(&mut g);
-    assert_eq!(std::str::from_utf8(&r[0]).unwrap(), "\x1bP1$r5;10s\x1b\\");
+    let mut g = drive_new(4, 16, b"\x1b[?69h\x1b[5;10s\x1bP$qs\x1b\\");
+    let r = reply_text(&mut g);
+    assert_eq!(r[0], "\x1bP1$r5;10s\x1b\\");
 }
 
 /// DECRQSS answers `*x` (DECSACE) and `"p` (DECSCL) with the last-set
@@ -152,12 +140,12 @@ fn decrqss_answers_supported_settings_and_rejects_the_rest() {
     let mut g = Grid::new(8, 16);
     let mut p = Parser::new();
     drive(&mut p, &mut g, b"\x1b[0*x\x1bP$q*x\x1b\\");
-    let r = responses(&mut g);
-    assert_eq!(std::str::from_utf8(&r[0]).unwrap(), "\x1bP1$r0*x\x1b\\");
+    let r = reply_text(&mut g);
+    assert_eq!(r[0], "\x1bP1$r0*x\x1b\\");
 
     drive(&mut p, &mut g, b"\x1b[65;1\"p\x1bP$q\"p\x1b\\");
-    let r = responses(&mut g);
-    assert_eq!(std::str::from_utf8(&r[0]).unwrap(), "\x1bP1$r64;1\"p\x1b\\");
+    let r = reply_text(&mut g);
+    assert_eq!(r[0], "\x1bP1$r64;1\"p\x1b\\");
 
     for (setter, query) in [
         (&b"\x1b[1$}"[..], &b"\x1bP$q$}\x1b\\"[..]),
@@ -180,50 +168,39 @@ fn decrqss_answers_supported_settings_and_rejects_the_rest() {
 /// `test_DECDSR_DECXCPR`).
 #[test]
 fn decdsr_decxcpr_replies_with_three_param_cursor_position() {
-    let mut g = Grid::new(8, 16);
-    let mut p = Parser::new();
-    drive(&mut p, &mut g, b"\x1b[6;5H\x1b[?6n");
-    let responses = responses(&mut g);
-    assert_eq!(std::str::from_utf8(&responses[0]).unwrap(), "\x1b[?6;5;1R");
+    let mut g = drive_new(8, 16, b"\x1b[6;5H\x1b[?6n");
+    let responses = reply_text(&mut g);
+    assert_eq!(responses[0], "\x1b[?6;5;1R");
 }
 
 /// DECMSR (`?62n`) and DECCKSR (`?63;Pid n`) report zero: felis has
 /// no macro store.
 #[test]
 fn decdsr_macro_status_replies_with_zero_space_and_checksum() {
-    let mut g = Grid::new(4, 8);
-    let mut p = Parser::new();
-    drive(&mut p, &mut g, b"\x1b[?62n\x1b[?63;42n");
-    let responses = responses(&mut g);
-    assert_eq!(std::str::from_utf8(&responses[0]).unwrap(), "\x1b[0*{");
-    assert_eq!(
-        std::str::from_utf8(&responses[1]).unwrap(),
-        "\x1bP42!~0000\x1b\\"
-    );
+    let mut g = drive_new(4, 8, b"\x1b[?62n\x1b[?63;42n");
+    let responses = reply_text(&mut g);
+    assert_eq!(responses[0], "\x1b[0*{");
+    assert_eq!(responses[1], "\x1bP42!~0000\x1b\\");
 }
 
 /// `?75n` / `?85n` reply "OK" / "not configured", the xterm replies
 /// esctest accepts.
 #[test]
 fn decdsr_integrity_and_session_replies_match_xterm() {
-    let mut g = Grid::new(4, 8);
-    let mut p = Parser::new();
-    drive(&mut p, &mut g, b"\x1b[?75n\x1b[?85n");
-    let responses = responses(&mut g);
-    assert_eq!(std::str::from_utf8(&responses[0]).unwrap(), "\x1b[?70n");
-    assert_eq!(std::str::from_utf8(&responses[1]).unwrap(), "\x1b[?83n");
+    let mut g = drive_new(4, 8, b"\x1b[?75n\x1b[?85n");
+    let responses = reply_text(&mut g);
+    assert_eq!(responses[0], "\x1b[?70n");
+    assert_eq!(responses[1], "\x1b[?83n");
 }
 
 /// Locator DSRs report "no locator" (Ps=50) and type 0.
 #[test]
 fn decdsr_locator_replies_with_no_locator_attached() {
-    let mut g = Grid::new(4, 8);
-    let mut p = Parser::new();
-    drive(&mut p, &mut g, b"\x1b[?53n\x1b[?55n\x1b[?56n");
-    let responses = responses(&mut g);
-    assert_eq!(std::str::from_utf8(&responses[0]).unwrap(), "\x1b[?50n");
-    assert_eq!(std::str::from_utf8(&responses[1]).unwrap(), "\x1b[?50n");
-    assert_eq!(std::str::from_utf8(&responses[2]).unwrap(), "\x1b[?57;0n");
+    let mut g = drive_new(4, 8, b"\x1b[?53n\x1b[?55n\x1b[?56n");
+    let responses = reply_text(&mut g);
+    assert_eq!(responses[0], "\x1b[?50n");
+    assert_eq!(responses[1], "\x1b[?50n");
+    assert_eq!(responses[2], "\x1b[?57;0n");
 }
 
 /// Mode 2027 reports permanently set; DECRESET does not move it.
@@ -232,14 +209,11 @@ fn decrqm_dec_mode_2027_reports_permanently_set() {
     let mut g = Grid::new(4, 8);
     let mut p = Parser::new();
     drive(&mut p, &mut g, b"\x1b[?2027$p");
-    let initial = responses(&mut g);
-    assert_eq!(std::str::from_utf8(&initial[0]).unwrap(), "\x1b[?2027;3$y");
+    let initial = reply_text(&mut g);
+    assert_eq!(initial[0], "\x1b[?2027;3$y");
     drive(&mut p, &mut g, b"\x1b[?2027l\x1b[?2027$p");
-    let after_reset = responses(&mut g);
-    assert_eq!(
-        std::str::from_utf8(&after_reset[0]).unwrap(),
-        "\x1b[?2027;3$y"
-    );
+    let after_reset = reply_text(&mut g);
+    assert_eq!(after_reset[0], "\x1b[?2027;3$y");
 }
 
 /// Unknown DEC modes report Ps=0 rather than the soft-state default,
@@ -252,16 +226,16 @@ fn decrqm_dec_unknown_mode_reports_ps_zero_until_written() {
     let mut g = Grid::new(4, 8);
     let mut p = Parser::new();
     drive(&mut p, &mut g, b"\x1b[?9999$p");
-    let cold = responses(&mut g);
-    assert_eq!(std::str::from_utf8(&cold[0]).unwrap(), "\x1b[?9999;0$y");
+    let cold = reply_text(&mut g);
+    assert_eq!(cold[0], "\x1b[?9999;0$y");
 
     drive(&mut p, &mut g, b"\x1b[?9999h\x1b[?9999$p");
-    let set = responses(&mut g);
-    assert_eq!(std::str::from_utf8(&set[0]).unwrap(), "\x1b[?9999;1$y");
+    let set = reply_text(&mut g);
+    assert_eq!(set[0], "\x1b[?9999;1$y");
 
     drive(&mut p, &mut g, b"\x1b[?9999l\x1b[?9999$p");
-    let reset = responses(&mut g);
-    assert_eq!(std::str::from_utf8(&reset[0]).unwrap(), "\x1b[?9999;2$y");
+    let reset = reply_text(&mut g);
+    assert_eq!(reset[0], "\x1b[?9999;2$y");
 }
 
 /// The `DECSET 2048` report states the PTY winsize's pixel extents the
@@ -347,10 +321,7 @@ fn xterm_window_op_reports_icon_and_window_title() {
 /// shape.
 #[test]
 fn decrqss_space_q_reports_cursor_shape() {
-    let mut g = Grid::new(4, 8);
-    let mut p = Parser::new();
-    drive(&mut p, &mut g, b"\x1b[4 q\x1bP$q q\x1b\\");
-    let r = responses(&mut g);
+    let (_g, r) = drive_take(4, 8, b"\x1b[4 q\x1bP$q q\x1b\\");
     assert_eq!(
         String::from_utf8(r.into_iter().next().unwrap()).unwrap(),
         "\x1bP1$r4 q\x1b\\"

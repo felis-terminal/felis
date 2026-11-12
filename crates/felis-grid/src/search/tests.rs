@@ -1,6 +1,7 @@
 use proptest::prelude::*;
 
 use super::*;
+use crate::test_support::drive_new;
 use crate::{AttrFlags, Attributes, Color, UnderlineStyle};
 
 /// Hand-built rows driving [`search_rows`] directly, with `sb_len =
@@ -469,17 +470,10 @@ fn evicted_line_head_leaves_a_searchable_tail() {
 
 /// The grid's scrollback, wrap bits, and live rows come from genuine VT
 /// behavior rather than hand-pushed rows.
-fn driven_grid(rows: u16, cols: u16, bytes: &[u8]) -> crate::Grid {
-    let mut g = crate::Grid::new(rows, cols);
-    let mut p = felis_vt::Parser::new();
-    crate::test_support::drive(&mut p, &mut g, bytes);
-    g
-}
-
 /// REQ-608: live row `r` reports as `r`.
 #[test]
 fn grid_search_finds_live_rows_in_the_non_negative_index_space() {
-    let g = driven_grid(3, 8, b"hello\r\nworld");
+    let g = drive_new(3, 8, b"hello\r\nworld");
     let q = SearchQuery::new("world", SearchOptions::default()).unwrap();
     let hits: Vec<_> = g.search(&q, SearchSource::Scrollback).collect();
     assert_eq!(hits.len(), 1);
@@ -498,7 +492,7 @@ fn grid_search_finds_live_rows_in_the_non_negative_index_space() {
 /// still live stitches across the seam.
 #[test]
 fn grid_search_stitches_a_line_across_the_scrollback_seam() {
-    let g = driven_grid(2, 3, b"abcdef\r\nxx");
+    let g = drive_new(2, 3, b"abcdef\r\nxx");
     assert_eq!(g.scrollback().len(), 1);
     assert!(g.row_soft_wrap_continued(0), "live tail must be tied");
     let q = SearchQuery::new("bcde", SearchOptions::default()).unwrap();
@@ -528,7 +522,7 @@ fn grid_search_stitches_a_line_across_the_scrollback_seam() {
 /// Keeps the overlay's top-is-most-recent ordering.
 #[test]
 fn grid_search_orders_hits_live_first_then_scrollback() {
-    let g = driven_grid(2, 8, b"foo\r\n.\r\n.\r\nfoo");
+    let g = drive_new(2, 8, b"foo\r\n.\r\n.\r\nfoo");
     let q = SearchQuery::new("foo", SearchOptions::default()).unwrap();
     let indices: Vec<i64> = g
         .search(&q, SearchSource::Scrollback)
@@ -572,7 +566,7 @@ fn line_indices(g: &crate::Grid, q: &SearchQuery, source: SearchSource) -> Vec<i
 /// needle reports nothing.
 #[test]
 fn visible_search_leaves_scrollback_out() {
-    let g = driven_grid(2, 8, b"needle\r\n.\r\n.\r\nneedle");
+    let g = drive_new(2, 8, b"needle\r\n.\r\n.\r\nneedle");
     let q = SearchQuery::new("needle", SearchOptions::default()).unwrap();
     assert_eq!(line_indices(&g, &q, SearchSource::Visible), vec![1]);
 }
@@ -611,7 +605,7 @@ fn visible_search_reads_the_alternate_screen_in_cell_columns() {
 /// line there instead, so only the on-screen tail matches.
 #[test]
 fn visible_search_does_not_stitch_into_scrollback() {
-    let g = driven_grid(2, 3, b"abcdef\r\nxx");
+    let g = drive_new(2, 3, b"abcdef\r\nxx");
     assert!(g.row_soft_wrap_continued(0), "live tail must be tied");
     let spanning = SearchQuery::new("bcde", SearchOptions::default()).unwrap();
     assert_eq!(
@@ -629,9 +623,7 @@ fn visible_search_does_not_stitch_into_scrollback() {
 /// needle crossing that wrap edge is found with one segment per row.
 #[test]
 fn visible_search_stitches_soft_wrapped_alternate_screen_rows() {
-    let mut g = crate::Grid::new(3, 4);
-    let mut p = felis_vt::Parser::new();
-    crate::test_support::drive(&mut p, &mut g, b"\x1b[?1049h\x1b[Habcdefgh");
+    let g = drive_new(3, 4, b"\x1b[?1049h\x1b[Habcdefgh");
     assert!(
         g.row_soft_wrap_continued(1),
         "the alt row's wrap bit is set"
