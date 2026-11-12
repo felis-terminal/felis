@@ -196,11 +196,7 @@ mod tests {
         use std::fs;
         use std::os::unix::fs::PermissionsExt as _;
 
-        fn private_dir() -> tempfile::TempDir {
-            let dir = tempfile::tempdir().unwrap();
-            fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
-            dir
-        }
+        use crate::test_support::private_dir;
 
         #[test]
         fn the_default_endpoint_has_no_adjacent_log_dir() {
