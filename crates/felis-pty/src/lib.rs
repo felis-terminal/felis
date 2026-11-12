@@ -909,4 +909,6 @@ fn poison<T>(_: std::sync::PoisonError<T>) -> io::Error {
 }
 
 #[cfg(test)]
+mod test_support;
+#[cfg(test)]
 mod tests;

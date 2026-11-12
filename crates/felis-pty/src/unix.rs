@@ -474,6 +474,7 @@ pub(crate) fn open_and_spawn(command: &Command, size: Size) -> Result<(Master, C
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::small_size;
     use rustix::io::{FdFlags, fcntl_getfd};
 
     fn closes_on_exec(fd: BorrowedFd<'_>) -> bool {
@@ -484,13 +485,7 @@ mod tests {
     /// `O_NOFOLLOW` audit (standing)".
     #[test]
     fn the_master_and_the_wake_pipe_never_reach_a_spawned_child() {
-        let (master, slave) = open_pair(Size {
-            rows: 24,
-            cols: 80,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .unwrap();
+        let (master, slave) = open_pair(small_size()).unwrap();
         assert!(closes_on_exec(master.as_fd()), "master");
         assert!(closes_on_exec(slave.as_fd()), "slave");
         let wake = WakePipe::new().unwrap();

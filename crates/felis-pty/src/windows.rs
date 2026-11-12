@@ -833,6 +833,7 @@ mod tests {
     fn test_quiesce() -> Arc<crate::quiesce::QuiesceShared> {
         Arc::new(crate::quiesce::QuiesceShared::new().expect("quiesce state"))
     }
+    use crate::test_support::{comspec, small_size};
     use crate::{Command, Size};
     use std::ffi::{OsStr, OsString};
     use std::io::Read;
@@ -844,13 +845,6 @@ mod tests {
     use std::time::{Duration, Instant};
     use windows_sys::Win32::Foundation::{INVALID_HANDLE_VALUE, WAIT_OBJECT_0};
     use windows_sys::Win32::System::Threading::WaitForSingleObject;
-
-    /// From `ComSpec` with the canonical location as a fallback, so the
-    /// spawn resolves under a stripped-down environment whose `PATH`
-    /// lacks `System32`.
-    fn comspec() -> OsString {
-        std::env::var_os("ComSpec").unwrap_or_else(|| r"C:\Windows\System32\cmd.exe".into())
-    }
 
     /// The `ConPTY` round trip on the inbox host: a child spawned onto a
     /// pseudoconsole, its output arriving on the master's read end, an
@@ -871,17 +865,8 @@ mod tests {
 
         let mut command = Command::new(comspec());
         command.args(["/c", &format!("echo {MARKER}")]);
-        let (master, mut child) = open_and_spawn_on(
-            host,
-            &command,
-            Size {
-                rows: 24,
-                cols: 80,
-                pixel_width: 0,
-                pixel_height: 0,
-            },
-        )
-        .expect("CreatePseudoConsole + CreateProcessW must spawn cmd.exe");
+        let (master, mut child) = open_and_spawn_on(host, &command, small_size())
+            .expect("CreatePseudoConsole + CreateProcessW must spawn cmd.exe");
 
         let mut reader = master
             .clone_reader(&test_quiesce())
@@ -1035,17 +1020,8 @@ mod tests {
             "--test-threads=1",
             "windows::tests::key_record_fixture_reports_console_input",
         ]);
-        let (master, mut child) = open_and_spawn_on(
-            host,
-            &command,
-            Size {
-                rows: 24,
-                cols: 80,
-                pixel_width: 0,
-                pixel_height: 0,
-            },
-        )
-        .expect("spawn the fixture onto a pseudoconsole");
+        let (master, mut child) = open_and_spawn_on(host, &command, small_size())
+            .expect("spawn the fixture onto a pseudoconsole");
 
         let mut reader = master
             .clone_reader(&test_quiesce())
@@ -1361,17 +1337,8 @@ mod tests {
 
         let mut command = Command::new(comspec());
         command.args(["/c", "echo felis-bundled-host"]);
-        let (master, mut child) = open_and_spawn_on(
-            Host::Bundled,
-            &command,
-            Size {
-                rows: 24,
-                cols: 80,
-                pixel_width: 0,
-                pixel_height: 0,
-            },
-        )
-        .expect("spawn on the bundled host");
+        let (master, mut child) = open_and_spawn_on(Host::Bundled, &command, small_size())
+            .expect("spawn on the bundled host");
         let expected = std::fs::canonicalize(&host).expect("canonical host path");
         let images = openconsole_children();
         drop(child.kill());

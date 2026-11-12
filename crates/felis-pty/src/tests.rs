@@ -1,28 +1,14 @@
 use std::time::Duration;
 
 use super::*;
+#[cfg(windows)]
+use crate::test_support::comspec;
+use crate::test_support::small_size;
 
 mod child_lifecycle;
 mod park_and_adopt;
 mod sink_backpressure;
 mod spawn_and_io;
-
-fn small_size() -> Size {
-    Size {
-        rows: 24,
-        cols: 80,
-        pixel_width: 0,
-        pixel_height: 0,
-    }
-}
-
-/// From `ComSpec` with the canonical location as a fallback, so the
-/// spawn resolves under a stripped-down environment whose `PATH`
-/// lacks `System32`.
-#[cfg(windows)]
-fn comspec() -> std::ffi::OsString {
-    std::env::var_os("ComSpec").unwrap_or_else(|| r"C:\Windows\System32\cmd.exe".into())
-}
 
 #[cfg(unix)]
 fn shell_echo(marker: &str) -> Command {
