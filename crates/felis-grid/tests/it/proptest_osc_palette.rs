@@ -12,13 +12,6 @@ use proptest::prelude::*;
 
 use crate::common;
 
-fn responses_for(bytes: &[u8]) -> Vec<Vec<u8>> {
-    let mut g = Grid::new(4, 16);
-    let mut p = Parser::new();
-    p.advance(&mut g, bytes);
-    common::responses(&mut g)
-}
-
 /// The three syntaxes `XParseColor` accepts that felis's producers
 /// actually emit; the four-digit form carries a low byte the terminal
 /// must drop rather than mix in.
@@ -60,7 +53,7 @@ proptest! {
         let cmd = format!(
             "\x1b]4;{idx};#{r:02x}{g:02x}{b:02x}\x1b\\\x1b]4;{idx};?\x1b\\"
         );
-        let responses = responses_for(cmd.as_bytes());
+        let responses = common::drive_take(4, 16, cmd.as_bytes()).1;
         prop_assert_eq!(responses.len(), 1);
         prop_assert_eq!(&responses[0], &expected_response("4", u16::from(idx), (r, g, b)));
     }
@@ -78,7 +71,7 @@ proptest! {
              \x1b]104;{idx}\x1b\\\
              \x1b]4;{idx};?\x1b\\"
         );
-        let responses = responses_for(cmd.as_bytes());
+        let responses = common::drive_take(4, 16, cmd.as_bytes()).1;
         prop_assert_eq!(responses.len(), 2);
         prop_assert_eq!(&responses[0], &responses[1]);
         prop_assert_eq!(
@@ -100,7 +93,7 @@ proptest! {
              \x1b]4;{idx_a};?\x1b\\\
              \x1b]4;{idx_b};?\x1b\\"
         );
-        let responses = responses_for(cmd.as_bytes());
+        let responses = common::drive_take(4, 16, cmd.as_bytes()).1;
         prop_assert_eq!(responses.len(), 2);
         prop_assert_eq!(
             &responses[0],
@@ -124,7 +117,7 @@ proptest! {
             "\x1b]4;{idx_a};#{ra:02x}{ga:02x}{ba:02x};{idx_b};#{rb:02x}{gb:02x}{bb:02x}\x1b\\\
              \x1b]4;{idx_a};?;{idx_b};?\x1b\\"
         );
-        let responses = responses_for(cmd.as_bytes());
+        let responses = common::drive_take(4, 16, cmd.as_bytes()).1;
         prop_assert_eq!(responses.len(), 2);
         prop_assert_eq!(&responses[0], &expected_response("4", u16::from(idx_a), (ra, ga, ba)));
         prop_assert_eq!(&responses[1], &expected_response("4", u16::from(idx_b), (rb, gb, bb)));
@@ -143,7 +136,7 @@ proptest! {
              \x1b]105;{idx}\x1b\\\
              \x1b]5;{idx};?\x1b\\"
         );
-        let responses = responses_for(cmd.as_bytes());
+        let responses = common::drive_take(4, 16, cmd.as_bytes()).1;
         prop_assert_eq!(responses.len(), 2);
         prop_assert_eq!(&responses[0], &expected_response("5", u16::from(idx), (r, g, b)));
         prop_assert_eq!(

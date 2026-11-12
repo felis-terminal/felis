@@ -6,10 +6,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use felis_grid::{
-    Grid, KNOWN_MODIFIABLE_DEC_MODES, PERMANENTLY_RESET_ANSI_MODES, PERMANENTLY_RESET_DEC_MODES,
+    KNOWN_MODIFIABLE_DEC_MODES, PERMANENTLY_RESET_ANSI_MODES, PERMANENTLY_RESET_DEC_MODES,
     PERMANENTLY_SET_DEC_MODES,
 };
-use felis_vt::Parser;
 use proptest::prelude::*;
 
 use crate::common;
@@ -17,14 +16,6 @@ use crate::common;
 const ANSI_FUNCTIONAL: &[u16] = &[4, 20];
 const ANSI_UNIMPLEMENTED: &[u16] = &[2, 12, 21, 33, 99];
 const DEC_FUNCTIONAL: &[u16] = &[1, 5, 6, 7, 25, 1004, 1049, 2004, 2026];
-
-fn drive(bytes: &[u8]) -> (Grid, Vec<Vec<u8>>) {
-    let mut g = Grid::new(4, 16);
-    let mut p = Parser::new();
-    p.advance(&mut g, bytes);
-    let responses = common::responses(&mut g);
-    (g, responses)
-}
 
 fn parse_decrqm_reply(bytes: &[u8]) -> Option<(bool, u16, u8)> {
     let s = std::str::from_utf8(bytes).ok()?;
@@ -50,7 +41,7 @@ proptest! {
             cmd.extend_from_slice(format!("\x1b[{mode}{}", if *set { 'h' } else { 'l' }).as_bytes());
         }
         cmd.extend_from_slice(format!("\x1b[{mode}$p").as_bytes());
-        let (_g, responses) = drive(&cmd);
+        let (_g, responses) = common::drive_take(4, 16, &cmd);
         prop_assert_eq!(responses.len(), 1);
         let (private, m, ps) = parse_decrqm_reply(&responses[0]).unwrap();
         prop_assert!(!private);
@@ -69,7 +60,7 @@ proptest! {
             cmd.extend_from_slice(format!("\x1b[{mode}{}", if *set { 'h' } else { 'l' }).as_bytes());
         }
         cmd.extend_from_slice(format!("\x1b[{mode}$p").as_bytes());
-        let (_g, responses) = drive(&cmd);
+        let (_g, responses) = common::drive_take(4, 16, &cmd);
         let (_, m, ps) = parse_decrqm_reply(&responses[0]).unwrap();
         prop_assert_eq!(m, mode);
         let expected = match writes.last() {
@@ -90,7 +81,7 @@ proptest! {
             cmd.extend_from_slice(format!("\x1b[{mode}{}", if *set { 'h' } else { 'l' }).as_bytes());
         }
         cmd.extend_from_slice(format!("\x1b[{mode}$p").as_bytes());
-        let (_g, responses) = drive(&cmd);
+        let (_g, responses) = common::drive_take(4, 16, &cmd);
         let (private, m, ps) = parse_decrqm_reply(&responses[0]).unwrap();
         prop_assert!(!private);
         prop_assert_eq!(m, mode);
@@ -107,7 +98,7 @@ proptest! {
             "\x1b[?{mode}{}\x1b[?{mode}$p",
             if set { 'h' } else { 'l' }
         );
-        let (_g, responses) = drive(cmd.as_bytes());
+        let (_g, responses) = common::drive_take(4, 16, cmd.as_bytes());
         let (private, m, ps) = parse_decrqm_reply(&responses[0]).unwrap();
         prop_assert!(private);
         prop_assert_eq!(m, mode);
@@ -126,7 +117,7 @@ proptest! {
             cmd.extend_from_slice(format!("\x1b[?{mode}{}", if *set { 'h' } else { 'l' }).as_bytes());
         }
         cmd.extend_from_slice(format!("\x1b[?{mode}$p").as_bytes());
-        let (_g, responses) = drive(&cmd);
+        let (_g, responses) = common::drive_take(4, 16, &cmd);
         let (private, m, ps) = parse_decrqm_reply(&responses[0]).unwrap();
         prop_assert!(private);
         prop_assert_eq!(m, mode);
@@ -148,7 +139,7 @@ proptest! {
             cmd.extend_from_slice(format!("\x1b[?{mode}{}", if *set { 'h' } else { 'l' }).as_bytes());
         }
         cmd.extend_from_slice(format!("\x1b[?{mode}$p").as_bytes());
-        let (_g, responses) = drive(&cmd);
+        let (_g, responses) = common::drive_take(4, 16, &cmd);
         let (private, m, ps) = parse_decrqm_reply(&responses[0]).unwrap();
         prop_assert!(private);
         prop_assert_eq!(m, mode);
@@ -166,7 +157,7 @@ proptest! {
             cmd.extend_from_slice(format!("\x1b[?{mode}{}", if *set { 'h' } else { 'l' }).as_bytes());
         }
         cmd.extend_from_slice(format!("\x1b[?{mode}$p").as_bytes());
-        let (_g, responses) = drive(&cmd);
+        let (_g, responses) = common::drive_take(4, 16, &cmd);
         let (private, m, ps) = parse_decrqm_reply(&responses[0]).unwrap();
         prop_assert!(private);
         prop_assert_eq!(m, mode);

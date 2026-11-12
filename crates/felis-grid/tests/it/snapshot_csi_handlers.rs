@@ -47,6 +47,14 @@ fn debug_bytes(b: &[u8]) -> String {
     s
 }
 
+fn pin_replies(replies: &[Vec<u8>]) -> String {
+    replies
+        .iter()
+        .map(|r| debug_bytes(r))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[test]
 fn cursor_positioning_handlers_compose() {
     let g = drive(3, 8, b"\x1b[2;3H\x1b[1C\x1b[1B\x1b[1A\x1b[6G\x1b[2dX");
@@ -171,8 +179,7 @@ fn kitty_kbd_push_set_pop_walks_the_stack() {
 #[test]
 fn queries_emit_replies_into_the_response_queue() {
     let (_g, replies) = drive_take(2, 4, b"\x1b[c\x1b[5n\x1b[6n\x1b[?u");
-    let pretty: Vec<String> = replies.iter().map(|r| debug_bytes(r)).collect();
-    insta::assert_snapshot!(pretty.join("\n"), @r"
+    insta::assert_snapshot!(pin_replies(&replies), @r"
     \e[?64;1;2;6;9;15;16;17;18;21;22;28;29c
     \e[0n
     \e[1;1R
@@ -188,8 +195,7 @@ fn osc_color_query_replies_in_xterm_byte_replicated_form() {
         b"\x1b]10;#11ee99\x07\x1b]11;#3355aa\x07\x1b]12;#ff7700\x07\
           \x1b]10;?\x07\x1b]11;?\x07\x1b]12;?\x07",
     );
-    let pretty: Vec<String> = replies.iter().map(|r| debug_bytes(r)).collect();
-    insta::assert_snapshot!(pretty.join("\n"), @r"
+    insta::assert_snapshot!(pin_replies(&replies), @r"
     \e]10;rgb:1111/eeee/9999\e\
     \e]11;rgb:3333/5555/aaaa\e\
     \e]12;rgb:ffff/7777/0000\e\
@@ -201,8 +207,7 @@ fn osc_color_query_replies_with_grid_default_when_no_override() {
     // xterm always replies to `OSC 10/11/12 ; ?`; silence times out
     // esctest's `test_ResetSpecialColor_Dynamic`.
     let (_g, replies) = drive_take(1, 1, b"\x1b]10;?\x07\x1b]11;?\x07\x1b]12;?\x07");
-    let pretty: Vec<String> = replies.iter().map(|r| debug_bytes(r)).collect();
-    insta::assert_snapshot!(pretty.join("\n"), @r"
+    insta::assert_snapshot!(pin_replies(&replies), @r"
     \e]10;rgb:0000/0000/0000\e\
     \e]11;rgb:ffff/ffff/ffff\e\
     \e]12;rgb:0000/0000/0000\e\
@@ -311,32 +316,26 @@ fn decrqss_reports_current_sgr_pen() {
     // xterm prefixes the "0" reset so the re-emitted payload restores
     // the pen without prior SGR accumulation (esctest `test_DECRQSS_SGR`).
     let (_g, replies) = drive_take(1, 1, b"\x1bP$qm\x1b\\");
-    let pretty: Vec<String> = replies.iter().map(|r| debug_bytes(r)).collect();
-    insta::assert_snapshot!(pretty.join("\n"), @r"\eP1$r0m\e\");
+    insta::assert_snapshot!(pin_replies(&replies), @r"\eP1$r0m\e\");
 
     let (_g, replies) = drive_take(1, 1, b"\x1b[1;31m\x1bP$qm\x1b\\");
-    let pretty: Vec<String> = replies.iter().map(|r| debug_bytes(r)).collect();
-    insta::assert_snapshot!(pretty.join("\n"), @r"\eP1$r0;1;31m\e\");
+    insta::assert_snapshot!(pin_replies(&replies), @r"\eP1$r0;1;31m\e\");
 
     // SGR 58 has no 16-color short form; xterm uses the colon sub-params.
     let (_g, replies) = drive_take(1, 1, b"\x1b[4:3;58:2::10:20:30m\x1bP$qm\x1b\\");
-    let pretty: Vec<String> = replies.iter().map(|r| debug_bytes(r)).collect();
-    insta::assert_snapshot!(pretty.join("\n"), @r"\eP1$r0;4:3;58:2::10:20:30m\e\");
+    insta::assert_snapshot!(pin_replies(&replies), @r"\eP1$r0;4:3;58:2::10:20:30m\e\");
 
     let (_g, replies) = drive_take(1, 1, b"\x1b[58:5:196m\x1bP$qm\x1b\\");
-    let pretty: Vec<String> = replies.iter().map(|r| debug_bytes(r)).collect();
-    insta::assert_snapshot!(pretty.join("\n"), @r"\eP1$r0;58:5:196m\e\");
+    insta::assert_snapshot!(pin_replies(&replies), @r"\eP1$r0;58:5:196m\e\");
 }
 
 #[test]
 fn decrqss_reports_scroll_region_and_unknown_invalid() {
     let (_g, replies) = drive_take(20, 80, b"\x1b[5;10r\x1bP$qr\x1b\\");
-    let pretty: Vec<String> = replies.iter().map(|r| debug_bytes(r)).collect();
-    insta::assert_snapshot!(pretty.join("\n"), @r"\eP1$r5;10r\e\");
+    insta::assert_snapshot!(pin_replies(&replies), @r"\eP1$r5;10r\e\");
 
     let (_g, replies) = drive_take(1, 1, b"\x1bP$qxyz\x1b\\");
-    let pretty: Vec<String> = replies.iter().map(|r| debug_bytes(r)).collect();
-    insta::assert_snapshot!(pretty.join("\n"), @r"\eP0$r\e\");
+    insta::assert_snapshot!(pin_replies(&replies), @r"\eP0$r\e\");
 }
 
 #[test]
@@ -499,8 +498,7 @@ fn da2_replies_with_secondary_device_attributes() {
     // VT420 family (41) per docs/reference/terminal-identity.md; firmware
     // 400 sits inside esctest's [314, 999] acceptance range.
     let (_g, replies) = drive_take(1, 1, b"\x1b[>c");
-    let pretty: Vec<String> = replies.iter().map(|r| debug_bytes(r)).collect();
-    insta::assert_snapshot!(pretty.join("\n"), @r"\e[>41;400;0c");
+    insta::assert_snapshot!(pin_replies(&replies), @r"\e[>41;400;0c");
 }
 
 #[test]
@@ -518,8 +516,7 @@ fn irm_shifts_cells_right_on_print() {
 #[test]
 fn decrqm_reports_current_mode_state() {
     let (_g, replies) = drive_take(1, 1, b"\x1b[?7$p\x1b[4$p");
-    let pretty: Vec<String> = replies.iter().map(|r| debug_bytes(r)).collect();
-    insta::assert_snapshot!(pretty.join("\n"), @r"
+    insta::assert_snapshot!(pin_replies(&replies), @r"
     \e[?7;1$y
     \e[4;2$y
     ");
@@ -531,8 +528,7 @@ fn decrqm_reports_modifiable_for_deccolm_permanent_reset_for_decarm() {
     // `test_DECRQM_DEC_DECARM` `@knownBug`, so any other reply trips
     // "Should have failed".
     let (_g, replies) = drive_take(1, 1, b"\x1b[?3$p\x1b[?8$p");
-    let pretty: Vec<String> = replies.iter().map(|r| debug_bytes(r)).collect();
-    insta::assert_snapshot!(pretty.join("\n"), @r"
+    insta::assert_snapshot!(pin_replies(&replies), @r"
     \e[?3;2$y
     \e[?8;4$y
     ");
@@ -541,8 +537,7 @@ fn decrqm_reports_modifiable_for_deccolm_permanent_reset_for_decarm() {
 #[test]
 fn decrqm_unknown_mode_replies_zero() {
     let (_g, replies) = drive_take(1, 1, b"\x1b[?9999$p");
-    let pretty: Vec<String> = replies.iter().map(|r| debug_bytes(r)).collect();
-    insta::assert_snapshot!(pretty.join("\n"), @r"\e[?9999;0$y");
+    insta::assert_snapshot!(pin_replies(&replies), @r"\e[?9999;0$y");
 }
 
 #[test]
@@ -609,8 +604,7 @@ fn deckpam_deckpnm_toggle_application_keypad() {
 #[test]
 fn decreqtparm_replies_with_vt100_defaults() {
     let (_g, replies) = drive_take(1, 1, b"\x1b[0x\x1b[1x");
-    let pretty: Vec<String> = replies.iter().map(|r| debug_bytes(r)).collect();
-    insta::assert_snapshot!(pretty.join("\n"), @r"
+    insta::assert_snapshot!(pin_replies(&replies), @r"
     \e[2;1;1;120;120;1;0x
     \e[3;1;1;120;120;1;0x
     ");
@@ -632,13 +626,11 @@ fn decaln_fills_screen_with_e_and_homes_cursor() {
 #[test]
 fn decid_alias_replies_with_da1() {
     let (_g, replies) = drive_take(1, 1, b"\x1bZ");
-    let pretty: Vec<String> = replies.iter().map(|r| debug_bytes(r)).collect();
-    insta::assert_snapshot!(pretty.join("\n"), @r"\e[?64;1;2;6;9;15;16;17;18;21;22;28;29c");
+    insta::assert_snapshot!(pin_replies(&replies), @r"\e[?64;1;2;6;9;15;16;17;18;21;22;28;29c");
 }
 
 #[test]
 fn xterm_size_in_cells_reports_grid_dimensions() {
     let (_g, replies) = drive_take(24, 80, b"\x1b[18t");
-    let pretty: Vec<String> = replies.iter().map(|r| debug_bytes(r)).collect();
-    insta::assert_snapshot!(pretty.join("\n"), @r"\e[8;24;80t");
+    insta::assert_snapshot!(pin_replies(&replies), @r"\e[8;24;80t");
 }

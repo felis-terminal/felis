@@ -11,26 +11,7 @@ use felis_grid::program_status::limits::{
 use felis_grid::program_status::{Kind, Osc7501, Report, State, Terminator, parse_osc7501};
 use proptest::prelude::*;
 
-/// Independent of `felis_protocol::base64`, which the decoder uses.
-fn b64(bytes: &[u8], padded: bool) -> String {
-    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::new();
-    for chunk in bytes.chunks(3) {
-        let n = chunk
-            .iter()
-            .enumerate()
-            .fold(0u32, |n, (i, &b)| n | u32::from(b) << (16 - 8 * i));
-        for i in 0..=chunk.len() {
-            out.push(char::from(A[(n >> (18 - 6 * i) & 63) as usize]));
-        }
-        if padded {
-            for _ in chunk.len()..3 {
-                out.push('=');
-            }
-        }
-    }
-    out
-}
+use crate::common;
 
 const NAME: &str = "[A-Za-z0-9_.+-]";
 
@@ -101,10 +82,13 @@ fn pairs(r: &Report, padded: bool) -> Vec<String> {
         out.push(format!("app={a}"));
     }
     if let Some(t) = &r.title {
-        out.push(format!("title={}", b64(t.as_bytes(), padded)));
+        out.push(format!(
+            "title={}",
+            common::b64_encode(t.as_bytes(), padded)
+        ));
     }
     if let Some(m) = &r.msg {
-        out.push(format!("msg={}", b64(m.as_bytes(), padded)));
+        out.push(format!("msg={}", common::b64_encode(m.as_bytes(), padded)));
     }
     out
 }
@@ -213,8 +197,8 @@ proptest! {
             (APP_MAX + 1..APP_MAX + 8).prop_map(|n| (format!("app={}", "a".repeat(n)), "app")),
             Just(("msg=a".to_owned(), "msg")),
             Just((format!("title={}", "A".repeat(TITLE_ENCODED_MAX + 4)), "title")),
-            Just((format!("msg={}", b64(b"a\x07b", true)), "msg")),
-            Just((format!("title={}", b64(&[0xC0, 0x80], true)), "title")),
+            Just((format!("msg={}", common::b64_encode(b"a\x07b", true)), "msg")),
+            Just((format!("title={}", common::b64_encode(&[0xC0, 0x80], true)), "title")),
             Just(("id=a//b".to_owned(), "id")),
             Just(("id=a b".to_owned(), "id")),
             Just((format!("{}=x", "k".repeat(KEY_MAX + 1)), "key")),

@@ -7,44 +7,16 @@
 use std::num::{NonZeroU16, NonZeroU32};
 
 use felis_grid::{
-    AttrFlags, Attributes, Cell, Color, DecodedRow, Grapheme, HAlign, RowEncode, Sizing, StyleId,
-    StyleTable, UnderlineStyle, VAlign, decode_row, encode_row,
+    Attributes, Cell, Color, DecodedRow, Grapheme, HAlign, RowEncode, Sizing, StyleId, StyleTable,
+    VAlign, decode_row, encode_row,
 };
 use proptest::prelude::*;
+
+use crate::common;
 
 const WIDE_CHARS: &[char] = &['あ', '漢', '한', '🙂'];
 
 const NARROW_CHARS: &[char] = &['é', 'ß', 'λ', '→'];
-
-fn color() -> impl Strategy<Value = Color> {
-    prop_oneof![
-        Just(Color::Default),
-        any::<u8>().prop_map(Color::Indexed),
-        (any::<u8>(), any::<u8>(), any::<u8>()).prop_map(|(r, g, b)| Color::Rgb(r, g, b)),
-    ]
-}
-
-fn underline_style() -> impl Strategy<Value = UnderlineStyle> {
-    prop::sample::select(vec![
-        UnderlineStyle::Single,
-        UnderlineStyle::Double,
-        UnderlineStyle::Curly,
-        UnderlineStyle::Dotted,
-        UnderlineStyle::Dashed,
-    ])
-}
-
-fn attributes() -> impl Strategy<Value = Attributes> {
-    (color(), color(), color(), any::<u16>(), underline_style()).prop_map(
-        |(fg, bg, underline_color, bits, underline_style)| Attributes {
-            fg,
-            bg,
-            underline_color,
-            flags: AttrFlags::from_bits_truncate(bits),
-            underline_style,
-        },
-    )
-}
 
 #[derive(Debug, Clone)]
 enum CellShape {
@@ -182,7 +154,7 @@ fn check_round_trip(
 proptest! {
     #[test]
     fn a_row_round_trips(
-        pens in proptest::collection::vec(attributes(), 1..=4),
+        pens in proptest::collection::vec(common::arb_attributes(), 1..=4),
         shapes in proptest::collection::vec(decorated_shape(), 0..24),
         pad_extra in 0usize..8,
         sized in sized_cells(),
@@ -202,7 +174,7 @@ proptest! {
 
     #[test]
     fn pad_to_below_cell_count_ships_every_cell(
-        pens in proptest::collection::vec(attributes(), 1..=4),
+        pens in proptest::collection::vec(common::arb_attributes(), 1..=4),
         shapes in proptest::collection::vec(decorated_shape(), 1..24),
         clip in 0usize..24,
     ) {
@@ -220,8 +192,8 @@ proptest! {
 
     #[test]
     fn pens_resolve_against_an_independently_populated_client_table(
-        pens in proptest::collection::vec(attributes(), 1..=4),
-        client_seed in proptest::collection::vec(attributes(), 1..=4),
+        pens in proptest::collection::vec(common::arb_attributes(), 1..=4),
+        client_seed in proptest::collection::vec(common::arb_attributes(), 1..=4),
         shapes in proptest::collection::vec(decorated_shape(), 0..24),
     ) {
         let (cells, daemon_styles) = build_row(&pens, &shapes);
@@ -241,7 +213,7 @@ proptest! {
 
     #[test]
     fn a_shared_client_table_decodes_successive_rows_independently(
-        pens in proptest::collection::vec(attributes(), 1..=4),
+        pens in proptest::collection::vec(common::arb_attributes(), 1..=4),
         rows in proptest::collection::vec(
             proptest::collection::vec(decorated_shape(), 0..12),
             1..4,
@@ -264,7 +236,7 @@ proptest! {
 
     #[test]
     fn uniform_rows_encode_smaller_than_alternating_ones(
-        pen in attributes(),
+        pen in common::arb_attributes(),
         cols in 8usize..64,
     ) {
         let mut styles = StyleTable::new();
@@ -303,7 +275,7 @@ proptest! {
 
     #[test]
     fn truncated_payloads_never_decode(
-        pens in proptest::collection::vec(attributes(), 1..=4),
+        pens in proptest::collection::vec(common::arb_attributes(), 1..=4),
         shapes in proptest::collection::vec(decorated_shape(), 1..24),
         cut in 1usize..64,
     ) {

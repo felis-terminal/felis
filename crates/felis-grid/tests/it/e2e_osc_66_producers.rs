@@ -3,38 +3,14 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::fmt::Write;
-
-use felis_grid::{Grapheme, Grid};
+use felis_grid::Grid;
 
 use crate::common;
 use common::drive;
 
 fn render(grid: &Grid) -> String {
     let mut out = String::new();
-    for r in 0..grid.rows() {
-        let mut text = String::new();
-        let mut sizings = String::new();
-        for c in 0..grid.cols() {
-            let cell = grid.cell(r, c).unwrap();
-            let ch = match &cell.grapheme {
-                Grapheme::Empty => ' ',
-                Grapheme::Spacer => '_',
-                Grapheme::SizedSpacer => '·',
-                Grapheme::Ascii(b) => *b as char,
-                Grapheme::Char(c) => *c,
-                Grapheme::Cluster(id) => grid
-                    .cluster_str(*id)
-                    .and_then(|s| s.chars().next())
-                    .unwrap_or(' '),
-            };
-            text.push(ch);
-            sizings.push(grid.cell_sizing_handle(r, c).map_or('.', |h| {
-                char::from_digit(u32::from(h.get()), 16).unwrap_or('?')
-            }));
-        }
-        writeln!(out, "row {r}: {text:?} sizings={sizings:?}").unwrap();
-    }
+    common::write_sizing_rows(&mut out, grid, '_', '·');
     out
 }
 

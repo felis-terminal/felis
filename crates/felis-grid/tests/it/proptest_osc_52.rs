@@ -12,33 +12,6 @@ use proptest::prelude::*;
 use crate::common;
 use common::drive_with;
 
-const ALPHA: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-/// Independent of the production base64 so the round-trip checks the
-/// production encoder against a second implementation.
-fn b64_encode(input: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(input.len().div_ceil(3) * 4);
-    for chunk in input.chunks(3) {
-        let b0 = chunk[0];
-        let b1 = chunk.get(1).copied().unwrap_or(0);
-        let b2 = chunk.get(2).copied().unwrap_or(0);
-        out.push(ALPHA[(b0 >> 2) as usize]);
-        out.push(ALPHA[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize]);
-        if chunk.len() == 1 {
-            out.push(b'=');
-            out.push(b'=');
-        } else {
-            out.push(ALPHA[(((b1 & 0x0F) << 2) | (b2 >> 6)) as usize]);
-            if chunk.len() == 2 {
-                out.push(b'=');
-            } else {
-                out.push(ALPHA[(b2 & 0x3F) as usize]);
-            }
-        }
-    }
-    out
-}
-
 fn b64_decode(input: &[u8]) -> Vec<u8> {
     let lookup = |b: u8| -> u8 {
         match b {
@@ -76,7 +49,7 @@ fn osc_52_set(selector: &[u8], payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::from(b"\x1b]52;");
     out.extend_from_slice(selector);
     out.push(b';');
-    out.extend_from_slice(&b64_encode(payload));
+    out.extend_from_slice(common::b64_encode(payload, true).as_bytes());
     out.push(0x07);
     out
 }

@@ -10,8 +10,10 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-use felis_grid::{AttrFlags, Attributes, Color, UnderlineStyle};
+use felis_grid::{AttrFlags, Attributes, Color};
 use proptest::prelude::*;
+
+use crate::common;
 
 fn hash_of(pen: &Attributes) -> u64 {
     let mut h = DefaultHasher::new();
@@ -49,43 +51,6 @@ fn finite_colors_hash_injectively_across_all_color_slots() {
     }));
 }
 
-fn arb_color() -> impl Strategy<Value = Color> {
-    prop_oneof![
-        Just(Color::Default),
-        any::<u8>().prop_map(Color::Indexed),
-        any::<(u8, u8, u8)>().prop_map(|(r, g, b)| Color::Rgb(r, g, b)),
-    ]
-}
-
-fn arb_attributes() -> impl Strategy<Value = Attributes> {
-    (
-        arb_color(),
-        arb_color(),
-        arb_color(),
-        any::<u16>(),
-        arb_underline_style(),
-    )
-        .prop_map(
-            |(fg, bg, underline_color, bits, underline_style)| Attributes {
-                fg,
-                bg,
-                underline_color,
-                flags: AttrFlags::from_bits_truncate(bits),
-                underline_style,
-            },
-        )
-}
-
-fn arb_underline_style() -> impl Strategy<Value = UnderlineStyle> {
-    prop_oneof![
-        Just(UnderlineStyle::Single),
-        Just(UnderlineStyle::Double),
-        Just(UnderlineStyle::Curly),
-        Just(UnderlineStyle::Dotted),
-        Just(UnderlineStyle::Dashed),
-    ]
-}
-
 proptest! {
     #[test]
     fn rgb_pens_one_bit_apart_hash_differently(
@@ -102,11 +67,11 @@ proptest! {
 
     #[test]
     fn attributes_hash_equal_until_one_field_differs(
-        a in arb_attributes(),
+        a in common::arb_attributes(),
         field in 0usize..5,
-        color in arb_color(),
+        color in common::arb_color(),
         flag_bit in 0u32..16,
-        style in arb_underline_style(),
+        style in common::arb_underline_style(),
     ) {
         let mut b = a;
         prop_assert_eq!(hash_of(&a), hash_of(&b));

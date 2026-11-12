@@ -6,18 +6,9 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use felis_grid::Grid;
-use felis_vt::Parser;
 use proptest::prelude::*;
 
 use crate::common;
-
-fn responses_for(rows: u16, cols: u16, bytes: &[u8]) -> Vec<Vec<u8>> {
-    let mut g = Grid::new(rows, cols);
-    let mut p = Parser::new();
-    p.advance(&mut g, bytes);
-    common::responses(&mut g)
-}
 
 fn parse_decrqcra_reply(bytes: &[u8]) -> Option<(u16, u16)> {
     let s = std::str::from_utf8(bytes).ok()?;
@@ -34,7 +25,7 @@ proptest! {
         let bytes = [ch];
         let mut cmd = bytes.to_vec();
         cmd.extend_from_slice(b"\x1b[1;1;1;1;1;1*y");
-        let responses = responses_for(4, 8, &cmd);
+        let responses = common::drive_take(4, 8, &cmd).1;
         prop_assert_eq!(responses.len(), 1);
         let (pid, checksum) = parse_decrqcra_reply(&responses[0]).unwrap();
         prop_assert_eq!(pid, 1);
@@ -49,7 +40,7 @@ proptest! {
     ) {
         let mut cmd = vec![a, b];
         cmd.extend_from_slice(b"\x1b[2;1;1;1;1;2*y");
-        let responses = responses_for(4, 8, &cmd);
+        let responses = common::drive_take(4, 8, &cmd).1;
         let (pid, checksum) = parse_decrqcra_reply(&responses[0]).unwrap();
         prop_assert_eq!(pid, 2);
         let expected = u16::wrapping_neg(u16::from(a).wrapping_add(u16::from(b)));
@@ -63,7 +54,7 @@ proptest! {
         cols in 1u16..=6,
     ) {
         let cmd = format!("\x1b[3;1;1;1;{rows};{cols}*y");
-        let responses = responses_for(8, 8, cmd.as_bytes());
+        let responses = common::drive_take(8, 8, cmd.as_bytes()).1;
         let (pid, checksum) = parse_decrqcra_reply(&responses[0]).unwrap();
         prop_assert_eq!(pid, 3);
         let cells = u32::from(rows) * u32::from(cols);
@@ -80,12 +71,12 @@ proptest! {
         const ROWS: u16 = 4;
         const COLS: u16 = 8;
         let ref_cmd = format!("\x1b[10;1;1;1;{ROWS};{COLS}*y");
-        let ref_responses = responses_for(ROWS, COLS, ref_cmd.as_bytes());
+        let ref_responses = common::drive_take(ROWS, COLS, ref_cmd.as_bytes()).1;
         let (_, ref_checksum) = parse_decrqcra_reply(&ref_responses[0]).unwrap();
         let pb = ROWS.saturating_add(extra_rows);
         let pr = COLS.saturating_add(extra_cols);
         let cmd = format!("\x1b[11;1;1;1;{pb};{pr}*y");
-        let responses = responses_for(ROWS, COLS, cmd.as_bytes());
+        let responses = common::drive_take(ROWS, COLS, cmd.as_bytes()).1;
         let (pid, checksum) = parse_decrqcra_reply(&responses[0]).unwrap();
         prop_assert_eq!(pid, 11);
         prop_assert_eq!(checksum, ref_checksum);

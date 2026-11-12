@@ -9,7 +9,8 @@ use felis_vt::Parser;
 
 use crate::common;
 use common::{
-    cell_char, drive, scroll_ops, styled_cell_lines, write_cells, write_cursor, write_pen,
+    drive, drive_with, row_chars, scroll_ops, styled_cell_lines, write_cells, write_cursor,
+    write_pen,
 };
 
 fn render(grid: &Grid) -> String {
@@ -204,25 +205,20 @@ fn alternate_screen_leave_restores_primary_exactly() {
     ");
 }
 
-fn row_text(g: &Grid, r: u16) -> String {
-    (0..g.cols()).map(|c| cell_char(g, r, c)).collect()
-}
-
 #[test]
 fn alternate_screen_resize_trims_the_alt_and_rewraps_the_primary() {
-    use felis_vt::Parser;
     let mut g = Grid::new(3, 8);
     let mut p = Parser::new();
-    p.advance(&mut g, b"primary-row");
-    p.advance(&mut g, b"\x1b[?1049h");
-    p.advance(&mut g, b"alt-row");
+    drive_with(&mut p, &mut g, b"primary-row");
+    drive_with(&mut p, &mut g, b"\x1b[?1049h");
+    drive_with(&mut p, &mut g, b"alt-row");
     g.resize(3, 5);
     assert!(g.on_alternate_screen());
-    assert_eq!(row_text(&g, 0), "alt-r");
-    p.advance(&mut g, b"\x1b[?1049l");
-    assert_eq!(row_text(&g, 0), "prima");
-    assert_eq!(row_text(&g, 1), "ry-ro");
-    assert_eq!(row_text(&g, 2), "w....");
+    assert_eq!(row_chars(&g, 0), "alt-r");
+    drive_with(&mut p, &mut g, b"\x1b[?1049l");
+    assert_eq!(row_chars(&g, 0), "prima");
+    assert_eq!(row_chars(&g, 1), "ry-ro");
+    assert_eq!(row_chars(&g, 2), "w....");
 }
 
 #[test]
