@@ -13,10 +13,8 @@ use super::{
 };
 use crate::{
     Font, FontBytes, GlyphBitmap, GlyphId, WGHT, goldens, map_face_file, metadata,
-    raster::{
-        OutlineBackend, Rasterizer, SkrifaOutlines,
-        tests::{corpus, load},
-    },
+    raster::{OutlineBackend, Rasterizer, SkrifaOutlines, tests::corpus},
+    test_support::pinned,
 };
 
 const MENLO: &str = "/System/Library/Fonts/Menlo.ttc";
@@ -98,7 +96,7 @@ fn smoothing_changes_the_drawing_where_the_setting_enables_it() {
 /// `AppleFontSmoothing` selects, which differs from the other setting's.
 #[test]
 fn the_shipped_bitmap_is_drawn_with_the_selected_smoothing() {
-    let font = load("opentype/MonaspaceNeon-Regular.otf");
+    let font = pinned("opentype/MonaspaceNeon-Regular.otf");
     let (glyph, px) = (font.glyph_for('g').expect("Monaspace maps g"), 24.0);
     let ink_box = SkrifaOutlines::default()
         .layer_box(&font, glyph, px)
@@ -368,7 +366,7 @@ fn coretext_glyphs_sit_where_skrifas_do() {
 /// stop far short of, still leaves the pad's outer pixel unpainted.
 #[test]
 fn a_canvas_at_the_budget_keeps_its_outer_ring_empty() {
-    let font = load("opentype/MonaspaceNeon-Regular.otf");
+    let font = pinned("opentype/MonaspaceNeon-Regular.otf");
     let glyph = font.glyph_for('M').expect("Monaspace maps M");
     let px = 6872.0;
     let ink_box = SkrifaOutlines::default()
@@ -462,7 +460,7 @@ fn every_menlo_member_draws_its_own_face() {
 }
 
 fn variable() -> Font {
-    load("truetype/Monaspace Neon Var.ttf")
+    pinned("truetype/Monaspace Neon Var.ttf")
 }
 
 #[test]

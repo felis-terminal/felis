@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::pinned_arc;
 
 #[test]
 fn shape_run_with_empty_text_produces_no_glyphs() {
@@ -154,7 +155,7 @@ fn a_face_with_a_trak_table_shapes_untracked() {
         (buffer.glyph_positions()[0].x_advance as f32 - m_advance - 100.0).abs() < 0.5,
         "harfrust tracks the probe when it sees the table"
     );
-    let font = load_pinned(TRAK_PROBE);
+    let font = pinned_arc(TRAK_PROBE);
     let upem = f32::from(raw.head().expect("head").units_per_em());
     let mut shaper = Shaper::new();
     for px in [12.0, 16.0, 24.0, 32.0, 48.0] {

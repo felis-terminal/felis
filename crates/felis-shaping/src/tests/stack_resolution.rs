@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::pinned_dir_set;
 
 /// A typo in `font.family` falls back to `Family::Monospace` and
 /// picks the same face an unset `font.family` would.
@@ -23,9 +24,7 @@ fn unknown_primary_family_falls_back_to_monospace() {
 /// rules name `FreeMono` whether or not it is installed.
 #[test]
 fn uninstalled_monospace_generic_falls_back_to_an_installed_fixed_pitch_family() {
-    let dir = test_font_dir();
-    let mut db = FileSet::default();
-    db.add_dir(dir);
+    let mut db = pinned_dir_set();
     db.set_monospace_family("FreeMono");
 
     let (id, family) = db
@@ -100,9 +99,7 @@ fn stack_resolve_picks_first_match() {
 
 #[test]
 fn stack_resolve_walks_past_primary_when_it_lacks_glyph() {
-    let dir = test_font_dir();
-    let mut db = FileSet::default();
-    db.add_dir(dir);
+    let db = pinned_dir_set();
     let primary = Arc::new(Font::try_load_with(&db, TEST_FONT_FAMILY).expect("pinned primary"));
     let cjk = Arc::new(Font::try_load_with(&db, PINNED_CJK_FAMILY).expect("pinned CJK face"));
     let cjk_target = '\u{845B}';
@@ -121,9 +118,7 @@ fn stack_resolve_walks_past_primary_when_it_lacks_glyph() {
 /// a mono home and legitimately go color.
 #[test]
 fn text_presentation_dingbats_resolve_to_mono_not_color() {
-    let dir = test_font_dir();
-    let mut db = FileSet::default();
-    db.add_dir(dir);
+    let db = pinned_dir_set();
     // The pinned db has no fontconfig generic-family aliases, so
     // `Family::Monospace` would not resolve.
     let stack = FontStack::auto_discover_in(

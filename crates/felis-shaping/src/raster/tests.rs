@@ -7,20 +7,14 @@ use skrifa::{HintOptions, RasterTarget, ScalerFont};
 
 use super::{Hinting, OutlineBackend, RasterOptions, SkrifaOutlines, scaler_font};
 use crate::{
-    FileSet, Font, GlyphBitmap,
+    Font, GlyphBitmap,
     goldens::{Digest, assert_golden},
     provider::{FaceHinting, FaceSource, ResolvedFace},
     test_font_dir,
+    test_support::pinned,
 };
 
 const SYMBOLS: &str = "←↑→↓↔⇒∀∃∅∈∑√∞≈≠≤≥⊕⌘⌥⏎■□▲△●○◆★☆☐☑♠♣♥♦♪✓✔✗✘❯";
-
-pub(super) fn load(name: &str) -> Font {
-    let mut db = FileSet::default();
-    db.add_file(test_font_dir().join(name))
-        .expect("the pinned face reads");
-    Font::load_face_id(&db, 0).expect("the pinned face loads")
-}
 
 pub(super) fn with_raster(font: &Font, raster: RasterOptions) -> Font {
     let mut font = font.with_coords(font.coords.clone(), font.position.clone());
@@ -38,10 +32,10 @@ pub(super) fn corpus() -> Vec<(String, Font)> {
     ] {
         for style in ["Regular", "Bold", "Italic", "BoldItalic"] {
             let name = format!("{dir}/{stem}-{style}.{ext}");
-            faces.push((name.clone(), load(&name)));
+            faces.push((name.clone(), pinned(&name)));
         }
     }
-    let var = load("truetype/Monaspace Neon Var.ttf");
+    let var = pinned("truetype/Monaspace Neon Var.ttf");
     for (weight, italic) in [(400, false), (700, false), (400, true), (700, true)] {
         let view = var
             .at_style(weight, italic)
@@ -49,7 +43,7 @@ pub(super) fn corpus() -> Vec<(String, Font)> {
         faces.push((format!("Var wght={weight} italic={italic}"), view));
     }
     for name in ["NotoSansSymbols.ttf", "NotoSansSymbols2-Regular.otf"] {
-        faces.push((name.to_owned(), load(name)));
+        faces.push((name.to_owned(), pinned(name)));
     }
     faces
 }
@@ -137,7 +131,7 @@ fn hintnone_still_hints_a_hint_reliant_face() {
     let none = RasterOptions::for_face(Some(FaceHinting::None));
     let tricky = with_raster(&hint_reliant_face(), none);
     assert!(scaler_font(&tricky, 16.0).hint_options().is_some());
-    let plain = with_raster(&load("truetype/MonaspaceNeonFrozen-Regular.ttf"), none);
+    let plain = with_raster(&pinned("truetype/MonaspaceNeonFrozen-Regular.ttf"), none);
     assert_eq!(scaler_font(&plain, 16.0).hint_options(), None);
 }
 
@@ -184,7 +178,7 @@ fn a_face_outside_fontconfig_draws_in_the_platform_mode() {
 /// automatic hinter, which `hintfull` lets snap `m`'s stems horizontally.
 #[test]
 fn hintslight_and_hintfull_draw_different_bitmaps() {
-    let face = load("truetype/Monaspace Neon Var.ttf")
+    let face = pinned("truetype/Monaspace Neon Var.ttf")
         .at_style(400, false)
         .expect("the variable face moves");
     let draw = |hinting| {

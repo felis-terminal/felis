@@ -76,7 +76,7 @@ impl FileSet {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, not(windows)))]
     pub(crate) fn add_file(&mut self, path: impl AsRef<Path>) -> std::io::Result<()> {
         if self.add(std::fs::read(path)?) {
             Ok(())

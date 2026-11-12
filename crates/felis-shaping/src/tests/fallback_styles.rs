@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::{pinned_arc, pinned_dir_set};
 
 /// One fallback a [`ScriptedProvider`] ranks.
 struct ScriptedFace {
@@ -264,8 +265,8 @@ fn color_fallback_draws_the_same_face_in_every_style() {
 #[test]
 fn coverage_check_rejects_a_face_missing_a_regular_codepoint() {
     let (latin, cjk) = (
-        load_pinned(MONASPACE_NEON_STATIC[0]),
-        load_pinned("NotoSansCJKjp-Kuzu.otf"),
+        pinned_arc(MONASPACE_NEON_STATIC[0]),
+        pinned_arc("NotoSansCJKjp-Kuzu.otf"),
     );
     assert!(!latin.covers_all_of(&cjk));
     assert!(!cjk.covers_all_of(&latin));
@@ -280,8 +281,8 @@ fn coverage_check_rejects_a_face_missing_a_regular_codepoint() {
 #[test]
 fn coverage_check_accepts_a_sibling_file_with_the_same_cmap() {
     let (regular, bold) = (
-        load_pinned(MONASPACE_NEON_STATIC[0]),
-        load_pinned(MONASPACE_NEON_STATIC[1]),
+        pinned_arc(MONASPACE_NEON_STATIC[0]),
+        pinned_arc(MONASPACE_NEON_STATIC[1]),
     );
     assert!(bold.covers_all_of(&regular));
 }
@@ -291,9 +292,9 @@ fn coverage_check_accepts_a_sibling_file_with_the_same_cmap() {
 #[test]
 fn a_styled_view_covering_more_does_not_take_a_later_entrys_glyph() {
     let (emoji, latin, cjk) = (
-        load_pinned("NotoColorEmoji.ttf"),
-        load_pinned(MONASPACE_NEON_STATIC[0]),
-        load_pinned("NotoSansCJKjp-Kuzu.otf"),
+        pinned_arc("NotoColorEmoji.ttf"),
+        pinned_arc(MONASPACE_NEON_STATIC[0]),
+        pinned_arc("NotoSansCJKjp-Kuzu.otf"),
     );
     assert!(!emoji.has_glyph('A') && !cjk.has_glyph('A'));
     let wider_bold = [cjk.clone(), latin.clone(), cjk, latin.clone()];
@@ -310,9 +311,7 @@ fn a_styled_view_covering_more_does_not_take_a_later_entrys_glyph() {
 /// Monaspace Neon (the reverse).
 #[test]
 fn primary_covers_answers_from_the_styled_primary_not_the_regular_one() {
-    let dir = test_font_dir();
-    let mut db = FileSet::default();
-    db.add_dir(dir);
+    let db = pinned_dir_set();
     let base = TEST_FONT_FAMILY;
     let regular_id = db
         .find_face(base, REGULAR_WEIGHT, false)
@@ -354,9 +353,7 @@ fn primary_covers_answers_from_the_styled_primary_not_the_regular_one() {
 /// and a missing override dedups to the regular `Arc`.
 #[test]
 fn styled_primaries_pick_real_faces_and_dedup_missing_to_regular() {
-    let dir = test_font_dir();
-    let mut db = FileSet::default();
-    db.add_dir(dir);
+    let db = pinned_dir_set();
     let base = TEST_FONT_FAMILY;
     let regular_id = db
         .find_face(base, REGULAR_WEIGHT, false)

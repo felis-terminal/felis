@@ -146,13 +146,6 @@ const BOLD_ITALIC: FontStyle = FontStyle {
     italic: true,
 };
 
-fn load_pinned(name: &str) -> Arc<Font> {
-    let files = pinned_files(&[name]);
-    let mut db = FileSet::default();
-    db.add_file(&files[0]).expect("the pinned face reads");
-    Arc::new(Font::load_face_id(&db, 0).expect("the face loads"))
-}
-
 fn axis(tag: [u8; 4], default: f32) -> AxisInfo {
     AxisInfo {
         tag: Tag::new(&tag),

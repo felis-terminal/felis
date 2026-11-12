@@ -1,6 +1,6 @@
 //! Faces the unit tests load by path.
 
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
 use crate::{Font, provider::files::FileSet, test_font_dir};
 
@@ -15,6 +15,18 @@ fn load_path(path: &Path) -> Font {
 /// A face of the pinned set, named relative to `$FELIS_TEST_FONT_DIR`.
 pub(crate) fn pinned(name: &str) -> Font {
     load_path(&test_font_dir().join(name))
+}
+
+/// [`pinned`], shared.
+pub(crate) fn pinned_arc(name: &str) -> Arc<Font> {
+    Arc::new(pinned(name))
+}
+
+/// Every face of the pinned set.
+pub(crate) fn pinned_dir_set() -> FileSet {
+    let mut set = FileSet::default();
+    set.add_dir(test_font_dir());
+    set
 }
 
 /// One of the color-glyph probes built beside the pinned set.

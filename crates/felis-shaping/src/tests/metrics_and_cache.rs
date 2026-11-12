@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::pinned_dir_set;
 
 #[test]
 fn the_default_monospace_face_loads_with_nonzero_metrics() {
@@ -41,9 +42,7 @@ fn mask_glyph_rasterizes_as_coverage() {
 /// to a mask (the ⏸/⏺ solid-square regression).
 #[test]
 fn color_emoji_rasterizes_as_rgba_not_a_mask() {
-    let dir = test_font_dir();
-    let mut db = FileSet::default();
-    db.add_dir(dir);
+    let db = pinned_dir_set();
     let font = Font::try_load_with(&db, "Noto Color Emoji").expect("pinned color face");
     assert!(font.has_color_glyphs() && font.has_glyph('⏸'));
     let bitmap = rasterize(&mut Rasterizer::default(), &font, '⏸', 32.0);

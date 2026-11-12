@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::pinned_arc;
 
 /// A mark with no precomposed glyph attaches at the face's anchors, so
 /// the cluster is no wider than its base.
@@ -50,7 +51,7 @@ fn a_mark_after_a_variation_sequence_keeps_the_variant() {
 /// as `HarfBuzz` zeroes every mark, so the cluster stays one cell wide.
 #[test]
 fn a_mark_the_face_does_not_map_shapes_as_a_zero_advance_notdef() {
-    let probe = load_pinned(TRAK_PROBE);
+    let probe = pinned_arc(TRAK_PROBE);
     assert!(probe.has_glyph('e') && !probe.has_glyph('\u{301}'));
     let stack = FontStack::new(probe);
     let style = FontStyle::REGULAR;
@@ -66,7 +67,7 @@ fn a_mark_the_face_does_not_map_shapes_as_a_zero_advance_notdef() {
 /// glyphs are.
 #[test]
 fn only_an_inked_outline_counts_as_one() {
-    let emoji = load_pinned("NotoColorEmoji.ttf");
+    let emoji = pinned_arc("NotoColorEmoji.ttf");
     let mut mapped = 0;
     for (cp, _) in emoji.face.charmap().unicodes() {
         let Some(c) = char::from_u32(cp) else {
@@ -194,7 +195,7 @@ fn default_ignorables_alone_shape_to_no_glyphs() {
 /// would shape to a second, blank glyph.
 #[test]
 fn an_unmapped_selector_adds_no_glyph() {
-    let symbols = load_pinned(SYMBOLS2);
+    let symbols = pinned_arc(SYMBOLS2);
     assert!(!symbols.has_glyph('\u{FE0E}'));
     let out = Shaper::new().shape_run(&symbols, 18.0, &[], "\u{2B50}\u{FE0E}");
     assert_eq!(out.len(), 1, "{out:?}");
