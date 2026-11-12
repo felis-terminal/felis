@@ -23,8 +23,10 @@ fn spawn_default_socket_daemon(tmp: &TempDir, factory: SessionFactory) -> Stampe
     (handle, path, pool, stamp)
 }
 
+/// Both framings claim queue admission only, so exit 0 cannot read as
+/// "the window moved".
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn switch_pushes_reattach_to_attached_client() {
+async fn switch_pushes_reattach_and_reports_only_queue_admission() {
     let tmp = private_dir();
     let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let target = create_and_detach(&socket).await;
@@ -75,6 +77,23 @@ async fn switch_pushes_reattach_to_attached_client() {
     .expect("no Reattach push within 5s");
     assert_eq!(pushed, target, "push must name the resolved target");
 
+    let human = cli_on(&socket)
+        .args(["sessions", "switch", &format!("{target:032x}")])
+        .env("FELIS_SESSION_ID", format!("{from:032x}"))
+        .output()
+        .expect("run felis sessions switch");
+    assert!(
+        human.status.success(),
+        "switch must exit 0: stderr={}",
+        String::from_utf8_lossy(&human.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&human.stdout);
+    assert!(
+        stdout.contains("queued on 1 window") && stdout.contains("not landed"),
+        "the human line must report admission and deny landing; got: {stdout}",
+    );
+
+    drop(gui);
     server.abort();
 }
 
@@ -146,9 +165,10 @@ async fn switch_with_an_unknown_attachment_exits_one() {
     server.abort();
 }
 
-/// The post-condition already holds, so no window is needed to push to.
+/// The post-condition already holds, so no window is needed to push to,
+/// and neither framing may claim a queue admission that did not happen.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn switch_to_the_same_session_exits_zero() {
+async fn a_same_session_switch_exits_zero_with_nothing_queued() {
     let tmp = private_dir();
     let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     // Parked: the shape the default scope would otherwise deny.
@@ -179,48 +199,7 @@ async fn switch_to_the_same_session_exits_zero() {
         "nothing was pushed, and the count must say so; got: {stdout}",
     );
 
-    server.abort();
-}
-
-/// Human framing must name queue admission rather than let exit 0 read
-/// as "the window moved".
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_switch_human_line_says_queued_and_not_landed() {
-    let tmp = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
-    let target = create_and_detach(&socket).await;
-    let mut gui = connect(&socket, Offer::window(false)).await.unwrap();
-    let from = gui.create_with(SpawnArgs::default()).await.unwrap().id;
-
-    let out = cli_on(&socket)
-        .args(["sessions", "switch", &format!("{target:032x}")])
-        .env("FELIS_SESSION_ID", format!("{from:032x}"))
-        .output()
-        .expect("run felis sessions switch");
-    assert!(
-        out.status.success(),
-        "switch must exit 0: stderr={}",
-        String::from_utf8_lossy(&out.stderr),
-    );
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        stdout.contains("queued on 1 window") && stdout.contains("not landed"),
-        "the human line must report admission and deny landing; got: {stdout}",
-    );
-
-    drop(gui);
-    server.abort();
-}
-
-/// The post-condition already held, so nothing was pushed and the line
-/// must not claim a queue admission that did not happen.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_same_session_switch_human_line_says_nothing_was_queued() {
-    let tmp = private_dir();
-    let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
-    let id = create_and_detach(&socket).await;
-
-    let out = felis_out(
+    let human = felis_out(
         &socket,
         &[
             "sessions",
@@ -231,12 +210,12 @@ async fn a_same_session_switch_human_line_says_nothing_was_queued() {
         ],
     );
     assert_eq!(
-        out.status.code(),
+        human.status.code(),
         Some(0),
         "a same-session switch must exit 0: stderr={}",
-        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&human.stderr),
     );
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stdout = String::from_utf8_lossy(&human.stdout);
     assert!(
         stdout.contains(&format!("already on session {id:032x}"))
             && stdout.contains("nothing queued"),

@@ -87,7 +87,9 @@ fn sessions_spawn_rejects_malformed_env_at_the_clap_layer() {
 }
 
 /// The point/stream classification is normative (docs/reference/cli.md
-/// "Machine output"), so it is pinned per verb rather than sampled.
+/// "Machine output"), so it is pinned per verb rather than sampled. A
+/// framing outside the verb's class is an invalid value, so the refusal
+/// can list what the verb does take.
 #[test]
 fn each_verb_accepts_only_its_own_class_format() {
     let point_verbs = [
@@ -438,20 +440,6 @@ fn capture_composes_its_framing_and_source_flags() {
         ),
     ] {
         check(argv, outcome);
-    }
-}
-
-/// A framing outside the verb's class is an invalid value, so the
-/// refusal can list what the verb does take.
-#[test]
-fn a_cross_class_framing_is_an_invalid_value() {
-    for argv in [
-        &["felis", "sessions", "list", "--format", "jsonl"][..],
-        &["felis", "sessions", "spawn", "--format", "jsonl"],
-        &["felis", "sessions", "capture", "1a", "--format", "json"],
-        &["felis", "notifications", "subscribe", "--format", "json"],
-    ] {
-        check(argv, Outcome::Usage(InvalidValue));
     }
 }
 
