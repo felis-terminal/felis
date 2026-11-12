@@ -1,6 +1,5 @@
 use super::*;
 
-//
 // A 3-row grid with 3 rows pushed into scrollback: live screen occupies
 // absolute lines [3, 6), retained scrollback [0, 3), anything below 0
 // is evicted.

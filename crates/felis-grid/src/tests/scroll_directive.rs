@@ -1,6 +1,5 @@
 use super::*;
 
-//
 // Called directly the way `ShadowScreen::apply` does, pinning the
 // admission rule and the blank-band math a parser-only test never
 // reaches.

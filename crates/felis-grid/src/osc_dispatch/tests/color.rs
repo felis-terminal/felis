@@ -15,7 +15,6 @@ fn osc_11_query_reports_the_client_configured_background() {
 
 #[test]
 fn osc_10_and_12_queries_report_configured_fg_and_cursor() {
-    // OSC 10 (fg) and OSC 12 (cursor) share OSC 11's latent bug.
     let mut p = Parser::new();
     let mut g = Grid::new(1, 1);
     g.set_theme_config_default(ThemeChannel::Foreground, Some((0xE5, 0xE5, 0xE5)));

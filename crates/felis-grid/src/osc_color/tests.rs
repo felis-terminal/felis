@@ -312,14 +312,14 @@ fn esctest_style_reset_chain_clears_theme_overrides() {
     let mut p = Parser::new();
     let mut g = Grid::new(2, 8);
     drive(&mut p, &mut g, b"\x1b]10;rgb:ffff/ffff/ffff\x1b\\");
-    drive(&mut p, &mut g, b"\x1b[64;1\"p"); // DECSCL
-    drive(&mut p, &mut g, b"\x1b[!p"); // DECSTR
-    drive(&mut p, &mut g, b"\x1b[?47l\x1b[?1047l\x1b[?1049l\x1b[?69l"); // various DECRESETs
-    drive(&mut p, &mut g, b"\x1b[4l"); // RM IRM
-    drive(&mut p, &mut g, b"\x1b[20l"); // RM LNM
-    drive(&mut p, &mut g, b"\x1b[?7h"); // DECSET DECAWM
-    drive(&mut p, &mut g, b"\x1b[?41l"); // DECRESET MoreFix
-    drive(&mut p, &mut g, b"\x1b[2J"); // ED(2)
+    drive(&mut p, &mut g, b"\x1b[64;1\"p");
+    drive(&mut p, &mut g, b"\x1b[!p");
+    drive(&mut p, &mut g, b"\x1b[?47l\x1b[?1047l\x1b[?1049l\x1b[?69l");
+    drive(&mut p, &mut g, b"\x1b[4l");
+    drive(&mut p, &mut g, b"\x1b[20l");
+    drive(&mut p, &mut g, b"\x1b[?7h");
+    drive(&mut p, &mut g, b"\x1b[?41l");
+    drive(&mut p, &mut g, b"\x1b[2J");
     drive(&mut p, &mut g, b"\x1b]10;?\x07");
     assert_eq!(
         responses(&mut g),

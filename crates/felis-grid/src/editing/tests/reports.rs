@@ -38,37 +38,26 @@ fn decset_2048_records_the_mode_without_queueing_a_response() {
     assert_eq!(responses(&mut g), Vec::<Vec<u8>>::new());
 }
 
-/// DECRQM round-trips mode 2048 as a functional mode (Ps=1 set /
-/// Ps=2 reset), not the unknown Ps=0.
+/// DECRQM round-trips modes 2048 and 2031 as functional modes (Ps=1 set
+/// / Ps=2 reset), not the unknown Ps=0.
 #[test]
-fn decrqm_reports_2048_state() {
-    let mut g = Grid::new(4, 8);
-    let mut p = Parser::new();
-    drive(&mut p, &mut g, b"\x1b[?2048h\x1b[?2048$p");
-    let r = responses(&mut g);
-    assert_eq!(
-        std::str::from_utf8(r.last().unwrap()).unwrap(),
-        "\x1b[?2048;1$y"
-    );
-    drive(&mut p, &mut g, b"\x1b[?2048l\x1b[?2048$p");
-    let r = reply_text(&mut g);
-    assert_eq!(r[0], "\x1b[?2048;2$y");
-}
-
-/// DECRQM round-trips mode 2031 as a functional mode (Ps=1 set /
-/// Ps=2 reset), not the unknown Ps=0.
-#[test]
-fn decrqm_reports_2031_state() {
-    let mut g = Grid::new(4, 8);
-    let mut p = Parser::new();
-    drive(&mut p, &mut g, b"\x1b[?2031h");
-    drive(&mut p, &mut g, b"\x1b[?2031$p");
-    let r = reply_text(&mut g);
-    assert_eq!(r[0], "\x1b[?2031;1$y");
-    drive(&mut p, &mut g, b"\x1b[?2031l");
-    drive(&mut p, &mut g, b"\x1b[?2031$p");
-    let r = reply_text(&mut g);
-    assert_eq!(r[0], "\x1b[?2031;2$y");
+fn decrqm_reports_the_2048_and_2031_state() {
+    for mode in [2048, 2031] {
+        let mut g = Grid::new(4, 8);
+        let mut p = Parser::new();
+        for (toggle, ps) in [
+            (String::new(), 2),
+            (format!("\x1b[?{mode}h"), 1),
+            (format!("\x1b[?{mode}l"), 2),
+        ] {
+            drive(&mut p, &mut g, format!("{toggle}\x1b[?{mode}$p").as_bytes());
+            assert_eq!(
+                reply_text(&mut g),
+                [format!("\x1b[?{mode};{ps}$y")],
+                "{toggle:?}"
+            );
+        }
+    }
 }
 
 /// `CSI Pn t` with Pn >= 24 (DECSLPP) is consumed silently without

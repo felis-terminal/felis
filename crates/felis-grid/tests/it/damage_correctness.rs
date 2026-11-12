@@ -18,7 +18,7 @@ fn snapshot_cells(g: &Grid) -> Vec<Vec<Cell>> {
         .collect()
 }
 
-fn drive(g: &mut Grid, bytes: &[u8]) {
+fn drive_from_clean(g: &mut Grid, bytes: &[u8]) {
     g.damage_mut().clear();
     drop(g.take_pty_effects());
     let mut p = Parser::new();
@@ -76,99 +76,99 @@ fn assert_no_underdraw(before: &[Vec<Cell>], g: &mut Grid, label: &str) {
 #[test]
 fn single_cell_sgr_change_marks_the_row_dirty() {
     let mut g = Grid::new(4, 8);
-    drive(&mut g, b"helloXX\rworld");
+    drive_from_clean(&mut g, b"helloXX\rworld");
     let before = snapshot_cells(&g);
-    drive(&mut g, b"\x1b[31mA");
+    drive_from_clean(&mut g, b"\x1b[31mA");
     assert_no_underdraw(&before, &mut g, "single_cell_sgr_change");
 }
 
 #[test]
 fn single_cell_glyph_change_marks_the_row_dirty() {
     let mut g = Grid::new(4, 8);
-    drive(&mut g, b"hello");
+    drive_from_clean(&mut g, b"hello");
     let before = snapshot_cells(&g);
-    drive(&mut g, b"\x1b[1;3HZ");
+    drive_from_clean(&mut g, b"\x1b[1;3HZ");
     assert_no_underdraw(&before, &mut g, "single_cell_glyph_change");
 }
 
 #[test]
 fn single_row_scroll_push_marks_shifted_rows() {
     let mut g = Grid::new(4, 8);
-    drive(&mut g, b"row1\r\nrow2\r\nrow3\r\nrow4");
+    drive_from_clean(&mut g, b"row1\r\nrow2\r\nrow3\r\nrow4");
     let before = snapshot_cells(&g);
-    drive(&mut g, b"\x1b[4;1H\n");
+    drive_from_clean(&mut g, b"\x1b[4;1H\n");
     assert_no_underdraw(&before, &mut g, "single_row_scroll_push");
 }
 
 #[test]
 fn multi_row_scroll_push_via_su_marks_shifted_rows() {
     let mut g = Grid::new(6, 8);
-    drive(&mut g, b"r1\r\nr2\r\nr3\r\nr4\r\nr5\r\nr6");
+    drive_from_clean(&mut g, b"r1\r\nr2\r\nr3\r\nr4\r\nr5\r\nr6");
     let before = snapshot_cells(&g);
-    drive(&mut g, b"\x1b[3S");
+    drive_from_clean(&mut g, b"\x1b[3S");
     assert_no_underdraw(&before, &mut g, "multi_row_scroll_push_su");
 }
 
 #[test]
 fn ed_2_whole_screen_erase_marks_every_changed_row() {
     let mut g = Grid::new(4, 8);
-    drive(&mut g, b"r1\r\nr2\r\nr3\r\nr4");
+    drive_from_clean(&mut g, b"r1\r\nr2\r\nr3\r\nr4");
     let before = snapshot_cells(&g);
-    drive(&mut g, b"\x1b[2J");
+    drive_from_clean(&mut g, b"\x1b[2J");
     assert_no_underdraw(&before, &mut g, "ed_2_whole_screen_erase");
 }
 
 #[test]
 fn el_0_marks_the_cursor_row() {
     let mut g = Grid::new(4, 8);
-    drive(&mut g, b"hello123");
+    drive_from_clean(&mut g, b"hello123");
     let before = snapshot_cells(&g);
-    drive(&mut g, b"\x1b[1;6H\x1b[0K");
+    drive_from_clean(&mut g, b"\x1b[1;6H\x1b[0K");
     assert_no_underdraw(&before, &mut g, "el_0_cursor_row");
 }
 
 #[test]
 fn il_insert_line_marks_shifted_rows() {
     let mut g = Grid::new(5, 8);
-    drive(&mut g, b"r1\r\nr2\r\nr3\r\nr4\r\nr5");
+    drive_from_clean(&mut g, b"r1\r\nr2\r\nr3\r\nr4\r\nr5");
     let before = snapshot_cells(&g);
-    drive(&mut g, b"\x1b[2;1H\x1b[L");
+    drive_from_clean(&mut g, b"\x1b[2;1H\x1b[L");
     assert_no_underdraw(&before, &mut g, "il_insert_line");
 }
 
 #[test]
 fn dl_delete_line_marks_shifted_rows() {
     let mut g = Grid::new(5, 8);
-    drive(&mut g, b"r1\r\nr2\r\nr3\r\nr4\r\nr5");
+    drive_from_clean(&mut g, b"r1\r\nr2\r\nr3\r\nr4\r\nr5");
     let before = snapshot_cells(&g);
-    drive(&mut g, b"\x1b[2;1H\x1b[M");
+    drive_from_clean(&mut g, b"\x1b[2;1H\x1b[M");
     assert_no_underdraw(&before, &mut g, "dl_delete_line");
 }
 
 #[test]
 fn ich_insert_char_marks_the_cursor_row() {
     let mut g = Grid::new(4, 8);
-    drive(&mut g, b"abcdefgh");
+    drive_from_clean(&mut g, b"abcdefgh");
     let before = snapshot_cells(&g);
-    drive(&mut g, b"\x1b[1;3H\x1b[2@");
+    drive_from_clean(&mut g, b"\x1b[1;3H\x1b[2@");
     assert_no_underdraw(&before, &mut g, "ich_insert_char");
 }
 
 #[test]
 fn dch_delete_char_marks_the_cursor_row() {
     let mut g = Grid::new(4, 8);
-    drive(&mut g, b"abcdefgh");
+    drive_from_clean(&mut g, b"abcdefgh");
     let before = snapshot_cells(&g);
-    drive(&mut g, b"\x1b[1;3H\x1b[2P");
+    drive_from_clean(&mut g, b"\x1b[1;3H\x1b[2P");
     assert_no_underdraw(&before, &mut g, "dch_delete_char");
 }
 
 #[test]
 fn sync_output_release_marks_every_buffered_change() {
     let mut g = Grid::new(4, 8);
-    drive(&mut g, b"old1\r\nold2\r\nold3\r\nold4");
+    drive_from_clean(&mut g, b"old1\r\nold2\r\nold3\r\nold4");
     let before = snapshot_cells(&g);
-    drive(
+    drive_from_clean(
         &mut g,
         b"\x1b[?2026h\
           \x1b[1;1HNEW1\
@@ -206,9 +206,9 @@ fn cursor_only_moves_leave_the_damage_empty() {
     ];
     for &bytes in moves {
         let mut g = Grid::new(4, 8);
-        drive(&mut g, b"hello\r\nworld\x1b[2;3H");
+        drive_from_clean(&mut g, b"hello\r\nworld\x1b[2;3H");
         let before = snapshot_cells(&g);
-        drive(&mut g, bytes);
+        drive_from_clean(&mut g, bytes);
         let dirty: Vec<usize> = g.damage().dirty_rows().collect();
         assert!(dirty.is_empty(), "{bytes:?} marked rows {dirty:?}");
         assert_eq!(before, snapshot_cells(&g), "{bytes:?} changed a cell");
@@ -227,10 +227,10 @@ fn erasing_cells_that_are_already_blank_leaves_the_damage_empty() {
     ];
     for &bytes in erases {
         let mut g = Grid::new(4, 8);
-        drive(&mut g, b"hello\r\nworld");
-        drive(&mut g, bytes);
+        drive_from_clean(&mut g, b"hello\r\nworld");
+        drive_from_clean(&mut g, bytes);
         let before = snapshot_cells(&g);
-        drive(&mut g, bytes);
+        drive_from_clean(&mut g, bytes);
         let dirty: Vec<usize> = g.damage().dirty_rows().collect();
         assert!(dirty.is_empty(), "{bytes:?} marked rows {dirty:?}");
         assert_eq!(before, snapshot_cells(&g), "{bytes:?} changed a cell");
@@ -240,19 +240,19 @@ fn erasing_cells_that_are_already_blank_leaves_the_damage_empty() {
 #[test]
 fn an_erase_past_a_recycled_rows_watermark_exposes_no_stale_cells() {
     let mut g = Grid::new(2, 8);
-    drive(&mut g, b"abcdefgh\r\nijklmnop\r\n");
-    drive(&mut g, b"\x1b[2;3H\x1b[K\x1b[3X\x1b[2;7Hz");
+    drive_from_clean(&mut g, b"abcdefgh\r\nijklmnop\r\n");
+    drive_from_clean(&mut g, b"\x1b[2;3H\x1b[K\x1b[3X\x1b[2;7Hz");
     let mut fresh = Grid::new(2, 8);
-    drive(&mut fresh, b"\x1b[2;7Hz");
+    drive_from_clean(&mut fresh, b"\x1b[2;7Hz");
     assert_eq!(g.row_content(1), fresh.row_content(1));
 }
 
 #[test]
 fn an_erase_of_a_live_row_marks_only_that_row() {
     let mut g = Grid::new(4, 8);
-    drive(&mut g, b"hello\r\nworld\r\n\r\nlast");
+    drive_from_clean(&mut g, b"hello\r\nworld\r\n\r\nlast");
     let before = snapshot_cells(&g);
-    drive(&mut g, b"\x1b[2;3H\x1b[J");
+    drive_from_clean(&mut g, b"\x1b[2;3H\x1b[J");
     let dirty: Vec<usize> = g.damage().dirty_rows().collect();
     assert_eq!(dirty, [1, 3]);
     assert_no_underdraw(&before, &mut g, "ed_0_over_a_blank_row");
@@ -261,9 +261,9 @@ fn an_erase_of_a_live_row_marks_only_that_row() {
 #[test]
 fn a_line_feed_at_the_bottom_owes_only_the_row_it_vacated() {
     let mut g = Grid::new(4, 8);
-    drive(&mut g, b"r1\r\nr2\r\nr3\r\nr4");
+    drive_from_clean(&mut g, b"r1\r\nr2\r\nr3\r\nr4");
     let before = snapshot_cells(&g);
-    drive(&mut g, b"\r\nr5");
+    drive_from_clean(&mut g, b"\r\nr5");
     let dirty: Vec<usize> = g.damage().dirty_rows().collect();
     assert_eq!(dirty, [3]);
     assert_no_underdraw(&before, &mut g, "line_feed_at_the_bottom");

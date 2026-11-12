@@ -62,84 +62,52 @@ fn kitty_kbd_apply_clear_against_empty_stack_is_a_noop() {
     assert_eq!(g.kitty_kbd_stack_depth(), 0);
 }
 
+/// esctest and Claude Code emit `CSI > 4 ; 2 m`; the key encoder reads
+/// the level to disambiguate Shift+Enter.
 #[test]
-fn csi_gt_4_2_m_sets_modify_other_keys_level_2() {
-    // esctest and Claude Code emit `CSI > 4 ; 2 m`; the key encoder
-    // reads the level to disambiguate Shift+Enter.
-    let mut p = Parser::new();
-    let mut g = Grid::new(1, 1);
-    drive(&mut p, &mut g, b"\x1b[>4;2m");
-    assert_eq!(g.mode_snapshot().modify_other_keys, ModifyOtherKeys::Level2);
-}
-
-#[test]
-fn csi_gt_4_1_m_sets_modify_other_keys_level_1() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(1, 1);
-    drive(&mut p, &mut g, b"\x1b[>4;1m");
-    assert_eq!(g.mode_snapshot().modify_other_keys, ModifyOtherKeys::Level1);
-}
-
-#[test]
-fn csi_gt_4_0_m_disables_modify_other_keys() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(1, 1);
-    drive(&mut p, &mut g, b"\x1b[>4;2m\x1b[>4;0m");
-    assert_eq!(g.mode_snapshot().modify_other_keys, ModifyOtherKeys::Off);
-}
-
-#[test]
-fn csi_gt_4_m_without_level_resets_to_zero() {
-    // `CSI > 4 m` with no Pv is xterm's "reset this resource to default".
-    let mut p = Parser::new();
-    let mut g = Grid::new(1, 1);
-    drive(&mut p, &mut g, b"\x1b[>4;2m\x1b[>4m");
-    assert_eq!(g.mode_snapshot().modify_other_keys, ModifyOtherKeys::Off);
-}
-
-#[test]
-fn csi_gt_m_bare_resets_modify_other_keys() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(1, 1);
-    drive(&mut p, &mut g, b"\x1b[>4;2m\x1b[>m");
-    assert_eq!(g.mode_snapshot().modify_other_keys, ModifyOtherKeys::Off);
-}
-
-#[test]
-fn modify_other_keys_level_clamps_to_two() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(1, 1);
-    drive(&mut p, &mut g, b"\x1b[>4;9m");
-    assert_eq!(g.mode_snapshot().modify_other_keys, ModifyOtherKeys::Level2);
-}
-
-#[test]
-fn csi_gt_non_other_keys_resource_leaves_modify_other_keys_untouched() {
-    // `CSI > 2 ; 2 m` is modifyFunctionKeys, a no-op for felis.
-    let mut p = Parser::new();
-    let mut g = Grid::new(1, 1);
-    drive(&mut p, &mut g, b"\x1b[>2;2m");
-    assert_eq!(g.mode_snapshot().modify_other_keys, ModifyOtherKeys::Off);
-}
-
-#[test]
-fn plain_sgr_m_does_not_touch_modify_other_keys() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(1, 1);
-    drive(&mut p, &mut g, b"\x1b[>4;2m\x1b[1;31m");
-    assert_eq!(
-        g.mode_snapshot().modify_other_keys,
-        ModifyOtherKeys::Level2,
-        "an SGR write must not reset the modifyOtherKeys level"
-    );
-}
-
-#[test]
-fn ris_resets_modify_other_keys() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(2, 2);
-    drive(&mut p, &mut g, b"\x1b[>4;2m\x1bc");
-    assert_eq!(g.mode_snapshot().modify_other_keys, ModifyOtherKeys::Off);
+fn csi_gt_m_sets_and_resets_the_modify_other_keys_level() {
+    for (case, bytes, level) in [
+        (
+            "4;2 sets level 2",
+            &b"\x1b[>4;2m"[..],
+            ModifyOtherKeys::Level2,
+        ),
+        ("4;1 sets level 1", b"\x1b[>4;1m", ModifyOtherKeys::Level1),
+        (
+            "4;0 disables",
+            b"\x1b[>4;2m\x1b[>4;0m",
+            ModifyOtherKeys::Off,
+        ),
+        (
+            "4 with no level resets the resource to default",
+            b"\x1b[>4;2m\x1b[>4m",
+            ModifyOtherKeys::Off,
+        ),
+        (
+            "bare > m resets",
+            b"\x1b[>4;2m\x1b[>m",
+            ModifyOtherKeys::Off,
+        ),
+        (
+            "a level past 2 clamps to 2",
+            b"\x1b[>4;9m",
+            ModifyOtherKeys::Level2,
+        ),
+        (
+            "2;2 is modifyFunctionKeys, a no-op",
+            b"\x1b[>2;2m",
+            ModifyOtherKeys::Off,
+        ),
+        (
+            "a plain SGR leaves the level alone",
+            b"\x1b[>4;2m\x1b[1;31m",
+            ModifyOtherKeys::Level2,
+        ),
+        ("RIS resets", b"\x1b[>4;2m\x1bc", ModifyOtherKeys::Off),
+    ] {
+        let g = drive_new(2, 2, bytes);
+        assert_eq!(g.mode_snapshot().modify_other_keys, level, "{case}");
+    }
 }
 
 #[test]

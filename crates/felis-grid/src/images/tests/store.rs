@@ -381,11 +381,11 @@ fn running_animation_advances_one_frame_per_gap() {
 fn running_animation_loops_to_root_and_counts_loops() {
     let mut e = animated(&[10, 10]);
     e.set_mode(AnimationMode::Running);
-    e.set_max_loops(2); // play through twice, then stop
+    e.set_max_loops(2);
     assert_eq!(e.advance(0), None); // anchor
-    assert_eq!(e.advance(10), Some(1)); // -> frame 1
+    assert_eq!(e.advance(10), Some(1));
     assert_eq!(e.advance(20), Some(0)); // wrap -> loop 1, back to root
-    assert_eq!(e.advance(30), Some(1)); // -> frame 1
+    assert_eq!(e.advance(30), Some(1));
     assert_eq!(e.advance(40), None);
     assert_eq!(e.current_frame(), 1);
 }
@@ -395,7 +395,7 @@ fn loading_mode_halts_on_last_frame() {
     let mut e = animated(&[10, 10]);
     e.set_mode(AnimationMode::Loading);
     assert_eq!(e.advance(0), None); // anchor
-    assert_eq!(e.advance(10), Some(1)); // -> last frame
+    assert_eq!(e.advance(10), Some(1));
     // Loading waits at the last frame for more frames.
     assert_eq!(e.advance(20), None);
     assert_eq!(e.current_frame(), 1);

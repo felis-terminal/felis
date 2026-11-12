@@ -170,7 +170,7 @@ fn reflow_never_splits_a_wide_glyph() {
 fn reflow_on_alternate_screen_delegates_to_resize() {
     let mut p = Parser::new();
     let mut g = Grid::new(4, 8);
-    drive(&mut p, &mut g, b"\x1b[?1049h"); // enter alt screen
+    drive(&mut p, &mut g, b"\x1b[?1049h");
     drive(&mut p, &mut g, b"alt-text");
     assert!(g.on_alternate_screen());
 

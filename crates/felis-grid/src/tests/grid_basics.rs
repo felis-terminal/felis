@@ -102,8 +102,8 @@ fn cup_jumps_cursor() {
 fn el_clears_to_end_of_line() {
     let mut g = Grid::new(2, 6);
     let mut p = Parser::new();
-    drive(&mut p, &mut g, b"abcdef\r\x1b[3C"); // move forward 3
-    drive(&mut p, &mut g, b"\x1b[K"); // EL 0
+    drive(&mut p, &mut g, b"abcdef\r\x1b[3C");
+    drive(&mut p, &mut g, b"\x1b[K");
     assert_eq!(g.cell(0, 0).unwrap().grapheme, Grapheme::Ascii(b'a'));
     assert_eq!(g.cell(0, 2).unwrap().grapheme, Grapheme::Ascii(b'c'));
     assert!(g.cell(0, 3).unwrap().is_blank());

@@ -53,7 +53,7 @@ fn search_on_empty_scrollback_yields_nothing() {
 }
 
 #[test]
-fn case_insensitive_plain() {
+fn plain_search_ignores_case_when_asked() {
     let mut sb = Rows::default();
     push_text(&mut sb, 80, "Hello World");
     let q = SearchQuery::new(
@@ -131,7 +131,7 @@ fn case_insensitive_plain_treats_regex_metacharacters_literally() {
 }
 
 #[test]
-fn regex_with_anchor() {
+fn a_regex_anchor_matches_at_the_start_of_each_logical_line() {
     let mut sb = Rows::default();
     push_text(&mut sb, 80, "abc");
     push_text(&mut sb, 80, "  abc");

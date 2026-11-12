@@ -10,8 +10,8 @@ use std::path::Path;
 use felis_grid::Grid;
 use felis_vt::Parser;
 
-/// Rows sit between `|` fences so the trailing-blank trim cannot hide a
-/// trailing-content regression.
+/// Rows sit between `|` fences so the snapshot shows exactly where each
+/// trimmed row ends.
 fn render(grid: &Grid) -> String {
     let clusters = grid.cluster_table();
     let cursor = grid.cursor();

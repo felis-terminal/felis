@@ -88,7 +88,7 @@ fn resize_preserves_explicit_narrow_scroll_region_when_it_still_fits() {
     let mut g = Grid::new(24, 80);
     drive(&mut p, &mut g, b"\x1b[6;11r");
     g.resize(40, 120);
-    drive(&mut p, &mut g, b"\x1b[11;1H"); // row 10 (0-based) col 0
+    drive(&mut p, &mut g, b"\x1b[11;1H");
     drive(&mut p, &mut g, b"keep\n");
     assert_eq!(
         g.cursor().row,

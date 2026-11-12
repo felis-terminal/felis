@@ -189,10 +189,8 @@ proptest! {
     }
 }
 
-//
 // The unified effect queue's one contract: effects come out in the
-// order the program wrote them (cross-kind order inside one PTY burst is
-// the recurring Kitty-graphics bug class).
+// order the program wrote them.
 
 /// `ED` → APC → DA1 → OSC 7501 → OSC 133 `A` → bottom-LF scroll →
 /// `?1049h`, in byte-stream order.

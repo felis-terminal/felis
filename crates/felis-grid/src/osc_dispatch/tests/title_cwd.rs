@@ -11,14 +11,6 @@ fn osc_2_sets_window_title() {
 }
 
 #[test]
-fn osc_0_also_sets_the_window_title() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(1, 3);
-    drive(&mut p, &mut g, b"\x1b]0;via-osc-0\x07");
-    assert_eq!(g.title(), Some("via-osc-0"));
-}
-
-#[test]
 fn osc_1_sets_the_icon_name_but_not_the_title() {
     // The icon name is observable through `CSI 20 t` (reported as
     // `OSC L … ST`).
@@ -31,15 +23,15 @@ fn osc_1_sets_the_icon_name_but_not_the_title() {
     assert_eq!(String::from_utf8(reply).unwrap(), "\x1b]Licon-only\x1b\\");
 }
 
+/// The icon half is observable through `CSI 20 t`.
 #[test]
-fn osc_0_sets_the_icon_name_as_well_as_the_title() {
-    // The title half is pinned above; the icon half is observable
-    // through `CSI 20 t`.
+fn osc_0_sets_both_title_and_icon_name() {
     let mut p = Parser::new();
     let mut g = Grid::new(1, 3);
-    drive(&mut p, &mut g, b"\x1b]0;both\x07\x1b[20t");
-    let reply = responses(&mut g).into_iter().next().unwrap();
-    assert_eq!(String::from_utf8(reply).unwrap(), "\x1b]Lboth\x1b\\");
+    drive(&mut p, &mut g, b"\x1b]0;both\x07");
+    assert_eq!(g.title(), Some("both"));
+    drive(&mut p, &mut g, b"\x1b[20t");
+    assert_eq!(reply_text(&mut g), ["\x1b]Lboth\x1b\\"]);
 }
 
 #[test]

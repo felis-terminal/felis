@@ -44,110 +44,64 @@ fn the_bulk_hyperlink_table_indexes_as_a_cells_handle_less_one() {
     assert_eq!(table.get(handle(2)).unwrap().uri, "https://example.test/b");
 }
 
+/// Per the xterm / foot convention `id=` labels the anchor, so
+/// hover-grouping keyed on it must not collapse independent anchors.
 #[test]
-fn osc_8_dedupes_same_id_and_uri_to_one_table_row() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(1, 6);
-    drive(
-        &mut p,
-        &mut g,
-        b"\x1b]8;id=k;https://u\x07x\x1b]8;;\x07\x1b]8;id=k;https://u\x07y",
-    );
-    assert_eq!(g.hyperlink_count(), 1);
-    let id_x = g.cell(0, 0).unwrap().link.unwrap();
-    let id_y = g.cell(0, 1).unwrap().link.unwrap();
-    assert_eq!(id_x, id_y);
-}
-
-#[test]
-fn osc_8_dedupe_truth_table_remaining_corners() {
-    // Identity is "id pair matches AND uri pair matches"; every other
-    // combination produces a fresh row.
-
-    // Corner 1: (Some(k), https://u_a) + (Some(k), https://u_b) → distinct.
-    let mut p = Parser::new();
-    let mut g = Grid::new(1, 4);
-    drive(
-        &mut p,
-        &mut g,
-        b"\x1b]8;id=k;https://u_a\x07a\x1b]8;;\x07\x1b]8;id=k;https://u_b\x07b",
-    );
-    assert_eq!(
-        g.hyperlink_count(),
-        2,
-        "same id + distinct uris → distinct rows"
-    );
-    assert_ne!(
-        g.cell(0, 0).unwrap().link.unwrap(),
-        g.cell(0, 1).unwrap().link.unwrap(),
-    );
-
-    // Corner 2: (None, https://u) + (None, https://u) → dedup.
-    let mut p = Parser::new();
-    let mut g = Grid::new(1, 4);
-    drive(
-        &mut p,
-        &mut g,
-        b"\x1b]8;;https://u\x07a\x1b]8;;\x07\x1b]8;;https://u\x07b",
-    );
-    assert_eq!(g.hyperlink_count(), 1, "None + same uri → dedup");
-    assert_eq!(
-        g.cell(0, 0).unwrap().link.unwrap(),
-        g.cell(0, 1).unwrap().link.unwrap(),
-    );
-
-    // Corner 3: (None, https://u) + (Some(k), https://u) → distinct.
-    let mut p = Parser::new();
-    let mut g = Grid::new(1, 4);
-    drive(
-        &mut p,
-        &mut g,
-        b"\x1b]8;;https://u\x07a\x1b]8;;\x07\x1b]8;id=k;https://u\x07b",
-    );
-    assert_eq!(
-        g.hyperlink_count(),
-        2,
-        "None vs Some(k) for same uri → distinct rows",
-    );
-    assert_ne!(
-        g.cell(0, 0).unwrap().link.unwrap(),
-        g.cell(0, 1).unwrap().link.unwrap(),
-    );
-}
-
-#[test]
-fn osc_8_same_uri_different_id_gets_distinct_ids() {
-    // Per the xterm / foot convention `id=` labels the anchor;
-    // hover-grouping keyed on anchor id must not collapse independent
-    // anchors.
-    let mut p = Parser::new();
-    let mut g = Grid::new(1, 4);
-    drive(
-        &mut p,
-        &mut g,
-        b"\x1b]8;id=k1;https://same\x07a\x1b]8;;\x07\x1b]8;id=k2;https://same\x07b",
-    );
-    assert_eq!(g.hyperlink_count(), 2, "different ids → distinct rows");
-    let a = g.cell(0, 0).unwrap().link.unwrap();
-    let b = g.cell(0, 1).unwrap().link.unwrap();
-    assert_ne!(a, b);
-    assert_eq!(g.hyperlink(a).unwrap().uri, "https://same");
-    assert_eq!(g.hyperlink(b).unwrap().uri, "https://same");
-}
-
-#[test]
-fn osc_8_distinct_uris_get_distinct_ids() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(1, 4);
-    drive(
-        &mut p,
-        &mut g,
-        b"\x1b]8;;https://u1\x07a\x1b]8;;\x07\x1b]8;;https://u2\x07b",
-    );
-    assert_eq!(g.hyperlink_count(), 2);
-    let a = g.cell(0, 0).unwrap().link.unwrap();
-    let b = g.cell(0, 1).unwrap().link.unwrap();
-    assert_ne!(a, b);
+fn osc_8_link_identity_is_the_id_pair_and_uri_pair() {
+    for (case, first, second, shared) in [
+        (
+            "same id, same uri",
+            ("id=k", "https://u"),
+            ("id=k", "https://u"),
+            true,
+        ),
+        (
+            "no id, same uri",
+            ("", "https://u"),
+            ("", "https://u"),
+            true,
+        ),
+        (
+            "same id, distinct uris",
+            ("id=k", "https://u_a"),
+            ("id=k", "https://u_b"),
+            false,
+        ),
+        (
+            "no id vs an id",
+            ("", "https://u"),
+            ("id=k", "https://u"),
+            false,
+        ),
+        (
+            "distinct ids",
+            ("id=k1", "https://same"),
+            ("id=k2", "https://same"),
+            false,
+        ),
+        (
+            "no id, distinct uris",
+            ("", "https://u1"),
+            ("", "https://u2"),
+            false,
+        ),
+    ] {
+        let g = drive_new(
+            1,
+            4,
+            format!(
+                "\x1b]8;{};{}\x07a\x1b]8;;\x07\x1b]8;{};{}\x07b",
+                first.0, first.1, second.0, second.1
+            )
+            .as_bytes(),
+        );
+        let a = g.cell(0, 0).unwrap().link.unwrap();
+        let b = g.cell(0, 1).unwrap().link.unwrap();
+        assert_eq!(g.hyperlink_count(), if shared { 1 } else { 2 }, "{case}");
+        assert_eq!(a == b, shared, "{case}");
+        assert_eq!(g.hyperlink(a).unwrap().uri, first.1, "{case}");
+        assert_eq!(g.hyperlink(b).unwrap().uri, second.1, "{case}");
+    }
 }
 
 #[test]
@@ -183,7 +137,7 @@ fn osc_8_with_uri_containing_semicolons_round_trips() {
 }
 
 #[test]
-fn osc_8_with_japanese_uri_round_trips_after_0x9c_fix() {
+fn osc_8_uri_with_a_0x9c_continuation_byte_is_not_truncated() {
     // The byte 0x9C inside `作` (E4 BD 9C) truncates the URI if the
     // parser honors it as C1 ST.
     let mut p = Parser::new();
