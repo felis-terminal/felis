@@ -219,21 +219,15 @@ fn the_session_openers_and_the_attached_traffic_do_not_overlap() {
         image_regions: false,
     };
     let mut setup = in_phase::<DaemonSide>(Phase::Setup, ConnectionMode::Window);
-    let Incoming::Payload(p) = setup.classify(&frame(&opener)).unwrap() else {
-        panic!("a session opener is a payload");
-    };
     assert!(matches!(
-        setup.decode::<SessionToDaemonMsg>(&p).unwrap(),
+        decode_frame::<SessionToDaemonMsg>(&mut setup, &frame(&opener)).unwrap(),
         Delivery::Deliver(_)
     ));
 
     // A second attach: refused by the table, not by a `match` arm in
     // the daemon's pump.
     let mut attached = in_phase::<DaemonSide>(Phase::Attached, ConnectionMode::Window);
-    let Incoming::Payload(p) = attached.classify(&frame(&opener)).unwrap() else {
-        panic!("a session opener is a payload");
-    };
-    let err = attached.decode::<SessionToDaemonMsg>(&p).unwrap_err();
+    let err = decode_frame::<SessionToDaemonMsg>(&mut attached, &frame(&opener)).unwrap_err();
     assert!(
         matches!(&err, DriverError::OutOfPhase { arm, legal, .. }
             if *arm == "Session::Attach" && legal == "setup"),
@@ -241,10 +235,8 @@ fn the_session_openers_and_the_attached_traffic_do_not_overlap() {
     );
 
     let mut setup = in_phase::<DaemonSide>(Phase::Setup, ConnectionMode::Window);
-    let Incoming::Payload(p) = setup.classify(&frame(&SessionToDaemonMsg::Detach)).unwrap() else {
-        panic!("a detach is a payload");
-    };
-    let err = setup.decode::<SessionToDaemonMsg>(&p).unwrap_err();
+    let err = decode_frame::<SessionToDaemonMsg>(&mut setup, &frame(&SessionToDaemonMsg::Detach))
+        .unwrap_err();
     assert!(
         matches!(&err, DriverError::OutOfPhase { arm, legal, .. }
             if *arm == "Session::Detach" && legal == "attached"),
@@ -272,34 +264,28 @@ fn an_observer_and_an_attached_window_share_no_surface() {
     // The subscribe is the transition, so it is legal once and not again.
     let mut observer = in_phase::<DaemonSide>(Phase::Setup, ConnectionMode::Observer);
     let id = stream(1);
-    let subscribe = correlated(
+    let subscribe = frame_correlated(
         &NotifyToDaemonMsg::Subscribe {
             session_prefix: None,
             kinds: Vec::new(),
         },
         Correlation::stream(id),
     );
-    let Incoming::Payload(p) = observer.classify(&subscribe).unwrap() else {
-        panic!("a subscribe is a payload");
-    };
     assert!(matches!(
-        observer.decode::<NotifyToDaemonMsg>(&p).unwrap(),
+        decode_frame::<NotifyToDaemonMsg>(&mut observer, &subscribe).unwrap(),
         Delivery::Deliver(_)
     ));
     observer.observing();
-    let second = correlated(
+    let second = frame_correlated(
         &NotifyToDaemonMsg::Subscribe {
             session_prefix: None,
             kinds: Vec::new(),
         },
         Correlation::stream(stream(2)),
     );
-    let Incoming::Payload(p) = observer.classify(&second).unwrap() else {
-        panic!("a subscribe is a payload");
-    };
     assert!(
         matches!(
-            observer.decode::<NotifyToDaemonMsg>(&p),
+            decode_frame::<NotifyToDaemonMsg>(&mut observer, &second),
             Err(DriverError::OutOfPhase { .. })
         ),
         "a second subscribe is out of phase once the role exists"
@@ -317,11 +303,8 @@ fn a_denied_ops_verb_reads_the_same_before_and_after_the_attach() {
         let verb = OpsToDaemonMsg::Destroy {
             id_prefix: "ab".into(),
         };
-        let f = correlated(&verb, Correlation::request(request(1)));
-        let Incoming::Payload(p) = daemon.classify(&f).unwrap() else {
-            panic!("an Ops verb is a payload");
-        };
-        let err = daemon.decode::<OpsToDaemonMsg>(&p).unwrap_err();
+        let f = frame_correlated(&verb, Correlation::request(request(1)));
+        let err = decode_frame::<OpsToDaemonMsg>(&mut daemon, &f).unwrap_err();
         assert!(
             matches!(&err, DriverError::ArmDenied { mode: ConnectionMode::Window, arm, .. }
                 if *arm == "Ops::Destroy"),

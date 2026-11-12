@@ -47,8 +47,21 @@ fn frame<M: WireCodec>(msg: &M) -> OwnedFrame {
     }
 }
 
-fn correlated<M: Correlated>(msg: &M, correlation: Correlation) -> OwnedFrame {
-    frame_correlated(msg, correlation)
+#[track_caller]
+fn payload_of<R: Role>(driver: &mut ConnectionDriver<R>, f: &OwnedFrame) -> Payload {
+    match driver.classify(f) {
+        Ok(Incoming::Payload(p)) => p,
+        other => panic!("expected a payload, got {other:?}"),
+    }
+}
+
+#[track_caller]
+fn decode_frame<M: WireCodec + Directed>(
+    driver: &mut ConnectionDriver<impl Role>,
+    f: &OwnedFrame,
+) -> Result<Delivery<M>, DriverError> {
+    let p = payload_of(driver, f);
+    driver.decode::<M>(&p)
 }
 
 fn request(raw: u64) -> RequestId {
@@ -79,42 +92,44 @@ fn a_match() -> SearchToClientMsg {
 }
 
 fn open_on_daemon(driver: &mut DaemonDriver, id: StreamId) {
-    let f = correlated(&a_query(), Correlation::stream(id));
-    let Incoming::Payload(p) = driver.classify(&f).unwrap() else {
-        panic!("a search query is a payload");
-    };
+    let f = frame_correlated(&a_query(), Correlation::stream(id));
     assert!(matches!(
-        driver.decode::<SearchToDaemonMsg>(&p).unwrap(),
+        decode_frame::<SearchToDaemonMsg>(driver, &f).unwrap(),
         Delivery::Deliver(_)
     ));
 }
 
-/// Field 100 stamped onto a body by hand. The `Correlated` trait only
-/// exists on the families whose wrapper declares the slot, and a peer
-/// that ignores that declaration is exactly what this covers.
-fn with_an_envelope<M: WireCodec>(msg: &M) -> OwnedFrame {
+/// Field 100 stamped onto a body by hand: `slot` is the length-delimited
+/// payload. The `Correlated` trait only exists on the families whose
+/// wrapper declares the slot, and a peer that ignores that declaration
+/// is exactly what this covers.
+fn with_field_100<M: WireCodec>(msg: &M, slot: &[u8]) -> OwnedFrame {
     let mut body = codec::encode(msg);
-    // Tag 100, wire type 2, wrapping a `Correlation` whose request_id
-    // is 1.
-    body.extend_from_slice(&[0xA2, 0x06, 0x02, 0x08, 0x01]);
+    body.extend_from_slice(&[0xA2, 0x06]);
+    body.push(u8::try_from(slot.len()).expect("a hand-written slot stays short"));
+    body.extend_from_slice(slot);
     OwnedFrame {
         kind: M::KIND.as_u16(),
         body: Bytes::from(body),
     }
 }
 
-/// Field 100 present but holding bytes that are not a `Correlation`.
-/// The nested length is honest, so prost skips the whole field as an
-/// unknown one and the family decode succeeds: only the peek sees the
-/// fault, and only a family whose wrapper reserves the slot can reach
-/// this state (one that declares it fails its own decode instead).
-fn with_a_malformed_envelope<M: WireCodec>(msg: &M) -> OwnedFrame {
-    let mut body = codec::encode(msg);
-    // Tag 100, wire type 2, one byte of payload: 0xFF, a truncated
-    // varint that is not a field key.
-    body.extend_from_slice(&[0xA2, 0x06, 0x01, 0xFF]);
-    OwnedFrame {
-        kind: M::KIND.as_u16(),
-        body: Bytes::from(body),
-    }
+/// Field 100 holding a hand-written sequence of `(tag, value)` varint
+/// pairs. Hand-written because the generated type has no way to write a
+/// tag twice, which is what a peer naming both ids does.
+fn with_hand_written_ids<M: WireCodec>(msg: &M, fields: &[(u8, u8)]) -> OwnedFrame {
+    let slot: Vec<u8> = fields
+        .iter()
+        .flat_map(|&(tag, value)| [tag << 3, value])
+        .collect();
+    with_field_100(msg, &slot)
 }
+
+/// A `Correlation` naming request 1: tag 1 (`request_id`), value 1.
+const REQUEST_ID_1: &[(u8, u8)] = &[(1, 1)];
+
+/// A truncated varint, not a `Correlation`. The nested length is honest,
+/// so prost skips field 100 as unknown and the family decode succeeds:
+/// only the peek sees the fault, and only on a family whose wrapper
+/// reserves the slot (one that declares it fails its own decode).
+const MALFORMED_ENVELOPE: &[u8] = &[0xFF];

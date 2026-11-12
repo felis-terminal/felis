@@ -26,17 +26,17 @@ fn an_envelope_that_contradicts_the_arms_correlation_class_is_refused() {
             "a reply with no request_id answers no request",
         ),
         (
-            correlated(&a_reply, Correlation::stream(stream(1))),
+            frame_correlated(&a_reply, Correlation::stream(stream(1))),
             "a reply is not a stream item",
         ),
-        (correlated(&a_row, request), "a stream item is not a reply"),
+        (
+            frame_correlated(&a_row, request),
+            "a stream item is not a reply",
+        ),
     ] {
-        let Incoming::Payload(payload) = client.classify(&frame).unwrap() else {
-            panic!("a region frame is a payload");
-        };
         assert!(
             matches!(
-                client.decode::<RegionToClientMsg>(&payload),
+                decode_frame::<RegionToClientMsg>(&mut client, &frame),
                 Err(DriverError::Correlation { .. })
             ),
             "{why}"
@@ -46,23 +46,17 @@ fn an_envelope_that_contradicts_the_arms_correlation_class_is_refused() {
     // `Session` carries the envelope slot and never fills it, and its
     // uncorrelated arms are held to that.
     let mut daemon = in_phase::<DaemonSide>(Phase::Attached, ConnectionMode::Window);
-    let Incoming::Payload(payload) = daemon
-        .classify(&correlated(&SessionToDaemonMsg::Detach, request))
-        .unwrap()
-    else {
-        panic!("a session frame is a payload");
-    };
     assert!(matches!(
-        daemon.decode::<SessionToDaemonMsg>(&payload),
+        decode_frame::<SessionToDaemonMsg>(
+            &mut daemon,
+            &frame_correlated(&SessionToDaemonMsg::Detach, request)
+        ),
         Err(DriverError::Correlation { .. })
     ));
 
-    let Incoming::Payload(payload) = daemon.classify(&frame(&OpsToDaemonMsg::List)).unwrap() else {
-        panic!("an ops frame is a payload");
-    };
     assert!(
         matches!(
-            daemon.decode::<OpsToDaemonMsg>(&payload),
+            decode_frame::<OpsToDaemonMsg>(&mut daemon, &frame(&OpsToDaemonMsg::List)),
             Err(DriverError::Correlation { .. })
         ),
         "a request with no request_id can never be answered"
@@ -169,21 +163,21 @@ fn an_envelope_of_the_wrong_class_closes_the_connection_on_every_family() {
             Side::Daemon,
             ConnectionMode::Window,
             Phase::Attached,
-            correlated(&SessionToDaemonMsg::Detach, request_envelope()),
+            frame_correlated(&SessionToDaemonMsg::Detach, request_envelope()),
         ),
         (
             "Ops::List opens a request",
             Side::Daemon,
             ConnectionMode::Ops,
             Phase::Attached,
-            correlated(&OpsToDaemonMsg::List, stream_envelope()),
+            frame_correlated(&OpsToDaemonMsg::List, stream_envelope()),
         ),
         (
             "Ops::Listed answers one",
             Side::Client,
             ConnectionMode::Ops,
             Phase::Attached,
-            correlated(
+            frame_correlated(
                 &OpsToClientMsg::Listed {
                     sessions: Vec::new(),
                 },
@@ -195,7 +189,7 @@ fn an_envelope_of_the_wrong_class_closes_the_connection_on_every_family() {
             Side::Daemon,
             ConnectionMode::Window,
             Phase::Attached,
-            correlated(
+            frame_correlated(
                 &RegionToDaemonMsg::Request {
                     source: RegionSource::Scrollback,
                     ansi: false,
@@ -209,28 +203,28 @@ fn an_envelope_of_the_wrong_class_closes_the_connection_on_every_family() {
             Side::Client,
             ConnectionMode::Window,
             Phase::Attached,
-            correlated(&a_region_reply(), stream_envelope()),
+            frame_correlated(&a_region_reply(), stream_envelope()),
         ),
         (
             "Region::Rows opens a stream",
             Side::Daemon,
             ConnectionMode::Window,
             Phase::Attached,
-            correlated(&a_region_rows(), request_envelope()),
+            frame_correlated(&a_region_rows(), request_envelope()),
         ),
         (
             "Region::Row is a stream item",
             Side::Client,
             ConnectionMode::Window,
             Phase::Attached,
-            correlated(&a_region_row(), request_envelope()),
+            frame_correlated(&a_region_row(), request_envelope()),
         ),
         (
             "Region::RowsDone is a stream item",
             Side::Client,
             ConnectionMode::Window,
             Phase::Attached,
-            correlated(
+            frame_correlated(
                 &RegionToClientMsg::RowsDone { exit_code: None },
                 request_envelope(),
             ),
@@ -240,21 +234,21 @@ fn an_envelope_of_the_wrong_class_closes_the_connection_on_every_family() {
             Side::Daemon,
             ConnectionMode::Ops,
             Phase::Attached,
-            correlated(&a_query(), request_envelope()),
+            frame_correlated(&a_query(), request_envelope()),
         ),
         (
             "Search::Match is a stream item",
             Side::Client,
             ConnectionMode::Ops,
             Phase::Attached,
-            correlated(&a_match(), request_envelope()),
+            frame_correlated(&a_match(), request_envelope()),
         ),
         (
             "Notify::Subscribe opens a stream",
             Side::Daemon,
             ConnectionMode::Observer,
             Phase::Setup,
-            correlated(
+            frame_correlated(
                 &NotifyToDaemonMsg::Subscribe {
                     session_prefix: None,
                     kinds: Vec::new(),
@@ -267,7 +261,7 @@ fn an_envelope_of_the_wrong_class_closes_the_connection_on_every_family() {
             Side::Client,
             ConnectionMode::Observer,
             Phase::Observing,
-            correlated(&NotifyToClientMsg::Lagged { missed: 1 }, request_envelope()),
+            frame_correlated(&NotifyToClientMsg::Lagged { missed: 1 }, request_envelope()),
         ),
     ];
 
@@ -290,11 +284,8 @@ fn an_envelope_of_the_wrong_class_closes_the_connection_on_every_family() {
 fn an_envelope_of_the_wrong_class_names_the_arm_and_frees_no_slot() {
     // A request opener carrying a stream id.
     let mut daemon = in_phase::<DaemonSide>(Phase::Attached, ConnectionMode::Ops);
-    let f = correlated(&OpsToDaemonMsg::List, Correlation::stream(stream(1)));
-    let Incoming::Payload(p) = daemon.classify(&f).unwrap() else {
-        panic!("payload");
-    };
-    let err = daemon.decode::<OpsToDaemonMsg>(&p).unwrap_err();
+    let f = frame_correlated(&OpsToDaemonMsg::List, Correlation::stream(stream(1)));
+    let err = decode_frame::<OpsToDaemonMsg>(&mut daemon, &f).unwrap_err();
     assert!(
         matches!(&err, DriverError::Correlation { expected, found, .. }
             if expected.contains("next unissued request") && found.contains("Ops::List")),
@@ -306,14 +297,11 @@ fn an_envelope_of_the_wrong_class_names_the_arm_and_frees_no_slot() {
 
     // An uncorrelated arm of a family whose wrapper carries the slot.
     let mut daemon = in_phase::<DaemonSide>(Phase::Attached, ConnectionMode::Window);
-    let f = correlated(
+    let f = frame_correlated(
         &SessionToDaemonMsg::Detach,
         Correlation::request(request(1)),
     );
-    let Incoming::Payload(p) = daemon.classify(&f).unwrap() else {
-        panic!("payload");
-    };
-    let err = daemon.decode::<SessionToDaemonMsg>(&p).unwrap_err();
+    let err = decode_frame::<SessionToDaemonMsg>(&mut daemon, &f).unwrap_err();
     assert!(
         matches!(&err, DriverError::Correlation { expected, .. }
             if expected.contains("no correlation envelope")),
@@ -330,11 +318,8 @@ fn the_encoder_and_the_driver_word_one_mismatch_identically() {
         .expect_err("a stream id on a request opener");
 
     let mut daemon = in_phase::<DaemonSide>(Phase::Attached, ConnectionMode::Ops);
-    let f = correlated(&OpsToDaemonMsg::List, envelope);
-    let Incoming::Payload(p) = daemon.classify(&f).unwrap() else {
-        panic!("payload");
-    };
-    let receiver = daemon.decode::<OpsToDaemonMsg>(&p).unwrap_err();
+    let f = frame_correlated(&OpsToDaemonMsg::List, envelope);
+    let receiver = decode_frame::<OpsToDaemonMsg>(&mut daemon, &f).unwrap_err();
 
     assert_eq!(sender.to_string(), receiver.to_string());
 }
@@ -349,11 +334,8 @@ fn an_envelope_on_a_family_that_declares_none_closes_the_connection() {
     use felis_protocol::ImageId;
 
     let mut daemon = in_phase::<DaemonSide>(Phase::Attached, ConnectionMode::Window);
-    let f = with_an_envelope(&InputMsg::FocusChange { focused: true });
-    let Incoming::Payload(p) = daemon.classify(&f).unwrap() else {
-        panic!("input is a payload");
-    };
-    let err = daemon.decode::<InputMsg>(&p).unwrap_err();
+    let f = with_hand_written_ids(&InputMsg::FocusChange { focused: true }, REQUEST_ID_1);
+    let err = decode_frame::<InputMsg>(&mut daemon, &f).unwrap_err();
     assert!(
         matches!(&err, DriverError::Correlation { expected, .. }
             if expected.contains("no correlation envelope")),
@@ -361,42 +343,39 @@ fn an_envelope_on_a_family_that_declares_none_closes_the_connection() {
     );
 
     let mut client = in_phase::<ClientSide>(Phase::Attached, ConnectionMode::Window);
-    let f = with_an_envelope(&GridMsg::RehydrateBegin);
-    let Incoming::Payload(p) = client.classify(&f).unwrap() else {
-        panic!("a grid delta is a payload");
-    };
+    let f = with_hand_written_ids(&GridMsg::RehydrateBegin, REQUEST_ID_1);
     assert!(matches!(
-        client.decode::<GridMsg>(&p).unwrap_err(),
+        decode_frame::<GridMsg>(&mut client, &f).unwrap_err(),
         DriverError::Correlation { .. }
     ));
 
-    let f = with_an_envelope(&ImageMsg::Delete { id: ImageId(7) });
-    let Incoming::Payload(p) = client.classify(&f).unwrap() else {
-        panic!("an image event is a payload");
-    };
+    let f = with_hand_written_ids(&ImageMsg::Delete { id: ImageId(7) }, REQUEST_ID_1);
     assert!(matches!(
-        client.decode::<ImageMsg>(&p).unwrap_err(),
+        decode_frame::<ImageMsg>(&mut client, &f).unwrap_err(),
         DriverError::Correlation { .. }
     ));
 
-    let f = with_an_envelope(&PushMsg::Evicted {
-        reason: "evicted".into(),
-    });
-    let Incoming::Payload(p) = client.classify(&f).unwrap() else {
-        panic!("a push is a payload");
-    };
+    let f = with_hand_written_ids(
+        &PushMsg::Evicted {
+            reason: "evicted".into(),
+        },
+        REQUEST_ID_1,
+    );
     assert!(matches!(
-        client.decode::<PushMsg>(&p).unwrap_err(),
+        decode_frame::<PushMsg>(&mut client, &f).unwrap_err(),
         DriverError::Correlation { .. }
     ));
 
     // `Conn` never becomes a payload, so its check runs in `classify`.
     let live = client.open_stream().expect("the sequence is fresh");
     let err = client
-        .classify(&with_an_envelope(&ConnToClientMsg::End {
-            stream_id: live,
-            count: 0,
-        }))
+        .classify(&with_hand_written_ids(
+            &ConnToClientMsg::End {
+                stream_id: live,
+                count: 0,
+            },
+            REQUEST_ID_1,
+        ))
         .unwrap_err();
     assert!(
         matches!(&err, DriverError::Correlation { expected, .. }
@@ -408,25 +387,6 @@ fn an_envelope_on_a_family_that_declares_none_closes_the_connection() {
         StreamClass::Active,
         "a refused terminal closed nothing"
     );
-}
-
-/// Field 100 holding a hand-written sequence of `(tag, value)` pairs.
-/// Hand-written because the generated type has no way to write a tag
-/// twice, which is what a peer naming both ids does.
-fn with_hand_written_ids<M: WireCodec>(msg: &M, fields: &[(u8, u8)]) -> OwnedFrame {
-    let mut slot = Vec::new();
-    for &(tag, value) in fields {
-        slot.push(tag << 3);
-        slot.push(value);
-    }
-    let mut body = codec::encode(msg);
-    body.extend_from_slice(&[0xA2, 0x06]);
-    body.push(u8::try_from(slot.len()).expect("a hand-written slot stays short"));
-    body.extend_from_slice(&slot);
-    OwnedFrame {
-        kind: M::KIND.as_u16(),
-        body: Bytes::from(body),
-    }
 }
 
 /// A body naming both ids is refused whatever order the peer wrote the
@@ -461,10 +421,8 @@ fn a_both_ids_envelope_closes_the_connection_in_every_order() {
 #[test]
 fn a_malformed_envelope_closes_the_connection_on_an_uncorrelated_family() {
     let mut client = in_phase::<ClientSide>(Phase::Attached, ConnectionMode::Window);
-    let f = with_a_malformed_envelope(&GridMsg::RehydrateBegin);
-    let Incoming::Payload(p) = client.classify(&f).unwrap() else {
-        panic!("a grid push is a payload");
-    };
+    let f = with_field_100(&GridMsg::RehydrateBegin, MALFORMED_ENVELOPE);
+    let p = payload_of(&mut client, &f);
     assert_eq!(p.correlation, None, "the peek recovered no identity");
     let err = client.decode::<GridMsg>(&p).unwrap_err();
     assert!(
@@ -476,10 +434,13 @@ fn a_malformed_envelope_closes_the_connection_on_an_uncorrelated_family() {
     // `Conn` never becomes a payload, so its check runs in `classify`.
     let live = client.open_stream().expect("the sequence is fresh");
     let err = client
-        .classify(&with_a_malformed_envelope(&ConnToClientMsg::End {
-            stream_id: live,
-            count: 0,
-        }))
+        .classify(&with_field_100(
+            &ConnToClientMsg::End {
+                stream_id: live,
+                count: 0,
+            },
+            MALFORMED_ENVELOPE,
+        ))
         .unwrap_err();
     assert!(
         matches!(&err, DriverError::Correlation { expected, .. }
@@ -503,11 +464,8 @@ fn a_body_that_is_not_protobuf_is_an_undecodable_body_not_a_correlation_fault() 
         kind: MessageKind::Grid.as_u16(),
         body: Bytes::from_static(&[0xFF, 0xFF, 0xFF]),
     };
-    let Incoming::Payload(p) = client.classify(&f).unwrap() else {
-        panic!("a grid push is a payload");
-    };
     assert!(matches!(
-        client.decode::<GridMsg>(&p).unwrap_err(),
+        decode_frame::<GridMsg>(&mut client, &f).unwrap_err(),
         DriverError::UndecodableBody { .. }
     ));
 }
@@ -519,30 +477,21 @@ fn a_body_that_is_not_protobuf_is_an_undecodable_body_not_a_correlation_fault() 
 fn a_missing_envelope_closes_the_connection_on_every_correlated_class() {
     let mut daemon = in_phase::<DaemonSide>(Phase::Attached, ConnectionMode::Ops);
     let f = frame(&OpsToDaemonMsg::List);
-    let Incoming::Payload(p) = daemon.classify(&f).unwrap() else {
-        panic!("payload");
-    };
     assert!(matches!(
-        daemon.decode::<OpsToDaemonMsg>(&p).unwrap_err(),
+        decode_frame::<OpsToDaemonMsg>(&mut daemon, &f).unwrap_err(),
         DriverError::Correlation { .. }
     ));
 
     let f = frame(&a_query());
-    let Incoming::Payload(p) = daemon.classify(&f).unwrap() else {
-        panic!("payload");
-    };
     assert!(matches!(
-        daemon.decode::<SearchToDaemonMsg>(&p).unwrap_err(),
+        decode_frame::<SearchToDaemonMsg>(&mut daemon, &f).unwrap_err(),
         DriverError::Correlation { .. }
     ));
 
     let mut client = in_phase::<ClientSide>(Phase::Attached, ConnectionMode::Window);
     let f = frame(&a_match());
-    let Incoming::Payload(p) = client.classify(&f).unwrap() else {
-        panic!("payload");
-    };
     assert!(matches!(
-        client.decode::<SearchToClientMsg>(&p).unwrap_err(),
+        decode_frame::<SearchToClientMsg>(&mut client, &f).unwrap_err(),
         DriverError::Correlation { .. }
     ));
 }

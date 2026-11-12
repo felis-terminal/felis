@@ -64,11 +64,8 @@ fn stream_ids_classify_as_active_canceled_terminated_or_never_opened() {
 #[test]
 fn an_open_with_the_wrong_next_stream_id_closes_the_connection() {
     let mut driver = in_phase::<DaemonSide>(Phase::Attached, ConnectionMode::Ops);
-    let f = correlated(&a_query(), Correlation::stream(stream(4)));
-    let Incoming::Payload(p) = driver.classify(&f).unwrap() else {
-        panic!("payload");
-    };
-    let err = driver.decode::<SearchToDaemonMsg>(&p).unwrap_err();
+    let f = frame_correlated(&a_query(), Correlation::stream(stream(4)));
+    let err = decode_frame::<SearchToDaemonMsg>(&mut driver, &f).unwrap_err();
     assert!(
         matches!(
             &err,
@@ -85,12 +82,9 @@ fn reopening_a_terminated_stream_id_closes_the_connection() {
     open_on_daemon(&mut driver, stream(1));
     drop(driver.finish_stream(stream(1), 0).expect("live stream"));
 
-    let f = correlated(&a_query(), Correlation::stream(stream(1)));
-    let Incoming::Payload(p) = driver.classify(&f).unwrap() else {
-        panic!("payload");
-    };
+    let f = frame_correlated(&a_query(), Correlation::stream(stream(1)));
     assert!(matches!(
-        driver.decode::<SearchToDaemonMsg>(&p).unwrap_err(),
+        decode_frame::<SearchToDaemonMsg>(&mut driver, &f).unwrap_err(),
         DriverError::Correlation { .. }
     ));
 }
@@ -105,12 +99,9 @@ fn items_arriving_after_a_local_cancel_are_dropped_not_fatal() {
     let id = driver.open_stream().expect("the sequence is fresh");
     driver.cancel_stream(id);
 
-    let f = correlated(&a_match(), Correlation::stream(id));
-    let Incoming::Payload(p) = driver.classify(&f).unwrap() else {
-        panic!("payload");
-    };
+    let f = frame_correlated(&a_match(), Correlation::stream(id));
     assert!(matches!(
-        driver.decode::<SearchToClientMsg>(&p).unwrap(),
+        decode_frame::<SearchToClientMsg>(&mut driver, &f).unwrap(),
         Delivery::DroppedAfterCancel
     ));
 
@@ -233,11 +224,8 @@ fn an_item_after_the_terminal_closes_the_connection() {
             }))
             .unwrap(),
     );
-    let f = correlated(&a_match(), Correlation::stream(id));
-    let Incoming::Payload(p) = driver.classify(&f).unwrap() else {
-        panic!("payload");
-    };
-    let err = driver.decode::<SearchToClientMsg>(&p).unwrap_err();
+    let f = frame_correlated(&a_match(), Correlation::stream(id));
+    let err = decode_frame::<SearchToClientMsg>(&mut driver, &f).unwrap_err();
     assert!(
         matches!(&err, DriverError::Correlation { found, .. } if found.contains("Terminated")),
         "got {err}"
@@ -262,7 +250,7 @@ fn a_terminal_for_a_never_opened_stream_closes_the_connection() {
 #[test]
 fn every_streaming_family_shares_one_table() {
     let mut driver = in_phase::<DaemonSide>(Phase::Attached, ConnectionMode::Ops);
-    let rows = correlated(
+    let rows = frame_correlated(
         &RegionToDaemonMsg::Rows {
             source: RegionSource::Scrollback,
             ansi: false,
@@ -271,27 +259,21 @@ fn every_streaming_family_shares_one_table() {
         },
         Correlation::stream(stream(1)),
     );
-    let Incoming::Payload(p) = driver.classify(&rows).unwrap() else {
-        panic!("payload");
-    };
     assert!(matches!(
-        driver.decode::<RegionToDaemonMsg>(&p).unwrap(),
+        decode_frame::<RegionToDaemonMsg>(&mut driver, &rows).unwrap(),
         Delivery::Deliver(_)
     ));
 
     let mut observer = in_phase::<DaemonSide>(Phase::Setup, ConnectionMode::Observer);
-    let subscribe = correlated(
+    let subscribe = frame_correlated(
         &NotifyToDaemonMsg::Subscribe {
             session_prefix: None,
             kinds: Vec::new(),
         },
         Correlation::stream(stream(1)),
     );
-    let Incoming::Payload(p) = observer.classify(&subscribe).unwrap() else {
-        panic!("payload");
-    };
     assert!(matches!(
-        observer.decode::<NotifyToDaemonMsg>(&p).unwrap(),
+        decode_frame::<NotifyToDaemonMsg>(&mut observer, &subscribe).unwrap(),
         Delivery::Deliver(_)
     ));
     assert_eq!(observer.outstanding_streams(), 1);

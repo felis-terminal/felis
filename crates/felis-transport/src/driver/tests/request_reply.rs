@@ -9,14 +9,12 @@ fn replies_match_their_requests_in_any_order() {
     let second = driver.issue_request().expect("the sequence is fresh");
 
     for id in [second, first] {
-        let f = correlated(
+        let f = frame_correlated(
             &OpsToClientMsg::Listed { sessions: vec![] },
             Correlation::request(id),
         );
-        let Incoming::Payload(p) = driver.classify(&f).unwrap() else {
-            panic!("payload");
-        };
-        let Delivery::Deliver(delivered) = driver.decode::<OpsToClientMsg>(&p).unwrap() else {
+        let Delivery::Deliver(delivered) = decode_frame::<OpsToClientMsg>(&mut driver, &f).unwrap()
+        else {
             panic!("a reply is delivered");
         };
         assert_eq!(delivered.request(), id);
@@ -30,34 +28,25 @@ fn replies_match_their_requests_in_any_order() {
 fn a_duplicate_or_late_reply_closes_the_connection() {
     let mut driver = in_phase::<ClientSide>(Phase::Attached, ConnectionMode::Ops);
     let id = driver.issue_request().expect("the sequence is fresh");
-    let listed = correlated(
+    let listed = frame_correlated(
         &OpsToClientMsg::Listed { sessions: vec![] },
         Correlation::request(id),
     );
 
-    let Incoming::Payload(p) = driver.classify(&listed).unwrap() else {
-        panic!("payload");
-    };
-    assert!(driver.decode::<OpsToClientMsg>(&p).is_ok());
+    assert!(decode_frame::<OpsToClientMsg>(&mut driver, &listed).is_ok());
 
-    let Incoming::Payload(p) = driver.classify(&listed).unwrap() else {
-        panic!("payload");
-    };
-    let err = driver.decode::<OpsToClientMsg>(&p).unwrap_err();
+    let err = decode_frame::<OpsToClientMsg>(&mut driver, &listed).unwrap_err();
     assert!(
         matches!(&err, DriverError::Correlation { found, .. } if found.contains("not outstanding")),
         "got {err}"
     );
 
-    let never = correlated(
+    let never = frame_correlated(
         &OpsToClientMsg::Listed { sessions: vec![] },
         Correlation::request(RequestId::new(9).expect("nonzero")),
     );
-    let Incoming::Payload(p) = driver.classify(&never).unwrap() else {
-        panic!("payload");
-    };
     assert!(matches!(
-        driver.decode::<OpsToClientMsg>(&p).unwrap_err(),
+        decode_frame::<OpsToClientMsg>(&mut driver, &never).unwrap_err(),
         DriverError::Correlation { .. }
     ));
 }
@@ -70,10 +59,7 @@ fn a_reply_without_an_envelope_closes_the_connection() {
     let mut driver = in_phase::<ClientSide>(Phase::Attached, ConnectionMode::Ops);
     let _issued = driver.issue_request().expect("the sequence is fresh");
     let f = frame(&OpsToClientMsg::Listed { sessions: vec![] });
-    let Incoming::Payload(p) = driver.classify(&f).unwrap() else {
-        panic!("payload");
-    };
-    let err = driver.decode::<OpsToClientMsg>(&p).unwrap_err();
+    let err = decode_frame::<OpsToClientMsg>(&mut driver, &f).unwrap_err();
     assert!(
         matches!(
             &err,
@@ -109,11 +95,8 @@ fn a_typed_refusal_retires_the_request_it_names() {
 #[test]
 fn a_stream_id_on_an_arm_that_opens_none_closes_the_connection() {
     let mut driver = in_phase::<DaemonSide>(Phase::Attached, ConnectionMode::Ops);
-    let f = correlated(&OpsToDaemonMsg::List, Correlation::stream(stream(1)));
-    let Incoming::Payload(p) = driver.classify(&f).unwrap() else {
-        panic!("payload");
-    };
-    let err = driver.decode::<OpsToDaemonMsg>(&p).unwrap_err();
+    let f = frame_correlated(&OpsToDaemonMsg::List, Correlation::stream(stream(1)));
+    let err = decode_frame::<OpsToDaemonMsg>(&mut driver, &f).unwrap_err();
     assert!(
         matches!(&err, DriverError::Correlation { found, .. } if found.contains("Ops::List")),
         "got {err}"
@@ -145,11 +128,10 @@ fn exceeding_the_stream_bound_refuses_the_request_not_the_connection() {
     open_on_daemon(&mut driver, stream(1));
     open_on_daemon(&mut driver, stream(2));
 
-    let f = correlated(&a_query(), Correlation::stream(stream(3)));
-    let Incoming::Payload(p) = driver.classify(&f).unwrap() else {
-        panic!("payload");
-    };
-    let Delivery::RefuseStream { reply } = driver.decode::<SearchToDaemonMsg>(&p).unwrap() else {
+    let f = frame_correlated(&a_query(), Correlation::stream(stream(3)));
+    let Delivery::RefuseStream { reply } =
+        decode_frame::<SearchToDaemonMsg>(&mut driver, &f).unwrap()
+    else {
         panic!("expected a refusal");
     };
     assert!(matches!(
@@ -211,11 +193,8 @@ fn one_connections_death_leaves_the_others_untouched() {
 fn a_skipped_request_id_closes_the_connection() {
     let mut daemon = in_phase::<DaemonSide>(Phase::Attached, ConnectionMode::Ops);
     for id in [1, 3] {
-        let f = correlated(&OpsToDaemonMsg::List, Correlation::request(request(id)));
-        let Incoming::Payload(p) = daemon.classify(&f).unwrap() else {
-            panic!("payload");
-        };
-        let outcome = daemon.decode::<OpsToDaemonMsg>(&p);
+        let f = frame_correlated(&OpsToDaemonMsg::List, Correlation::request(request(id)));
+        let outcome = decode_frame::<OpsToDaemonMsg>(&mut daemon, &f);
         if id == 1 {
             assert!(matches!(outcome, Ok(Delivery::Deliver(_))));
         } else {
@@ -234,12 +213,12 @@ fn a_skipped_request_id_closes_the_connection() {
 #[test]
 fn a_reused_request_id_closes_the_connection() {
     let mut daemon = in_phase::<DaemonSide>(Phase::Attached, ConnectionMode::Ops);
-    let f = correlated(&OpsToDaemonMsg::List, Correlation::request(request(1)));
+    let f = frame_correlated(&OpsToDaemonMsg::List, Correlation::request(request(1)));
     for expect_ok in [true, false] {
-        let Incoming::Payload(p) = daemon.classify(&f).unwrap() else {
-            panic!("payload");
-        };
-        assert_eq!(daemon.decode::<OpsToDaemonMsg>(&p).is_ok(), expect_ok);
+        assert_eq!(
+            decode_frame::<OpsToDaemonMsg>(&mut daemon, &f).is_ok(),
+            expect_ok
+        );
     }
 }
 
@@ -249,12 +228,9 @@ fn a_reused_request_id_closes_the_connection() {
 fn the_request_and_stream_sequences_stay_independent_at_the_daemon() {
     let mut daemon = in_phase::<DaemonSide>(Phase::Attached, ConnectionMode::Ops);
     open_on_daemon(&mut daemon, stream(1));
-    let f = correlated(&OpsToDaemonMsg::List, Correlation::request(request(1)));
-    let Incoming::Payload(p) = daemon.classify(&f).unwrap() else {
-        panic!("payload");
-    };
+    let f = frame_correlated(&OpsToDaemonMsg::List, Correlation::request(request(1)));
     assert!(matches!(
-        daemon.decode::<OpsToDaemonMsg>(&p).unwrap(),
+        decode_frame::<OpsToDaemonMsg>(&mut daemon, &f).unwrap(),
         Delivery::Deliver(_)
     ));
     open_on_daemon(&mut daemon, stream(2));
@@ -265,20 +241,16 @@ fn the_request_and_stream_sequences_stay_independent_at_the_daemon() {
 #[test]
 fn a_delivery_carries_the_identity_its_class_declares() {
     let mut daemon = in_phase::<DaemonSide>(Phase::Attached, ConnectionMode::Ops);
-    let f = correlated(&OpsToDaemonMsg::List, Correlation::request(request(1)));
-    let Incoming::Payload(p) = daemon.classify(&f).unwrap() else {
-        panic!("payload");
-    };
-    let Delivery::Deliver(delivered) = daemon.decode::<OpsToDaemonMsg>(&p).unwrap() else {
+    let f = frame_correlated(&OpsToDaemonMsg::List, Correlation::request(request(1)));
+    let Delivery::Deliver(delivered) = decode_frame::<OpsToDaemonMsg>(&mut daemon, &f).unwrap()
+    else {
         panic!("delivered");
     };
     assert_eq!(delivered.request(), request(1));
 
-    let f = correlated(&a_query(), Correlation::stream(stream(1)));
-    let Incoming::Payload(p) = daemon.classify(&f).unwrap() else {
-        panic!("payload");
-    };
-    let Delivery::Deliver(delivered) = daemon.decode::<SearchToDaemonMsg>(&p).unwrap() else {
+    let f = frame_correlated(&a_query(), Correlation::stream(stream(1)));
+    let Delivery::Deliver(delivered) = decode_frame::<SearchToDaemonMsg>(&mut daemon, &f).unwrap()
+    else {
         panic!("delivered");
     };
     assert_eq!(delivered.stream(), stream(1));

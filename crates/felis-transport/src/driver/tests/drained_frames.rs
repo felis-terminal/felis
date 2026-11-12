@@ -5,13 +5,11 @@ use super::*;
 #[test]
 fn a_drained_frame_whose_envelope_contradicts_its_arm_is_fatal() {
     let mut client = in_phase::<ClientSide>(Phase::Attached, ConnectionMode::Window);
-    let mislabeled = correlated(
+    let mislabeled = frame_correlated(
         &a_match(),
         Correlation::request(RequestId::new(1).expect("nonzero")),
     );
-    let Incoming::Payload(p) = client.classify(&mislabeled).unwrap() else {
-        panic!("a search match is a payload");
-    };
+    let p = payload_of(&mut client, &mislabeled);
     assert!(matches!(
         client.admit_drained(&p),
         Err(DriverError::Correlation { .. })
@@ -24,10 +22,8 @@ fn a_drained_frame_whose_envelope_contradicts_its_arm_is_fatal() {
 #[test]
 fn a_drained_item_for_a_stream_the_client_never_opened_is_fatal() {
     let mut client = in_phase::<ClientSide>(Phase::Attached, ConnectionMode::Window);
-    let item = correlated(&a_match(), Correlation::stream(stream(7)));
-    let Incoming::Payload(p) = client.classify(&item).unwrap() else {
-        panic!("a search match is a payload");
-    };
+    let item = frame_correlated(&a_match(), Correlation::stream(stream(7)));
+    let p = payload_of(&mut client, &item);
     assert!(matches!(
         client.admit_drained(&p),
         Err(DriverError::Correlation { .. })
@@ -50,15 +46,12 @@ fn a_parked_frame_is_judged_by_the_arm_table_without_being_accounted() {
     ));
 
     let mut client = in_phase::<ClientSide>(Phase::Attached, ConnectionMode::Window);
-    let item = correlated(&a_match(), Correlation::stream(stream(7)));
+    let item = frame_correlated(&a_match(), Correlation::stream(stream(7)));
     assert!(client.admit_parked(&item).is_ok());
     assert_eq!(client.outstanding_streams(), 0);
     // The requeued frame is still the one the stream table sees.
-    let Incoming::Payload(p) = client.classify(&item).unwrap() else {
-        panic!("a search match is a payload");
-    };
     assert!(matches!(
-        client.decode::<SearchToClientMsg>(&p),
+        decode_frame::<SearchToClientMsg>(&mut client, &item),
         Err(DriverError::Correlation { .. })
     ));
 }
@@ -73,17 +66,13 @@ fn a_drained_family_is_still_admitted_through_the_arm_table() {
     let mut client = in_phase::<ClientSide>(Phase::Attached, ConnectionMode::Window);
 
     let honest = frame(&GridMsg::RehydrateBegin);
-    let Incoming::Payload(p) = client.classify(&honest).unwrap() else {
-        panic!("a grid push is a payload");
-    };
+    let p = payload_of(&mut client, &honest);
     client
         .admit_drained(&p)
         .expect("an uncorrelated push is what this family sends");
 
-    let stamped = with_an_envelope(&GridMsg::RehydrateBegin);
-    let Incoming::Payload(p) = client.classify(&stamped).unwrap() else {
-        panic!("a grid push is a payload");
-    };
+    let stamped = with_hand_written_ids(&GridMsg::RehydrateBegin, REQUEST_ID_1);
+    let p = payload_of(&mut client, &stamped);
     assert!(
         matches!(
             client.admit_drained(&p).unwrap_err(),
@@ -92,10 +81,8 @@ fn a_drained_family_is_still_admitted_through_the_arm_table() {
         "an envelope no Grid arm claims is unattributable, drained or not"
     );
 
-    let malformed = with_a_malformed_envelope(&GridMsg::RehydrateBegin);
-    let Incoming::Payload(p) = client.classify(&malformed).unwrap() else {
-        panic!("a grid push is a payload");
-    };
+    let malformed = with_field_100(&GridMsg::RehydrateBegin, MALFORMED_ENVELOPE);
+    let p = payload_of(&mut client, &malformed);
     assert!(
         matches!(
             client.admit_drained(&p).unwrap_err(),
@@ -137,10 +124,7 @@ fn drained<R: Role>(driver: &mut ConnectionDriver<R>, kind: MessageKind, body: V
         kind: kind.as_u16(),
         body: Bytes::from(body),
     };
-    let Incoming::Payload(payload) = driver.classify(&frame).unwrap() else {
-        panic!("an uncorrelated push is a payload")
-    };
-    payload
+    payload_of(driver, &frame)
 }
 
 /// The uniform families skip the arm-table walk on the drain path, not

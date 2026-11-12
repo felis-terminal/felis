@@ -4,10 +4,7 @@ use super::*;
 fn a_reply_half_frame_from_a_peer_closes_the_connection() {
     let mut driver = in_phase::<DaemonSide>(Phase::Attached, ConnectionMode::Ops);
     let f = frame(&OpsToClientMsg::Listed { sessions: vec![] });
-    let Incoming::Payload(p) = driver.classify(&f).unwrap() else {
-        panic!("payload");
-    };
-    let err = driver.decode::<OpsToDaemonMsg>(&p).unwrap_err();
+    let err = decode_frame::<OpsToDaemonMsg>(&mut driver, &f).unwrap_err();
     assert!(
         matches!(
             &err,
@@ -93,15 +90,12 @@ fn a_hello_sharing_its_body_with_a_welcome_closes_the_connection() {
 
 #[test]
 fn a_request_sharing_its_body_with_a_reply_closes_the_connection() {
-    let list = correlated(&OpsToDaemonMsg::List, Correlation::request(request(1))).body;
+    let list = frame_correlated(&OpsToDaemonMsg::List, Correlation::request(request(1))).body;
     let listed = codec::encode(&OpsToClientMsg::Listed { sessions: vec![] });
     for parts in [[&list[..], &listed], [&listed, &list[..]]] {
         let mut daemon = in_phase::<DaemonSide>(Phase::Attached, ConnectionMode::Ops);
-        let Incoming::Payload(p) = daemon.classify(&mixed(MessageKind::Ops, &parts)).unwrap()
-        else {
-            panic!("payload");
-        };
-        let err = daemon.decode::<OpsToDaemonMsg>(&p).unwrap_err();
+        let err = decode_frame::<OpsToDaemonMsg>(&mut daemon, &mixed(MessageKind::Ops, &parts))
+            .unwrap_err();
         assert!(is_wrong_direction(&err, "Ops::Listed"), "got {err}");
     }
 }
@@ -110,16 +104,11 @@ fn a_request_sharing_its_body_with_a_reply_closes_the_connection() {
 /// behind a reply it would have dropped is the same fault.
 #[test]
 fn a_drained_reply_sharing_its_body_with_a_request_closes_the_connection() {
-    let found = correlated(&a_match(), Correlation::stream(stream(1))).body;
+    let found = frame_correlated(&a_match(), Correlation::stream(stream(1))).body;
     let query = codec::encode(&a_query());
     for parts in [[&found[..], &query], [&query, &found[..]]] {
         let mut client = in_phase::<ClientSide>(Phase::Attached, ConnectionMode::Window);
-        let Incoming::Payload(p) = client
-            .classify(&mixed(MessageKind::Search, &parts))
-            .unwrap()
-        else {
-            panic!("payload");
-        };
+        let p = payload_of(&mut client, &mixed(MessageKind::Search, &parts));
         let err = client.admit_drained(&p).unwrap_err();
         assert!(is_wrong_direction(&err, "Search::Query"), "got {err}");
     }
@@ -164,10 +153,7 @@ fn an_undecodable_body_closes_the_connection_naming_expected_and_actual() {
         kind: MessageKind::Grid.as_u16(),
         body: Bytes::from_static(&[0xFF, 0xFF, 0xFF]),
     };
-    let Incoming::Payload(p) = client.classify(&f).unwrap() else {
-        panic!("payload");
-    };
-    let err = client.decode::<GridMsg>(&p).unwrap_err();
+    let err = decode_frame::<GridMsg>(&mut client, &f).unwrap_err();
     let DriverError::UndecodableBody { expected, found } = &err else {
         panic!("got {err}");
     };
@@ -180,11 +166,8 @@ fn an_undecodable_body_closes_the_connection_naming_expected_and_actual() {
         kind: MessageKind::Ops.as_u16(),
         body: Bytes::new(),
     };
-    let Incoming::Payload(p) = daemon.classify(&f).unwrap() else {
-        panic!("payload");
-    };
     assert!(matches!(
-        daemon.decode::<OpsToDaemonMsg>(&p).unwrap_err(),
+        decode_frame::<OpsToDaemonMsg>(&mut daemon, &f).unwrap_err(),
         DriverError::UndecodableBody {
             expected: MessageKind::Ops,
             ..
@@ -199,16 +182,14 @@ fn an_undecodable_body_closes_the_connection_naming_expected_and_actual() {
 #[test]
 fn an_unparseable_correlated_body_is_reported_as_its_family() {
     let mut driver = in_phase::<DaemonSide>(Phase::Attached, ConnectionMode::Ops);
-    let Incoming::Payload(p) = driver
-        .classify(&OwnedFrame {
+    let err = decode_frame::<OpsToDaemonMsg>(
+        &mut driver,
+        &OwnedFrame {
             kind: MessageKind::Ops.as_u16(),
             body: Bytes::from_static(&[0xFF, 0xFF, 0xFF]),
-        })
-        .unwrap()
-    else {
-        panic!("payload");
-    };
-    let err = driver.decode::<OpsToDaemonMsg>(&p).unwrap_err();
+        },
+    )
+    .unwrap_err();
     assert!(
         matches!(
             &err,

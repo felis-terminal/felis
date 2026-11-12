@@ -151,11 +151,8 @@ fn a_window_may_query_the_roster_but_not_mutate_it() {
         let request = Correlation::request(
             RequestId::new(u64::try_from(nth).expect("small") + 1).expect("nonzero"),
         );
-        let Incoming::Payload(payload) = daemon.classify(&correlated(&verb, request)).unwrap()
-        else {
-            panic!("an Ops verb is a payload");
-        };
-        let outcome = daemon.decode::<OpsToDaemonMsg>(&payload);
+        let outcome =
+            decode_frame::<OpsToDaemonMsg>(&mut daemon, &frame_correlated(&verb, request));
         if admitted {
             assert!(
                 matches!(outcome, Ok(Delivery::Deliver(_))),
@@ -182,17 +179,12 @@ fn a_window_may_query_the_roster_but_not_mutate_it() {
 #[test]
 fn an_ops_client_refuses_a_window_management_push() {
     let mut ops = in_phase::<ClientSide>(Phase::Attached, ConnectionMode::Ops);
-    let Incoming::Payload(evicted) = ops
-        .classify(&frame(&PushMsg::Evicted {
-            reason: "evicted".into(),
-        }))
-        .unwrap()
-    else {
-        panic!("a push is a payload");
-    };
+    let evicted = frame(&PushMsg::Evicted {
+        reason: "evicted".into(),
+    });
     assert!(
         matches!(
-            ops.decode::<PushMsg>(&evicted),
+            decode_frame::<PushMsg>(&mut ops, &evicted),
             Ok(Delivery::Deliver(Delivered {
                 msg: PushMsg::Evicted { .. },
                 ..
@@ -208,12 +200,9 @@ fn an_ops_client_refuses_a_window_management_push() {
             status: None,
         },
     ] {
-        let Incoming::Payload(payload) = ops.classify(&frame(&push)).unwrap() else {
-            panic!("a push is a payload");
-        };
         assert!(
             matches!(
-                ops.decode::<PushMsg>(&payload),
+                decode_frame::<PushMsg>(&mut ops, &frame(&push)),
                 Err(DriverError::ArmDenied {
                     mode: ConnectionMode::Ops,
                     ..
@@ -224,14 +213,8 @@ fn an_ops_client_refuses_a_window_management_push() {
     }
 
     let mut window = in_phase::<ClientSide>(Phase::Attached, ConnectionMode::Window);
-    let Incoming::Payload(payload) = window
-        .classify(&frame(&PushMsg::Reattach { id: 1 }))
-        .unwrap()
-    else {
-        panic!("a push is a payload");
-    };
     assert!(matches!(
-        window.decode::<PushMsg>(&payload),
+        decode_frame::<PushMsg>(&mut window, &frame(&PushMsg::Reattach { id: 1 })),
         Ok(Delivery::Deliver(Delivered {
             msg: PushMsg::Reattach { .. },
             ..
@@ -266,9 +249,7 @@ fn grid_pushes_reach_a_window_uncorrelated() {
         GridMsg::RowDelta { rows: vec![] },
         GridMsg::RehydrateEnd,
     ] {
-        let Incoming::Payload(p) = driver.classify(&frame(&msg)).unwrap() else {
-            panic!("payload");
-        };
+        let p = payload_of(&mut driver, &frame(&msg));
         assert_eq!(p.correlation, None);
         assert!(matches!(
             driver.decode::<GridMsg>(&p).unwrap(),
