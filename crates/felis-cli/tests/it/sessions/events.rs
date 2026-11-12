@@ -1,3 +1,5 @@
+use tokio::io::{AsyncBufReadExt as _, BufReader};
+
 use super::*;
 
 /// `sessions events` streams only what it names, so a kind added later
@@ -24,8 +26,6 @@ fn events_without_a_kind_is_a_usage_error() {
 /// `removed`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn events_streams_lifecycle_and_prompt_items() {
-    use tokio::io::{AsyncBufReadExt as _, BufReader};
-
     let tmp = private_dir();
     let factory = sh_factory("while :; do printf '\\033]133;A\\007'; sleep 0.2; done");
     let (server, socket, _pool) = spawn_daemon(&tmp, factory);
@@ -98,8 +98,6 @@ async fn events_streams_lifecycle_and_prompt_items() {
 /// consumer a bare close it would read as a lost daemon.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn events_end_cleanly_when_the_daemon_stops() {
-    use tokio::io::{AsyncBufReadExt as _, BufReader};
-
     let tmp = private_dir();
     let factory = sh_factory("while :; do printf '\\033]133;A\\007'; sleep 0.2; done");
     let (server, socket, _pool) = spawn_daemon(&tmp, factory);

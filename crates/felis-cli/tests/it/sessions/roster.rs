@@ -1,3 +1,6 @@
+use std::io::Write as _;
+use std::os::unix::fs::PermissionsExt as _;
+
 use super::*;
 
 /// The hidden completion helper lists the daemon an explicit
@@ -35,9 +38,6 @@ async fn complete_sessions_lists_the_local_socket_roster() {
 /// an empty candidate list is deliberate rather than a missing socket fallback.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn complete_sessions_with_a_host_emits_nothing_and_never_runs_ssh() {
-    use std::io::Write as _;
-    use std::os::unix::fs::PermissionsExt as _;
-
     let tmp = private_dir();
     let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     create_and_detach(&socket).await;
@@ -92,9 +92,6 @@ async fn complete_sessions_with_a_host_emits_nothing_and_never_runs_ssh() {
 /// on disk even though the handshake then fails.
 #[test]
 fn the_ssh_relay_command_asks_for_a_spawn_only_for_the_spawning_verb() {
-    use std::io::Write as _;
-    use std::os::unix::fs::PermissionsExt as _;
-
     let tmp = private_dir();
     let calls = tmp.path().join("ssh-argv");
     let ssh = tmp.path().join("ssh");

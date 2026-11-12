@@ -1,3 +1,5 @@
+use std::os::unix::fs::PermissionsExt;
+
 use super::*;
 
 /// The stderr assertion pins the guard: exit 2 also spells
@@ -117,7 +119,6 @@ fn external_command(dir: &std::path::Path) -> StdCommand {
 }
 
 fn place_script(dir: &std::path::Path, name: &str, body: &str) {
-    use std::os::unix::fs::PermissionsExt;
     let path = dir.join(name);
     std::fs::write(&path, body).expect("write the script");
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
@@ -180,7 +181,6 @@ async fn a_missing_external_command_is_a_usage_error_naming_the_similar_verb() {
 /// moves on to the next directory as `execvp` would.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_external_command_this_process_may_not_run_yields_to_a_later_one() {
-    use std::os::unix::fs::PermissionsExt;
     let denied = private_dir();
     let allowed = private_dir();
     place_script(denied.path(), "felis-echo", "#!/bin/sh\necho denied\n");

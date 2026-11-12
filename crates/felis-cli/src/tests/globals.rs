@@ -319,7 +319,6 @@ fn the_version_flag_refuses_every_global() {
         assert!(conflict.contains("runs nothing else"), "{conflict}");
     }
 
-    // The pre-existing conflict keeps its own wording.
     let verb = Cli::try_parse_from(["felis", "--version", "sessions", "list"]).unwrap();
     assert!(
         version_conflict(&verb)

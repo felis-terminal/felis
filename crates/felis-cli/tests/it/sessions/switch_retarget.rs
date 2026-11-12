@@ -1,3 +1,6 @@
+use felis_client_core::{Offer, connect};
+use felis_protocol::{MessageKind, codec, messages::PushMsg};
+
 use super::*;
 
 type StampedDaemon = (
@@ -22,10 +25,6 @@ fn spawn_default_socket_daemon(tmp: &TempDir, factory: SessionFactory) -> Stampe
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn switch_pushes_reattach_to_attached_client() {
-    use felis_client_core::Offer;
-    use felis_client_core::connect;
-    use felis_protocol::{MessageKind, codec, messages::PushMsg};
-
     let tmp = private_dir();
     let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let target = create_and_detach(&socket).await;
@@ -187,9 +186,6 @@ async fn switch_to_the_same_session_exits_zero() {
 /// as "the window moved".
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_switch_human_line_says_queued_and_not_landed() {
-    use felis_client_core::Offer;
-    use felis_client_core::connect;
-
     let tmp = private_dir();
     let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let target = create_and_detach(&socket).await;
@@ -255,10 +251,6 @@ async fn a_same_session_switch_human_line_says_nothing_was_queued() {
 /// the session it named.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_target_that_disconnects_after_queue_admission_keeps_the_switch_result() {
-    use felis_client_core::Offer;
-    use felis_client_core::connect;
-    use felis_protocol::{MessageKind, codec, messages::PushMsg};
-
     let tmp = private_dir();
     let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let target = create_and_detach(&socket).await;
@@ -356,10 +348,6 @@ async fn a_target_that_disconnects_after_queue_admission_keeps_the_switch_result
 /// the request, so `queued` is all the source daemon can report.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_cross_daemon_retarget_reports_admission_without_landing() {
-    use felis_client_core::Offer;
-    use felis_client_core::connect;
-    use felis_protocol::{MessageKind, codec, messages::PushMsg};
-
     let tmp = private_dir();
     let elsewhere = private_dir();
     let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
@@ -429,9 +417,6 @@ async fn a_cross_daemon_retarget_reports_admission_without_landing() {
 /// re-dials rather than re-attaching on the same carrier.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_retarget_human_line_says_queued_and_not_landed() {
-    use felis_client_core::Offer;
-    use felis_client_core::connect;
-
     let tmp = private_dir();
     let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let mut gui = connect(&socket, Offer::window(false)).await.unwrap();
@@ -463,10 +448,6 @@ async fn a_retarget_human_line_says_queued_and_not_landed() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn window_retarget_without_a_carrier_heads_for_the_local_daemon() {
-    use felis_client_core::Offer;
-    use felis_client_core::connect;
-    use felis_protocol::{MessageKind, codec, messages::PushMsg};
-
     let tmp = private_dir();
     let (server, socket, _pool, (env_var, env_value)) =
         spawn_default_socket_daemon(&tmp, quiet_factory());
@@ -517,10 +498,6 @@ async fn window_retarget_without_a_carrier_heads_for_the_local_daemon() {
 /// the only way there.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_in_window_retarget_reaches_the_stamped_daemon() {
-    use felis_client_core::Offer;
-    use felis_client_core::connect;
-    use felis_protocol::{MessageKind, codec, messages::PushMsg};
-
     let tmp = private_dir();
     let (server, socket, _pool) = spawn_daemon(&tmp, quiet_factory());
     let mut gui = connect(&socket, Offer::window(false)).await.unwrap();

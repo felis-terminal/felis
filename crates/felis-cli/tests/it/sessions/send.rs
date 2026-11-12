@@ -1,3 +1,8 @@
+use std::io::Write;
+use std::process::Stdio;
+
+use felis_protocol::limits::MAX_PASTE_BYTES;
+
 use super::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -55,7 +60,7 @@ async fn send_empty_payload_still_resolves_the_session_id() {
 
     let ok = cli_on(&socket)
         .args(["sessions", "send", &id_hex, "-"])
-        .stdin(std::process::Stdio::null())
+        .stdin(Stdio::null())
         .output()
         .expect("run felis sessions send - with empty stdin");
     assert_eq!(
@@ -68,7 +73,7 @@ async fn send_empty_payload_still_resolves_the_session_id() {
 
     let unknown = cli_on(&socket)
         .args(["sessions", "send", "deadbeef", "-"])
-        .stdin(std::process::Stdio::null())
+        .stdin(Stdio::null())
         .output()
         .expect("run felis sessions send - unknown id");
     assert_eq!(
@@ -121,10 +126,6 @@ async fn send_returns_zero_on_detached_session() {
 /// reports success for bytes no child ever sees.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn send_waits_for_admission_rather_than_dropping_its_input() {
-    use felis_protocol::limits::MAX_PASTE_BYTES;
-    use std::io::Write;
-    use std::process::Stdio;
-
     // Past the 64 bytes the first payload leaves unreserved, so this one
     // cannot slip into the budget beside it.
     const MARKER: &str = "MARKER-0123456789-0123456789-0123456789-0123456789-\
@@ -230,10 +231,6 @@ async fn send_waits_for_admission_rather_than_dropping_its_input() {
 /// asked for a bounded failure.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn send_wait_timeout_bounds_the_admission_of_a_wedged_child() {
-    use felis_protocol::limits::MAX_PASTE_BYTES;
-    use std::io::Write;
-    use std::process::Stdio;
-
     // Past the 64 bytes the filler leaves unreserved, so this payload
     // cannot slip into the budget beside it.
     const PAYLOAD: &str = "PAYLOAD-0123456789-0123456789-0123456789-0123456789-\
