@@ -1,5 +1,3 @@
-#![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
-
 #[cfg(unix)]
 use std::sync::Arc;
 #[cfg(unix)]

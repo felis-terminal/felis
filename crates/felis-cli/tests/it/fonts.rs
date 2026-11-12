@@ -3,16 +3,12 @@
 //! it prefers over any on `PATH`, so each test picks the frontend's
 //! answer.
 
-#![cfg(unix)]
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use tempfile::TempDir;
 
-#[path = "common/schema.rs"]
-mod schema;
+use crate::common::schema;
 
 const LISTING: &str = r#"{"v":2,"families":[{"name":"DejaVu Sans Mono","monospace":true,"styles":[{"weight":400,"italic":false},{"weight":700,"italic":true}]},{"name":"Noto Color Emoji","monospace":false,"styles":[{"weight":400,"italic":false}]}]}"#;
 

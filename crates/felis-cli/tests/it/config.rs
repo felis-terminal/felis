@@ -4,14 +4,11 @@
 //! can redirect on Windows, is tested per platform: a temp profile on
 //! Unix, the frozen path spelling (docs/reference/config.md) on Windows.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use std::process::Command as StdCommand;
 
 use tempfile::TempDir;
 
-#[path = "common/schema.rs"]
-mod schema;
+use crate::common::schema;
 
 fn config_path(home: &TempDir) -> std::path::PathBuf {
     home.path().join("config.toml")

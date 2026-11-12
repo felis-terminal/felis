@@ -1,7 +1,5 @@
-//! Included by the e2e suites through `#[path]`, because the objects
-//! they already produce are the fixtures.
-
-#![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
+//! Validation for the e2e suites: the objects they already produce are
+//! the fixtures.
 
 use std::sync::OnceLock;
 

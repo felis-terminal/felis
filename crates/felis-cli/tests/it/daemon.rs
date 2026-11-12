@@ -1,18 +1,12 @@
 //! `felis daemon` integration tests (docs/reference/cli.md
 //! "Daemon status", "Daemon stop", "Daemon upgrade").
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-#![cfg(unix)]
-
 use std::process::Command as StdCommand;
 use std::time::Duration;
 
 use felis_daemon::serve::DaemonCaps;
 
-#[path = "common/fixtures.rs"]
-mod fixtures;
-#[path = "common/schema.rs"]
-mod schema;
+use crate::common::{fixtures, schema};
 
 use fixtures::{
     create_and_detach, private_dir, quiet_factory, spawn_daemon, spawn_daemon_with_caps,

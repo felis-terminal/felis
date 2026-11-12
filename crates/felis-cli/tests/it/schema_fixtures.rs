@@ -1,14 +1,11 @@
 //! The published bundle read as a consumer reads it: the objects the
 //! reference documents must validate, and the fixtures it must reject.
-//! `cli_sessions.rs` covers what a live run produces; what is left
+//! `sessions.rs` covers what a live run produces; what is left
 //! here is the malformed vocabulary it cannot.
-
-#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use serde_json::json;
 
-#[path = "common/schema.rs"]
-mod schema;
+use crate::common::schema;
 
 /// The bundle rejects what the reference forbids: a truncated or
 /// uppercased id, a numeric attachment id, an out-of-range dimension,

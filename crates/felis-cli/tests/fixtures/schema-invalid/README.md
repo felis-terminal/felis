@@ -9,4 +9,4 @@ An `above-u64` / `above-i64` fixture carries the closest value the validator can
 past the bound rather than the bound plus one: a 64-bit maximum is not representable as `f64`, and the validator
 compares numbers as `f64`. `schema_fixtures.rs` pins that gap itself.
 
-`tests/schema_fixtures.rs` reads them.
+`tests/it/schema_fixtures.rs` reads them.

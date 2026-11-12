@@ -4,8 +4,6 @@
 //! `Correlation::stream` on the opener) leaves an id issued for a frame
 //! that never goes out, which the daemon answers by closing.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 /// The needles are the two halves of the raw sequence: the allocation
 /// and the envelope the opener travels under.
 const RAW_SEQUENCE: &[&str] = &["driver.open_stream()", "Correlation::stream("];

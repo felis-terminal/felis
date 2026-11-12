@@ -3,10 +3,9 @@
 //! environment variables"). Every socket path here is unique, so the
 //! units these tests load never collide with the developer's own daemon.
 
-#![cfg(target_os = "linux")]
 // The Drop guard reports a leaked unit while a test is already
 // panicking, where an assertion would abort the process instead.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::print_stderr)]
+#![allow(clippy::print_stderr)]
 
 use std::{
     path::{Path, PathBuf},
@@ -16,8 +15,7 @@ use std::{
 
 use tempfile::TempDir;
 
-#[path = "common/fixtures.rs"]
-mod fixtures;
+use crate::common::fixtures;
 
 use fixtures::private_dir;
 

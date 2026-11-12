@@ -3,18 +3,12 @@
 //! depend on the build the suite runs from
 //! (`docs/reference/cli.md` "Version reporting").
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-#![cfg(unix)]
-
 use std::process::{Command as StdCommand, Output};
 
 use felis_daemon::serve::{ConnectionAdmission, DaemonCaps};
 use tempfile::TempDir;
 
-#[path = "common/fixtures.rs"]
-mod fixtures;
-#[path = "common/schema.rs"]
-mod schema;
+use crate::common::{fixtures, schema};
 
 use fixtures::{private_dir, quiet_factory, spawn_daemon, spawn_daemon_with_caps};
 

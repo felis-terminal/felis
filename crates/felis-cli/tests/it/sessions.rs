@@ -2,9 +2,6 @@
 //! `felis` binary driven against it, exit codes per
 //! docs/reference/ipc.md "CLI clients".
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-#![cfg(unix)]
-
 use std::process::Command as StdCommand;
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,10 +15,7 @@ use felis_pty::Command as PtyCommand;
 use tempfile::TempDir;
 use tokio::sync::Mutex;
 
-#[path = "common/fixtures.rs"]
-mod fixtures;
-#[path = "common/schema.rs"]
-mod schema;
+use crate::common::{fixtures, schema};
 
 use fixtures::{
     create_and_detach, poll_until, private_dir, quiet_factory, spawn_daemon, spawn_daemon_with_caps,

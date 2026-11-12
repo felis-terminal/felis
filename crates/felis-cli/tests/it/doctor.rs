@@ -3,16 +3,11 @@
 //! row set, the status vocabulary, the envelope, and the exit codes are
 //! pinned.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use std::process::Command as StdCommand;
 
 use tempfile::TempDir;
 
-#[path = "common/fixtures.rs"]
-mod fixtures;
-#[path = "common/schema.rs"]
-mod schema;
+use crate::common::{fixtures, schema};
 
 #[cfg(unix)]
 use felis_daemon::serve::DaemonCaps;
