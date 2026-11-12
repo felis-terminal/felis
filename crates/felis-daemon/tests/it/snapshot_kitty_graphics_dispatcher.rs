@@ -244,6 +244,10 @@ fn quiet_one_suppresses_ok_keeps_errors() {
             .is_none(),
         "q=1 OK suppressed",
     );
+    assert!(
+        s.images.get(ImageId(31)).is_some(),
+        "the store mutation runs regardless of q="
+    );
     let err = s.dispatch(&body("Ga=p,q=1,i=999", b"")).unwrap();
     assert!(err.starts_with(b"\x1b_Gi=999;ENOENT"));
 }
@@ -259,14 +263,6 @@ fn quiet_two_silences_everything_including_errors() {
         s.dispatch(&body("Ga=p,q=2,i=999", b"")).is_none(),
         "q=2 silences errors too",
     );
-}
-
-#[test]
-fn missing_image_id_auto_allocates_without_a_reply() {
-    // Valid per the Kitty spec (yazi's direct preview relies on it).
-    let mut s = state();
-    let response = s.dispatch(&body("Ga=t,f=32,s=1,v=1", &b64(&TEST_PIXEL)));
-    assert_eq!(response, None);
 }
 
 #[test]

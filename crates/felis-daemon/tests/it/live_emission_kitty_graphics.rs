@@ -362,6 +362,7 @@ fn action_d_default_emits_placement_removed_only() {
         }
         m => panic!("expected PlacementRemoved, got {m:?}"),
     }
+    assert!(s.images.get(ImageId(1)).is_some(), "the image survives d=a");
 }
 
 #[test]

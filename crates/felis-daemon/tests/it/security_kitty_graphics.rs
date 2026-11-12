@@ -61,6 +61,7 @@ fn t_eq_f_with_symlink_to_real_file_returns_ebadf_under_nofollow() {
         response.starts_with(b"\x1b_Gi=3;EBADF"),
         "NOFOLLOW must refuse the symlink, got: {response:?}",
     );
+    assert!(s.images.is_empty(), "nothing lands in the store");
 }
 
 #[cfg(unix)]
