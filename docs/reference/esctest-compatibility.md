@@ -8,7 +8,7 @@ The `esctest2` conformance harness, the baseline it ratchets, and what each rema
 
 ## Harness configuration
 
-The PTY integration test harness at `crates/felis-pty/tests/esctest_smoke.rs` executes Thomas Dickey's
+The PTY integration test harness at `crates/felis-pty/tests/it/esctest.rs` executes Thomas Dickey's
 [`esctest2`](https://invisible-island.net/esctest/) suite (79 modules, 568 cases) inside a felis-spawned PTY.
 
 - **Suite flags**: `--expected-terminal=xterm` (iTerm2-specific cases count as known bugs rather than failures),
@@ -17,14 +17,14 @@ The PTY integration test harness at `crates/felis-pty/tests/esctest_smoke.rs` ex
   the pass count.
 - **Environment**: The dev shell puts the `esctest` derivation (`dev/packages/esctest.nix`) on `PATH`; the derivation
   removes the window-op cases' waits for a window manager.
-- **Invocation**: `cargo nextest run -p felis-pty --test esctest_smoke` (it fails without the `esctest` binary).
+- **Invocation**: `cargo nextest run -p felis-pty --test it esctest::` (it fails without the `esctest` binary).
   `ESCTEST_BIN` names a binary to use instead of the one on `PATH`, and `ESCTEST_INCLUDE` passes an `--include=` pattern
   so a single module can be re-run while iterating.
 
 ## Invariant and baseline
 
-The `PASS_BASELINE` constant in `esctest_smoke.rs` acts as a regression floor: any commit that flips esctest cases to
-pass must raise the floor to the new pass count in the same commit. A drop below the floor fails CI.
+The `PASS_BASELINE` constant in `esctest.rs` acts as a regression floor: any commit that flips esctest cases to pass
+must raise the floor to the new pass count in the same commit. A drop below the floor fails CI.
 
 The commit that raises the floor names the sequence behaviors it implemented and lists the newly passing case names.
 

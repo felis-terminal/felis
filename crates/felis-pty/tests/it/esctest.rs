@@ -2,113 +2,35 @@
 //! and `felis-grid` in a PTY and assert the summary meets a tracked baseline.
 //! A missing `esctest` (`ESCTEST_BIN` overrides `PATH`) fails the test.
 
-#![cfg(unix)]
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use felis_grid::Grid;
-use felis_pty::spawn;
-use felis_pty::{Command, PtyParts, Size};
-use tokio::io::AsyncWriteExt;
-use tokio::task::JoinHandle;
 
-mod common;
-use common::{COLS, ROWS, host_replies, require_binary};
+use crate::common::{COLS, Harness, ROWS, conformance_command, require_binary};
 
 /// Lower bound on passed count under `--expected-terminal=xterm --max-vt-level=4`.
 /// Ratchet: a commit that flips cases to PASS bumps this floor.
 /// Failures are tracked in `docs/reference/esctest-compatibility.md`.
 const PASS_BASELINE: u32 = 491;
 
-struct EsctestSession {
-    read_task: Option<JoinHandle<()>>,
-    _writer: Arc<tokio::sync::Mutex<Box<dyn tokio::io::AsyncWrite + Send + Unpin>>>,
-}
-
-impl EsctestSession {
-    fn spawn_for(binary: PathBuf, logfile: &std::path::Path) -> Self {
-        let mut cmd = Command::new(binary);
-        cmd.env_clear();
-        cmd.env("TERM", "xterm");
-        cmd.env("LC_ALL", "C");
-        cmd.env("PATH", "/usr/bin:/bin");
-        // Options configure xterm parity, VT420 cap, quiet output, 1s timeout,
-        // strict per-row reverse wraparound (?45 / 383), and private logfile.
-        let mut argv = vec![
-            "--expected-terminal=xterm".to_string(),
-            "--max-vt-level=4".to_string(),
-            "--no-print-logs".to_string(),
-            "--timeout=1".to_string(),
-            "--xterm-reverse-wrap=383".to_string(),
-            format!("--logfile={}", logfile.display()),
-        ];
-        if let Ok(pattern) = std::env::var("ESCTEST_INCLUDE") {
-            argv.push(format!("--include={pattern}"));
-        }
-        cmd.args(argv);
-
-        let (chunks_tx, mut chunks_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
-        let session = spawn(
-            cmd,
-            Size {
-                rows: ROWS,
-                cols: COLS,
-                pixel_width: 0,
-                pixel_height: 0,
-            },
-            Box::new(move |bytes: &[u8]| drop(chunks_tx.send(bytes.to_vec()))),
-        )
-        .expect("spawn esctest");
-        let PtyParts { writer, .. } = session;
-
-        let writer_arc: Arc<tokio::sync::Mutex<Box<dyn tokio::io::AsyncWrite + Send + Unpin>>> =
-            Arc::new(tokio::sync::Mutex::new(Box::new(writer)));
-
-        let writer_task = Arc::clone(&writer_arc);
-        let read_task = tokio::spawn(async move {
-            let mut parser = felis_vt::Parser::new();
-            let mut grid = Grid::new(ROWS, COLS);
-            // The channel closes when the parse thread exits (PTY EOF).
-            while let Some(chunk) = chunks_rx.recv().await {
-                parser.advance(&mut grid, &chunk);
-                let replies = host_replies(&mut grid);
-                if !replies.is_empty() {
-                    let mut w = writer_task.lock().await;
-                    for reply in &replies {
-                        if w.write_all(reply).await.is_err() {
-                            return;
-                        }
-                    }
-                    if w.flush().await.is_err() {
-                        return;
-                    }
-                }
-            }
-        });
-
-        Self {
-            read_task: Some(read_task),
-            _writer: writer_arc,
-        }
+fn spawn_esctest(binary: PathBuf, logfile: &std::path::Path) -> Harness {
+    let mut cmd = conformance_command(binary);
+    // Options configure xterm parity, VT420 cap, quiet output, 1s timeout,
+    // strict per-row reverse wraparound (?45 / 383), and private logfile.
+    let mut argv = vec![
+        "--expected-terminal=xterm".to_string(),
+        "--max-vt-level=4".to_string(),
+        "--no-print-logs".to_string(),
+        "--timeout=1".to_string(),
+        "--xterm-reverse-wrap=383".to_string(),
+        format!("--logfile={}", logfile.display()),
+    ];
+    if let Ok(pattern) = std::env::var("ESCTEST_INCLUDE") {
+        argv.push(format!("--include={pattern}"));
     }
-
-    async fn wait_for_exit(&mut self, timeout: Duration) -> bool {
-        let Some(handle) = self.read_task.take() else {
-            return true;
-        };
-        tokio::time::timeout(timeout, handle).await.is_ok()
-    }
-}
-
-impl Drop for EsctestSession {
-    fn drop(&mut self) {
-        if let Some(handle) = self.read_task.take() {
-            handle.abort();
-        }
-    }
+    cmd.args(argv);
+    Harness::spawn(cmd, Grid::new(ROWS, COLS))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -200,7 +122,7 @@ async fn esctest_suite_pass_count_meets_baseline() {
     };
     drop(std::fs::remove_file(&logfile));
 
-    let mut session = EsctestSession::spawn_for(binary, &logfile);
+    let mut session = spawn_esctest(binary, &logfile);
 
     // esctest exercises >500 tests, many of which spend the full
     // per-test timeout waiting for a reply felis does not send.

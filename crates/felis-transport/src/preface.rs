@@ -294,6 +294,8 @@ mod tests {
     use tokio::io::duplex;
 
     use super::*;
+    #[cfg(unix)]
+    use crate::test_support::private_dir;
 
     #[tokio::test]
     async fn a_preface_exchange_meets_in_the_middle() {
@@ -584,17 +586,6 @@ mod tests {
             probe(tmp.path().join("nothing.sock"), PROBE_DEADLINE).await,
             ProbeOutcome::Absent
         );
-    }
-
-    /// A socket parent must be a `0700` directory this uid owns
-    /// (REQ-107), and `TempDir` follows the process umask.
-    #[cfg(unix)]
-    fn private_dir() -> tempfile::TempDir {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        tmp
     }
 
     /// A listener that accepts and then says nothing must not hold the

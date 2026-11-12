@@ -310,11 +310,11 @@ fn geteuid() -> u32 {
 mod tests {
     use std::os::unix::fs::PermissionsExt as _;
 
-    use tempfile::TempDir;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;
     use crate::peer::PeerError;
+    use crate::test_support::private_dir;
 
     fn swap_umask(mask: Mode) -> Mode {
         #[allow(clippy::unwrap_used)]
@@ -336,15 +336,6 @@ mod tests {
         let out = op();
         let left_behind = swap_umask(original);
         (out, left_behind)
-    }
-
-    /// A socket parent must be a `0700` directory this uid owns
-    /// (REQ-107), and `TempDir` follows the process umask.
-    #[cfg(unix)]
-    fn private_dir() -> TempDir {
-        let tmp = TempDir::new().unwrap();
-        fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o700)).unwrap();
-        tmp
     }
 
     fn parent_reason(err: BindError) -> String {

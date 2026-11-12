@@ -19,6 +19,8 @@ pub mod preface;
 pub mod retry;
 pub mod socket;
 pub mod stdio;
+#[cfg(all(test, unix))]
+mod test_support;
 #[cfg(unix)]
 pub(crate) mod unix;
 #[cfg(windows)]
