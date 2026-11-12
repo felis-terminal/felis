@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::{cluster_fit_px_at, walk_pinned};
 
 fn slot_after_ensure(idx: &mut GlyphIndex, c: char, sizing: SizingKey) -> GlyphSlot {
     let h = idx.cell_metrics().height;
@@ -208,35 +209,6 @@ fn an_emoji_presentation_char_rasterizes_in_color() {
 }
 
 /// A one-row grid fed `bytes` and walked against the pinned set.
-struct Walked {
-    index: GlyphIndex,
-    frame: ShapeFrame,
-    grid: Grid,
-}
-
-fn walk_pinned(bytes: &[u8], cols: u16) -> Walked {
-    let stack = FontStack::pinned_test_stack();
-    let mut grid = Grid::new(1, cols);
-    Parser::new().advance(&mut grid, bytes);
-    let mut index = GlyphIndex::new(stack, 18.0, nz(1024));
-    let mut frame = ShapeFrame::empty();
-    GridWalker::default().walk(
-        &mut index,
-        grid.screen(),
-        &mut Shaper::new(),
-        &[],
-        &mut frame,
-    );
-    Walked { index, frame, grid }
-}
-
-fn cluster_fit_px_at(p: &Walked, col: u16) -> u16 {
-    match p.frame.cell_at(0, col) {
-        ShapedCell::Cluster { fit_px, .. } => fit_px,
-        other => panic!("col {col} is not a cluster: {other:?}"),
-    }
-}
-
 /// Clusters whose advance stays within their cells keep the native
 /// path: a ligated flag, a widened VS16 emoji, a keycap, a combining
 /// mark, and one the face attaches at its anchor with no precomposed

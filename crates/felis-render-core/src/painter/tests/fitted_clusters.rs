@@ -1,49 +1,29 @@
 use super::*;
+use crate::test_support::{Walked, cluster_fit_px_at, walk_pinned};
 
-/// A one-row grid fed `bytes`, walked and painted against the pinned
-/// set.
+/// [`walk_pinned`]'s grid, painted.
 struct Painted {
-    index: GlyphIndex,
-    frame: ShapeFrame,
+    walked: Walked,
     glyphs: Vec<GlyphDraw>,
 }
 
 fn paint_pinned(bytes: &[u8], cols: u16) -> Painted {
-    let stack = FontStack::pinned_test_stack();
-    let mut grid = Grid::new(1, cols);
-    Parser::new().advance(&mut grid, bytes);
-    let mut index = GlyphIndex::new(stack, 18.0, NonZeroU32::new(1024).unwrap());
-    let mut frame = ShapeFrame::empty();
-    GridWalker::default().walk(
-        &mut index,
-        grid.screen(),
-        &mut Shaper::new(),
-        &[],
-        &mut frame,
-    );
+    let walked = walk_pinned(bytes, cols);
     let theme = Theme::default();
     let mut out = RowPaint::default();
     CellPainter::new(
-        grid.screen(),
-        index.cell_metrics(),
+        walked.grid.screen(),
+        walked.index.cell_metrics(),
         &ResolvedTheme::new(&theme),
-        &index,
-        &frame,
+        &walked.index,
+        &walked.frame,
     )
     .without_compaction()
     .with_viewport(0, 1)
     .extend_screen(&mut out);
     Painted {
-        index,
-        frame,
+        walked,
         glyphs: out.glyphs,
-    }
-}
-
-fn cluster_fit_px_at(p: &Painted, col: u16) -> u16 {
-    match p.frame.cell_at(0, col) {
-        ShapedCell::Cluster { fit_px, .. } => fit_px,
-        other => panic!("col {col} is not a cluster: {other:?}"),
     }
 }
 
@@ -70,12 +50,12 @@ fn a_cluster_wider_than_its_cells_fills_and_centres_in_them() {
     ];
     for (name, bytes, col, cells) in repros {
         let p = paint_pinned(bytes, 4);
-        let fit_px = f32::from(cluster_fit_px_at(&p, col));
+        let fit_px = f32::from(cluster_fit_px_at(&p.walked, col));
         assert_ne!(fit_px, 0.0, "{name}: fitted");
         // The size is floored to a whole pixel, which costs up to one
         // part in `fit_px + 1` of the block.
         let filled = |ink: f32, block: f32| ink >= block * fit_px / (fit_px + 1.0) - 1.0;
-        let m = p.index.cell_metrics();
+        let m = p.walked.index.cell_metrics();
         let (cw, ch) = (m.width as f32, m.height as f32);
         let (bx0, bx1) = (f32::from(col) * cw, f32::from(col + cells) * cw);
         let [x0, y0, x1, y1] = ink(&p.glyphs);

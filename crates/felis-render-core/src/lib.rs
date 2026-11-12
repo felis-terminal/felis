@@ -20,6 +20,10 @@ pub mod overlay;
 #[cfg(feature = "glyphs")]
 pub mod painter;
 pub mod palette;
+#[cfg(test)]
+#[cfg(feature = "glyphs")]
+#[cfg(not(windows))]
+mod test_support;
 
 /// `start` / `end` are normalized by the client: row-major min/max for
 /// a linear selection, axis-aligned bounding box for a rectangle.

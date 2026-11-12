@@ -10,13 +10,17 @@
 #[cfg(not(windows))]
 use felis_grid::Grid;
 
+#[cfg(not(windows))]
 use std::sync::Arc;
 
+#[cfg(not(windows))]
 use felis_shaping::Font;
 #[cfg(not(windows))]
 use felis_vt::Parser;
 
 use super::*;
+#[cfg(not(windows))]
+use crate::test_support::stack;
 
 #[cfg(not(windows))]
 mod ensure_and_atlas;
@@ -29,10 +33,6 @@ mod walk;
 
 fn nz(v: u32) -> NonZeroU32 {
     NonZeroU32::new(v).unwrap()
-}
-
-fn stack() -> FontStack {
-    FontStack::new(Arc::new(Font::load_test_font()))
 }
 
 #[test]

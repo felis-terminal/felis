@@ -1,22 +1,14 @@
-use std::{
-    num::{NonZeroU16, NonZeroU32},
-    sync::{Arc, OnceLock},
-};
+use std::num::{NonZeroU16, NonZeroU32};
 
 use felis_grid::{
     AttrFlags, Attributes, Cell, ClusterText, Color, Grapheme, HAlign, ScreenBuffer,
     ScrollDirection, Sizing, TableGc, VAlign,
 };
-use felis_shaping::{Font, FontStack, Shaper, SizingKey};
+use felis_shaping::{Shaper, SizingKey};
 use proptest::prelude::*;
 
 use super::{ClusterGlyph, GlyphIndex, GridWalker, ShapeFrame, ShapedCell};
-
-fn stack() -> FontStack {
-    static FONT: OnceLock<Arc<Font>> = OnceLock::new();
-    let font = FONT.get_or_init(|| Arc::new(Font::load_test_font()));
-    FontStack::new(Arc::clone(font))
-}
+use crate::test_support::stack;
 
 const CLUSTERS: [&str; 3] = ["e\u{301}", "\u{1F44D}\u{1F3FD}", "n\u{303}"];
 
