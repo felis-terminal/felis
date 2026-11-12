@@ -367,6 +367,34 @@ async fn hello_welcome_as<R, W>(
 }
 
 #[cfg(unix)]
+#[track_caller]
+fn assert_mode_denied<T: std::fmt::Debug>(
+    result: &Result<T, ConnError>,
+    mode: ConnectionMode,
+    attempt: &str,
+) {
+    assert!(
+        matches!(result, Err(ConnError::ModeDenied { mode: denied, .. }) if *denied == mode),
+        "{attempt} must end the {mode:?} connection, got {result:?}",
+    );
+}
+
+#[cfg(unix)]
+type Halves = (
+    FrameReader<felis_transport::local::ReadHalf>,
+    FrameWriter<felis_transport::local::WriteHalf>,
+);
+
+/// A connection to the daemon at `path`, past the handshake as `mode`.
+#[cfg(unix)]
+async fn dial(path: &Path, mode: ConnectionMode, pull_paced: bool) -> Halves {
+    let (read_half, write_half) = connect(path).await.unwrap();
+    let (mut reader, mut writer) = framed(read_half, write_half).await;
+    hello_welcome_as(&mut reader, &mut writer, mode, pull_paced).await;
+    (reader, writer)
+}
+
+#[cfg(unix)]
 async fn send_kind<W, M>(writer: &mut FrameWriter<W>, msg: &M)
 where
     W: tokio::io::AsyncWrite + Unpin,
@@ -524,9 +552,7 @@ async fn text_after_a_placement_in_one_write_lands_right_of_the_image() {
         "printf 'top\\n\\033_Ga=T,f=24,s=1,v=1,c=2,r=2;AAAA\\033\\\\AFTER'; sleep 0.5",
     );
     spawn_daemon(&path, pool, factory);
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     create_and_attach(&mut reader, &mut writer).await;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
@@ -2046,9 +2072,7 @@ async fn session_task_reaps_dead_session_after_grace() {
 
     spawn_daemon_with_caps(&path, pool.clone(), factory, caps);
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
 
     create_and_attach(&mut reader, &mut writer).await;
 
@@ -2133,9 +2157,7 @@ async fn exited_shell_is_flagged_in_meta_during_the_grace() {
     };
     spawn_daemon_with_caps(&path, pool.clone(), factory, caps);
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     let id = create_and_attach(&mut reader, &mut writer).await;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -2198,9 +2220,7 @@ async fn a_pick_that_exits_before_the_attach_is_refused_and_the_re_pick_lands() 
     )
     .await;
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     send_kind(
         &mut writer,
         &SessionToDaemonMsg::Attach {
@@ -2230,9 +2250,7 @@ async fn a_pick_that_exits_before_the_attach_is_refused_and_the_re_pick_lands() 
     assert!(delivered, "the session task takes the shutdown");
     wait_for_gone(&pool, doomed).await;
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     send_kind(
         &mut writer,
         &SessionToDaemonMsg::Attach {
@@ -2259,9 +2277,7 @@ async fn a_pick_that_exits_before_the_attach_is_refused_and_the_re_pick_lands() 
         "a vanished target must refuse with a reason that says re-pick, got {reason:?}"
     );
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     send_request(&mut writer, &OpsToDaemonMsg::List, 1).await;
     let roster = listed_roster(&mut reader).await;
     assert!(
@@ -2399,9 +2415,7 @@ async fn a_create_ack_reports_the_window_it_attached() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     spawn_daemon(&path, pool.clone(), shell_factory("sleep 30"));
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     let info = create_and_attach_info(&mut reader, &mut writer).await;
 
     assert_eq!(
@@ -2442,9 +2456,7 @@ async fn a_window_attachment_reports_the_carrier_it_arrived_on() {
         })
     );
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     let local = create_and_attach_info(&mut reader, &mut writer).await;
     let client_pid = if cfg!(any(target_os = "linux", target_vendor = "apple")) {
         NonZeroU32::new(std::process::id())
@@ -2468,9 +2480,7 @@ async fn a_create_ack_reports_the_directory_the_child_started_in() {
     spawn_daemon(&path, pool.clone(), shell_factory("sleep 30"));
     let dir = tmp.path().to_str().unwrap().to_owned();
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     send_kind(
         &mut writer,
         &SessionToDaemonMsg::Create {
@@ -2502,18 +2512,14 @@ async fn a_re_attach_does_not_move_a_session_in_the_ring() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     spawn_daemon(&path, pool.clone(), shell_factory("sleep 30"));
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     let id = create_and_attach_info(&mut reader, &mut writer).await;
     let first = id.sequence;
     let id = id.id;
     drop(reader);
     drop(writer);
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     send_kind(
         &mut writer,
         &SessionToDaemonMsg::Attach {
@@ -2544,17 +2550,13 @@ async fn a_live_only_attach_is_refused_on_a_corpse_but_a_deliberate_one_lands() 
     };
     spawn_daemon_with_caps(&path, pool.clone(), shell_factory("exit 0"), caps);
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     let id = create_and_attach(&mut reader, &mut writer).await;
     wait_for_exited(&pool, SessionId(id)).await;
     drop(reader);
     drop(writer);
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     send_kind(
         &mut writer,
         &SessionToDaemonMsg::Attach {
@@ -2576,9 +2578,7 @@ async fn a_live_only_attach_is_refused_on_a_corpse_but_a_deliberate_one_lands() 
         other => panic!("expected AttachFailed, got {other:?}"),
     }
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     send_kind(
         &mut writer,
         &SessionToDaemonMsg::Attach {
@@ -2642,9 +2642,7 @@ async fn detached_session_keeps_draining_so_child_does_not_block() {
 
     spawn_daemon_with_caps(&path, pool.clone(), factory, caps);
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
 
     let id = create_and_attach(&mut reader, &mut writer).await;
 
@@ -2865,9 +2863,7 @@ async fn measure_attached_cat_drain() {
     };
     spawn_daemon(&path, pool.clone(), factory);
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, true).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, true).await;
 
     // The payload's capture geometry, not the daemon default: replayed at
     // the wrong grid the stream becomes a wrap+scroll storm. Absent asks
@@ -2974,9 +2970,7 @@ async fn measure_pull_cycles_under_flood() {
     };
     spawn_daemon(&path, pool.clone(), factory);
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, true).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, true).await;
     let _id = create_and_attach(&mut reader, &mut writer).await;
 
     loop {
@@ -3083,9 +3077,7 @@ async fn rehydrate_replays_persisted_images_and_placements() {
     )
     .await;
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     send_kind(
         &mut writer,
         &SessionToDaemonMsg::Attach {
@@ -3229,9 +3221,7 @@ async fn time_to_first_frame_under_simulated_slow_link() {
     )
     .await;
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     send_kind(
         &mut writer,
         &SessionToDaemonMsg::Attach {
@@ -3625,14 +3615,10 @@ async fn two_subscribers_mirror_one_session() {
 
     spawn_daemon(&path, pool.clone(), factory);
 
-    let (ra, wa) = connect(&path).await.unwrap();
-    let (mut reader_a, mut writer_a) = framed(ra, wa).await;
-    hello_welcome(&mut reader_a, &mut writer_a, false).await;
+    let (mut reader_a, mut writer_a) = dial(&path, ConnectionMode::Window, false).await;
     let id = create_and_attach(&mut reader_a, &mut writer_a).await;
 
-    let (rb, wb) = connect(&path).await.unwrap();
-    let (mut reader_b, mut writer_b) = framed(rb, wb).await;
-    hello_welcome(&mut reader_b, &mut writer_b, false).await;
+    let (mut reader_b, mut writer_b) = dial(&path, ConnectionMode::Window, false).await;
     attach_existing(&mut reader_b, &mut writer_b, id).await;
 
     let subscribers = pool
@@ -3664,15 +3650,11 @@ async fn late_joiner_rehydrates_output_that_predates_its_attach() {
 
     spawn_daemon(&path, pool, factory);
 
-    let (ra, wa) = connect(&path).await.unwrap();
-    let (mut reader_a, mut writer_a) = framed(ra, wa).await;
-    hello_welcome(&mut reader_a, &mut writer_a, false).await;
+    let (mut reader_a, mut writer_a) = dial(&path, ConnectionMode::Window, false).await;
     let id = create_and_attach(&mut reader_a, &mut writer_a).await;
     expect_row_containing(&mut reader_a, "marker-xyz").await;
 
-    let (rb, wb) = connect(&path).await.unwrap();
-    let (mut reader_b, mut writer_b) = framed(rb, wb).await;
-    hello_welcome(&mut reader_b, &mut writer_b, false).await;
+    let (mut reader_b, mut writer_b) = dial(&path, ConnectionMode::Window, false).await;
     let rows = attach_existing(&mut reader_b, &mut writer_b, id).await;
     assert!(
         rows.iter().any(|r| r.contains("marker-xyz")),
@@ -3690,14 +3672,10 @@ async fn detaching_one_mirror_keeps_the_other_streaming() {
 
     spawn_daemon(&path, pool.clone(), factory);
 
-    let (ra, wa) = connect(&path).await.unwrap();
-    let (mut reader_a, mut writer_a) = framed(ra, wa).await;
-    hello_welcome(&mut reader_a, &mut writer_a, false).await;
+    let (mut reader_a, mut writer_a) = dial(&path, ConnectionMode::Window, false).await;
     let id = create_and_attach(&mut reader_a, &mut writer_a).await;
 
-    let (rb, wb) = connect(&path).await.unwrap();
-    let (mut reader_b, mut writer_b) = framed(rb, wb).await;
-    hello_welcome(&mut reader_b, &mut writer_b, false).await;
+    let (mut reader_b, mut writer_b) = dial(&path, ConnectionMode::Window, false).await;
     attach_existing(&mut reader_b, &mut writer_b, id).await;
 
     drop(reader_a);
@@ -3737,14 +3715,10 @@ async fn a_corrupt_frame_kills_its_own_connection_and_nothing_else() {
 
     spawn_daemon(&path, pool.clone(), factory);
 
-    let (ra, wa) = connect(&path).await.unwrap();
-    let (mut reader_a, mut writer_a) = framed(ra, wa).await;
-    hello_welcome(&mut reader_a, &mut writer_a, false).await;
+    let (mut reader_a, mut writer_a) = dial(&path, ConnectionMode::Window, false).await;
     let id = create_and_attach(&mut reader_a, &mut writer_a).await;
 
-    let (rb, wb) = connect(&path).await.unwrap();
-    let (mut reader_b, mut writer_b) = framed(rb, wb).await;
-    hello_welcome(&mut reader_b, &mut writer_b, false).await;
+    let (mut reader_b, mut writer_b) = dial(&path, ConnectionMode::Window, false).await;
     attach_existing(&mut reader_b, &mut writer_b, id).await;
 
     writer_a
@@ -3806,18 +3780,12 @@ async fn force_detach_evicts_every_subscriber_and_keeps_the_session() {
     // host must resolve.
     spawn_daemon(&path, pool.clone(), shell_factory("read _x"));
 
-    let (ra, wa) = connect(&path).await.unwrap();
-    let (mut reader_a, mut writer_a) = framed(ra, wa).await;
-    hello_welcome(&mut reader_a, &mut writer_a, false).await;
+    let (mut reader_a, mut writer_a) = dial(&path, ConnectionMode::Window, false).await;
     let id = create_and_attach(&mut reader_a, &mut writer_a).await;
-    let (rb2, wb2) = connect(&path).await.unwrap();
-    let (mut reader_a2, mut writer_a2) = framed(rb2, wb2).await;
-    hello_welcome(&mut reader_a2, &mut writer_a2, false).await;
+    let (mut reader_a2, mut writer_a2) = dial(&path, ConnectionMode::Window, false).await;
     attach_existing(&mut reader_a2, &mut writer_a2, id).await;
 
-    let (rc, wc) = connect(&path).await.unwrap();
-    let (mut reader_c, mut writer_c) = framed(rc, wc).await;
-    hello_welcome_as(&mut reader_c, &mut writer_c, ConnectionMode::Ops, false).await;
+    let (mut reader_c, mut writer_c) = dial(&path, ConnectionMode::Ops, false).await;
     send_request(
         &mut writer_c,
         &OpsToDaemonMsg::ForceDetach { id_prefix: hex(id) },
@@ -3878,9 +3846,7 @@ async fn force_detach_idle_session_reports_not_attached() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     spawn_daemon(&path, pool.clone(), shell_factory("read _x"));
 
-    let (rb, wb) = connect(&path).await.unwrap();
-    let (mut reader_b, mut writer_b) = framed(rb, wb).await;
-    hello_welcome_as(&mut reader_b, &mut writer_b, ConnectionMode::Ops, false).await;
+    let (mut reader_b, mut writer_b) = dial(&path, ConnectionMode::Ops, false).await;
     // Spawned rather than created: a `Create` would attach this
     // connection, and the session would not be idle.
     send_request(
@@ -3936,9 +3902,7 @@ async fn a_switch_with_no_targeted_window_separates_the_count_from_the_denial() 
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     spawn_daemon(&path, pool.clone(), shell_factory("read _x"));
 
-    let (rb, wb) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(rb, wb).await;
-    hello_welcome_as(&mut reader, &mut writer, ConnectionMode::Ops, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Ops, false).await;
 
     // Spawned rather than created: a `Create` would attach this
     // connection, and the switch would then have a window to target.
@@ -4112,16 +4076,7 @@ async fn a_window_may_not_destroy_another_session() {
         Some(Correlation::request(RequestId::new(1).expect("non-zero"))),
     )
     .await;
-    assert!(
-        matches!(
-            result,
-            Err(ConnError::ModeDenied {
-                mode: ConnectionMode::Window,
-                ..
-            })
-        ),
-        "a Destroy on a Window connection must end it, got {result:?}",
-    );
+    assert_mode_denied(&result, ConnectionMode::Window, "a Destroy");
 
     assert!(
         pool.lock().await.handle_cloned(SessionId(id)).is_some(),
@@ -4165,16 +4120,7 @@ async fn a_window_may_not_force_detach_or_relay_a_switch() {
             Some(Correlation::request(RequestId::new(1).expect("non-zero"))),
         )
         .await;
-        assert!(
-            matches!(
-                result,
-                Err(ConnError::ModeDenied {
-                    mode: ConnectionMode::Window,
-                    ..
-                })
-            ),
-            "a {msg:?} on a Window connection must end it, got {result:?}",
-        );
+        assert_mode_denied(&result, ConnectionMode::Window, &format!("a {msg:?}"));
     }
 }
 
@@ -4334,16 +4280,7 @@ async fn a_window_may_not_subscribe_to_notifications() {
         Some(Correlation::stream(StreamId::new(1).expect("non-zero"))),
     )
     .await;
-    assert!(
-        matches!(
-            result,
-            Err(ConnError::ModeDenied {
-                mode: ConnectionMode::Window,
-                ..
-            })
-        ),
-        "a Subscribe on a Window connection must end it, got {result:?}",
-    );
+    assert_mode_denied(&result, ConnectionMode::Window, "a Subscribe");
 }
 
 /// The attach `Attached` reports the roster row after this subscriber joined:
@@ -4373,9 +4310,7 @@ async fn attach_ready_reports_the_session_as_no_longer_idle() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     send_kind(
         &mut writer,
         &SessionToDaemonMsg::Attach {
@@ -4550,16 +4485,7 @@ async fn an_observer_may_not_attach() {
         None,
     )
     .await;
-    assert!(
-        matches!(
-            result,
-            Err(ConnError::ModeDenied {
-                mode: ConnectionMode::Observer,
-                ..
-            })
-        ),
-        "an observer's Attach must end the connection, got {result:?}",
-    );
+    assert_mode_denied(&result, ConnectionMode::Observer, "an Attach");
 }
 
 /// An inbound reply half ends this connection with a typed error: skipping
@@ -4897,9 +4823,7 @@ async fn the_caps_terminfo_dir_reaches_a_created_session_and_a_cwd_retry() {
     let expected = format!("TI={}:|", terminfo.display());
 
     for cwd in ["", "/felis-no-such-directory-for-tests"] {
-        let (read_half, write_half) = connect(&path).await.unwrap();
-        let (mut reader, mut writer) = framed(read_half, write_half).await;
-        hello_welcome(&mut reader, &mut writer, false).await;
+        let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
         send_kind(
             &mut writer,
             &SessionToDaemonMsg::Create {
@@ -5527,9 +5451,7 @@ async fn a_create_past_the_geometry_bound_is_refused_before_anything_spawns() {
             Arc::new(|_| panic!("an out-of-range create must not reach the factory"));
         spawn_daemon(&path, pool, factory);
 
-        let (read_half, write_half) = connect(&path).await.unwrap();
-        let (mut reader, mut writer) = framed(read_half, write_half).await;
-        hello_welcome(&mut reader, &mut writer, false).await;
+        let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
 
         send_kind(
             &mut writer,
@@ -5576,18 +5498,14 @@ async fn an_absent_create_geometry_defaults_and_a_zero_axis_is_refused() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     spawn_daemon(&path, pool, shell_factory("read x"));
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     let info = create_and_attach_info(&mut reader, &mut writer).await;
     assert_eq!(
         (info.dims.rows, info.dims.cols),
         (crate::DEFAULT_ROWS, crate::DEFAULT_COLS),
     );
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     send_kind(
         &mut writer,
         &SessionToDaemonMsg::Create {
@@ -5632,9 +5550,7 @@ async fn a_resize_past_the_geometry_bound_is_clamped_and_reported_clamped() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     spawn_daemon(&path, pool, shell_factory("read x"));
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     create_and_attach(&mut reader, &mut writer).await;
 
     send_input(
@@ -5688,16 +5604,12 @@ async fn a_create_past_the_session_cap_is_refused_and_executes_nothing() {
     };
     spawn_daemon_with_caps(&path, pool.clone(), shell_factory("sleep 30"), caps);
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     create_and_attach(&mut reader, &mut writer).await;
 
     // A second connection, because the first is attached now: a `Create`
     // is a pre-attach frame.
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader_b, mut writer_b) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader_b, &mut writer_b, false).await;
+    let (mut reader_b, mut writer_b) = dial(&path, ConnectionMode::Window, false).await;
     send_kind(
         &mut writer_b,
         &SessionToDaemonMsg::Create {
@@ -5719,9 +5631,7 @@ async fn a_create_past_the_session_cap_is_refused_and_executes_nothing() {
     }
 
     // The cap is charged the same way through the headless entry point.
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader_c, mut writer_c) = framed(read_half, write_half).await;
-    hello_welcome_as(&mut reader_c, &mut writer_c, ConnectionMode::Ops, false).await;
+    let (mut reader_c, mut writer_c) = dial(&path, ConnectionMode::Ops, false).await;
     send_request(
         &mut writer_c,
         &OpsToDaemonMsg::Spawn {
@@ -5758,9 +5668,7 @@ async fn concurrent_ops_spawns_are_attributed_by_request_id() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     spawn_daemon(&path, pool.clone(), shell_factory("sleep 30"));
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome_as(&mut reader, &mut writer, ConnectionMode::Ops, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Ops, false).await;
 
     // Tagged so a reply traces back to its request without depending on
     // the session id the daemon minted.
@@ -5814,9 +5722,7 @@ async fn a_create_is_attached_when_its_ack_is_written() {
         shell_factory("printf 'hello-felis\n'; sleep 30"),
     );
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     let id = create_and_attach(&mut reader, &mut writer).await;
 
     let subscribers = pool
@@ -6244,9 +6150,7 @@ async fn status_reports_every_accounted_resource_with_its_limit() {
     };
     spawn_daemon_with_caps(&path, pool.clone(), shell_factory("sleep 30"), caps);
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     let _id = create_and_attach(&mut reader, &mut writer).await;
     drain_rehydrate(&mut reader).await;
 
@@ -6420,9 +6324,7 @@ async fn status_samples_what_the_sessions_are_holding() {
     )
     .await;
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     send_request(&mut writer, &OpsToDaemonMsg::Status, 1).await;
     let reply = loop {
         let frame = reader.next_frame().await.unwrap().expect("a Status reply");
@@ -6632,9 +6534,7 @@ async fn a_dial_past_the_connection_cap_is_refused_at_capacity() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     spawn_daemon_with_caps(&path, pool, shell_factory("sleep 30"), admission_caps(1, 4));
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome_as(&mut reader, &mut writer, ConnectionMode::Ops, false).await;
+    let (reader, writer) = dial(&path, ConnectionMode::Ops, false).await;
 
     let (over_r, over_w) = connect(&path).await.unwrap();
     let (mut over_reader, mut over_writer) = framed(over_r, over_w).await;
@@ -6683,9 +6583,7 @@ async fn silent_over_cap_peers_are_bounded_by_the_refusal_slots() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     spawn_daemon_with_caps(&path, pool, shell_factory("sleep 30"), admission_caps(1, 1));
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome_as(&mut reader, &mut writer, ConnectionMode::Ops, false).await;
+    let (reader, writer) = dial(&path, ConnectionMode::Ops, false).await;
 
     // Its preface reply proves the refusal task is running, so the one
     // refusal slot is taken for as long as this peer stays silent.
@@ -6726,15 +6624,11 @@ async fn the_connections_row_counts_admitted_peers_and_every_permit_returns() {
         admission_caps(CAP, 4),
     );
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome_as(&mut reader, &mut writer, ConnectionMode::Ops, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Ops, false).await;
 
     let mut held = Vec::new();
     for _ in 1..CAP {
-        let (r, w) = connect(&path).await.unwrap();
-        let (mut r, mut w) = framed(r, w).await;
-        hello_welcome_as(&mut r, &mut w, ConnectionMode::Ops, false).await;
+        let (r, w) = dial(&path, ConnectionMode::Ops, false).await;
         held.push((r, w));
     }
 
@@ -6953,17 +6847,11 @@ async fn an_ops_connection_that_answered_one_verb_may_idle() {
     drop(server.await);
 }
 
-#[cfg(unix)]
-type Peer = (
-    FrameReader<felis_transport::local::ReadHalf>,
-    FrameWriter<felis_transport::local::WriteHalf>,
-);
-
 /// One dial through the handshake, `None` when the daemon is full. Any
 /// other answer is a bug in the admission path, so it panics rather
 /// than counting as a refusal.
 #[cfg(unix)]
-async fn try_admit(path: &Path, mode: ConnectionMode) -> Option<Peer> {
+async fn try_admit(path: &Path, mode: ConnectionMode) -> Option<Halves> {
     let (read_half, write_half) = connect(path).await.unwrap();
     let (mut reader, mut writer) = framed(read_half, write_half).await;
     send_kind(
@@ -7335,9 +7223,7 @@ async fn an_empty_fence_is_answered_at_once() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     spawn_daemon(&path, pool, shell_factory("read _x"));
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     let _id = create_and_attach(&mut reader, &mut writer).await;
 
     send_request(&mut writer, &SessionToDaemonMsg::InputFence, 1).await;
@@ -7362,9 +7248,7 @@ async fn input_admitted_before_the_fence_survives_the_client_hanging_up() {
         shell_factory("read line; printf 'GOT:%s' \"$line\""),
     );
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     let id = create_and_attach(&mut reader, &mut writer).await;
 
     send_input(&mut writer, &InputMsg::Paste(b"felis\r".to_vec())).await;
@@ -7378,9 +7262,7 @@ async fn input_admitted_before_the_fence_survives_the_client_hanging_up() {
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
-        let (read_half, write_half) = connect(&path).await.unwrap();
-        let (mut watcher, mut watcher_writer) = framed(read_half, write_half).await;
-        hello_welcome(&mut watcher, &mut watcher_writer, false).await;
+        let (mut watcher, mut watcher_writer) = dial(&path, ConnectionMode::Window, false).await;
         let rows = attach_existing(&mut watcher, &mut watcher_writer, id).await;
         if rows.iter().any(|row| row.contains("GOT:felis")) {
             return;
@@ -7404,9 +7286,7 @@ async fn a_fence_after_the_session_ended_gets_no_reply() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     spawn_daemon(&path, Arc::clone(&pool), shell_factory("read _x"));
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     let id = create_and_attach(&mut reader, &mut writer).await;
 
     let delivered = pool
@@ -7461,9 +7341,7 @@ async fn a_key_parked_on_a_full_budget_holds_back_the_fence_behind_it() {
         )),
     );
 
-    let (typist_r, typist_w) = connect(&path).await.unwrap();
-    let (mut typist_reader, mut typist_writer) = framed(typist_r, typist_w).await;
-    hello_welcome(&mut typist_reader, &mut typist_writer, false).await;
+    let (mut typist_reader, mut typist_writer) = dial(&path, ConnectionMode::Window, false).await;
     let _id = create_and_attach(&mut typist_reader, &mut typist_writer).await;
 
     send_input(
@@ -7530,14 +7408,10 @@ async fn an_exact_limit_paste_takes_the_budget_whole_and_completes() {
         )),
     );
 
-    let (ops_r, ops_w) = connect(&path).await.unwrap();
-    let (mut ops_reader, mut ops_writer) = framed(ops_r, ops_w).await;
-    hello_welcome_as(&mut ops_reader, &mut ops_writer, ConnectionMode::Ops, false).await;
+    let (mut ops_reader, mut ops_writer) = dial(&path, ConnectionMode::Ops, false).await;
     let mut request = 1;
 
-    let (typist_r, typist_w) = connect(&path).await.unwrap();
-    let (mut typist_reader, mut typist_writer) = framed(typist_r, typist_w).await;
-    hello_welcome(&mut typist_reader, &mut typist_writer, false).await;
+    let (mut typist_reader, mut typist_writer) = dial(&path, ConnectionMode::Window, false).await;
     let id = create_and_attach(&mut typist_reader, &mut typist_writer).await;
     let drain =
         tokio::spawn(
@@ -7595,9 +7469,7 @@ async fn an_exact_limit_paste_takes_the_budget_whole_and_completes() {
     // One byte past the cap is refused before any permit is asked for: a
     // reservation that large could never be granted, so the connection
     // goes rather than parking forever.
-    let (over_r, over_w) = connect(&path).await.unwrap();
-    let (mut over_reader, mut over_writer) = framed(over_r, over_w).await;
-    hello_welcome(&mut over_reader, &mut over_writer, false).await;
+    let (mut over_reader, mut over_writer) = dial(&path, ConnectionMode::Window, false).await;
     let _rehydrated = attach_existing(&mut over_reader, &mut over_writer, id).await;
     // Written as a raw frame, because `FrameWriter::send` refuses this
     // body itself: the peer under test here is the one that ignored the
@@ -7680,13 +7552,9 @@ async fn a_paste_admitted_before_a_mode_flip_is_written_bracketed_within_its_res
         )),
     );
 
-    let (ops_r, ops_w) = connect(&path).await.unwrap();
-    let (mut ops_reader, mut ops_writer) = framed(ops_r, ops_w).await;
-    hello_welcome_as(&mut ops_reader, &mut ops_writer, ConnectionMode::Ops, false).await;
+    let (mut ops_reader, mut ops_writer) = dial(&path, ConnectionMode::Ops, false).await;
 
-    let (typist_r, typist_w) = connect(&path).await.unwrap();
-    let (mut typist_reader, mut typist_writer) = framed(typist_r, typist_w).await;
-    hello_welcome(&mut typist_reader, &mut typist_writer, false).await;
+    let (mut typist_reader, mut typist_writer) = dial(&path, ConnectionMode::Window, false).await;
     let _id = create_and_attach(&mut typist_reader, &mut typist_writer).await;
     let drain =
         tokio::spawn(
@@ -7761,9 +7629,7 @@ async fn a_stalled_child_parks_the_typist_and_not_the_daemon() {
         shell_factory("stty raw -echo; while :; do printf 'tick\\r\\n'; sleep 0.1; done"),
     );
 
-    let (typist_r, typist_w) = connect(&path).await.unwrap();
-    let (mut typist_reader, mut typist_writer) = framed(typist_r, typist_w).await;
-    hello_welcome(&mut typist_reader, &mut typist_writer, false).await;
+    let (mut typist_reader, mut typist_writer) = dial(&path, ConnectionMode::Window, false).await;
     let id = create_and_attach(&mut typist_reader, &mut typist_writer).await;
     // The daemon's outbound half must never be what blocks: this test is
     // about the inbound direction.
@@ -7772,9 +7638,7 @@ async fn a_stalled_child_parks_the_typist_and_not_the_daemon() {
             async move { while let Ok(Some(_frame)) = typist_reader.next_frame().await {} },
         );
 
-    let (ops_r, ops_w) = connect(&path).await.unwrap();
-    let (mut ops_reader, mut ops_writer) = framed(ops_r, ops_w).await;
-    hello_welcome_as(&mut ops_reader, &mut ops_writer, ConnectionMode::Ops, false).await;
+    let (mut ops_reader, mut ops_writer) = dial(&path, ConnectionMode::Ops, false).await;
     let mut request = 1;
     let typist = fill_until_parked(
         typist_writer,
@@ -7809,9 +7673,7 @@ async fn a_stalled_child_parks_the_typist_and_not_the_daemon() {
     // Mirror the session while the typist is parked. The mirror must reach
     // `RehydrateEnd` and receive live deltas to prove diff fan-out does not
     // deadlock or hold permits across awaits.
-    let (mirror_r, mirror_w) = connect(&path).await.unwrap();
-    let (mut mirror_reader, mut mirror_writer) = framed(mirror_r, mirror_w).await;
-    hello_welcome(&mut mirror_reader, &mut mirror_writer, false).await;
+    let (mut mirror_reader, mut mirror_writer) = dial(&path, ConnectionMode::Window, false).await;
     let _rehydrated = tokio::time::timeout(
         Duration::from_secs(15),
         attach_existing(&mut mirror_reader, &mut mirror_writer, id),
@@ -7879,9 +7741,7 @@ async fn a_peer_that_hangs_up_while_parked_gives_its_connection_back() {
         shell_factory("stty raw -echo; printf raw-ready; sleep 30"),
     );
 
-    let (typist_r, typist_w) = connect(&path).await.unwrap();
-    let (mut typist_reader, mut typist_writer) = framed(typist_r, typist_w).await;
-    hello_welcome(&mut typist_reader, &mut typist_writer, false).await;
+    let (mut typist_reader, mut typist_writer) = dial(&path, ConnectionMode::Window, false).await;
     let _id = create_and_attach(&mut typist_reader, &mut typist_writer).await;
     // A paste that beats `stty raw` meets canonical mode, where macOS
     // discards input past `MAX_INPUT` and the write completes, so the
@@ -7892,9 +7752,7 @@ async fn a_peer_that_hangs_up_while_parked_gives_its_connection_back() {
             async move { while let Ok(Some(_frame)) = typist_reader.next_frame().await {} },
         );
 
-    let (ops_r, ops_w) = connect(&path).await.unwrap();
-    let (mut ops_reader, mut ops_writer) = framed(ops_r, ops_w).await;
-    hello_welcome_as(&mut ops_reader, &mut ops_writer, ConnectionMode::Ops, false).await;
+    let (mut ops_reader, mut ops_writer) = dial(&path, ConnectionMode::Ops, false).await;
     let mut request = 1;
 
     // Filled to just under the budget, one admitted chunk at a time, so
@@ -7962,18 +7820,14 @@ async fn destroying_a_session_releases_a_connection_parked_on_its_budget() {
     let pool = Arc::new(Mutex::new(SessionPool::new()));
     spawn_daemon(&path, pool, shell_factory("stty raw -echo; sleep 30"));
 
-    let (typist_r, typist_w) = connect(&path).await.unwrap();
-    let (mut typist_reader, mut typist_writer) = framed(typist_r, typist_w).await;
-    hello_welcome(&mut typist_reader, &mut typist_writer, false).await;
+    let (mut typist_reader, mut typist_writer) = dial(&path, ConnectionMode::Window, false).await;
     let id = create_and_attach(&mut typist_reader, &mut typist_writer).await;
     let drain =
         tokio::spawn(
             async move { while let Ok(Some(_frame)) = typist_reader.next_frame().await {} },
         );
 
-    let (ops_r, ops_w) = connect(&path).await.unwrap();
-    let (mut ops_reader, mut ops_writer) = framed(ops_r, ops_w).await;
-    hello_welcome_as(&mut ops_reader, &mut ops_writer, ConnectionMode::Ops, false).await;
+    let (mut ops_reader, mut ops_writer) = dial(&path, ConnectionMode::Ops, false).await;
     let mut request = 1;
     let typist = fill_until_parked(
         typist_writer,
@@ -8235,17 +8089,6 @@ where
     }
 }
 
-/// An `Ops`-mode connection past both handshakes.
-#[cfg(unix)]
-macro_rules! ops_connection {
-    ($path:expr) => {{
-        let (read_half, write_half) = connect($path).await.unwrap();
-        let (mut reader, mut writer) = framed(read_half, write_half).await;
-        hello_welcome_as(&mut reader, &mut writer, ConnectionMode::Ops, false).await;
-        (reader, writer)
-    }};
-}
-
 /// A bare `stop` is not allowed to destroy anything: it reports the
 /// count and leaves the daemon serving.
 #[cfg(unix)]
@@ -8261,12 +8104,10 @@ async fn a_default_stop_refuses_while_a_session_remains_and_preserves_it() {
         DaemonCaps::default(),
     );
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     create_and_attach(&mut reader, &mut writer).await;
 
-    let (mut ops_reader, mut ops_writer) = ops_connection!(&path);
+    let (mut ops_reader, mut ops_writer) = dial(&path, ConnectionMode::Ops, false).await;
     assert_eq!(
         stop_reply(&mut ops_reader, &mut ops_writer, StopMode::IfEmpty, 1).await,
         StopOutcome::Refused { sessions: 1 }
@@ -8277,7 +8118,7 @@ async fn a_default_stop_refuses_while_a_session_remains_and_preserves_it() {
         assert!(!guard.draining(), "a refused stop starts no drain");
     }
     // Still serving: a connection opened after the refusal is admitted.
-    let (mut after_reader, mut after_writer) = ops_connection!(&path);
+    let (mut after_reader, mut after_writer) = dial(&path, ConnectionMode::Ops, false).await;
     send_request(&mut after_writer, &OpsToDaemonMsg::List, 1).await;
     after_reader.next_frame().await.unwrap().expect("a roster");
     assert!(!serving.is_finished());
@@ -8299,12 +8140,10 @@ async fn a_refused_upgrade_is_answered_and_leaves_the_daemon_serving() {
         DaemonCaps::default(),
     );
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     create_and_attach(&mut reader, &mut writer).await;
 
-    let (mut ops_reader, mut ops_writer) = ops_connection!(&path);
+    let (mut ops_reader, mut ops_writer) = dial(&path, ConnectionMode::Ops, false).await;
     send_request(
         &mut ops_writer,
         &OpsToDaemonMsg::Upgrade {
@@ -8356,12 +8195,10 @@ async fn a_forced_stop_destroys_every_session_and_ends_the_accept_loop() {
         DaemonCaps::default(),
     );
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     create_and_attach(&mut reader, &mut writer).await;
 
-    let (mut ops_reader, mut ops_writer) = ops_connection!(&path);
+    let (mut ops_reader, mut ops_writer) = dial(&path, ConnectionMode::Ops, false).await;
     assert_eq!(
         stop_reply(&mut ops_reader, &mut ops_writer, StopMode::Force, 1).await,
         StopOutcome::Stopping,
@@ -8403,12 +8240,10 @@ async fn a_when_empty_stop_refuses_creates_and_exits_after_the_last_session() {
         DaemonCaps::default(),
     );
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     let id = create_and_attach(&mut reader, &mut writer).await;
 
-    let (mut ops_reader, mut ops_writer) = ops_connection!(&path);
+    let (mut ops_reader, mut ops_writer) = dial(&path, ConnectionMode::Ops, false).await;
     assert_eq!(
         stop_reply(&mut ops_reader, &mut ops_writer, StopMode::WhenEmpty, 1).await,
         StopOutcome::Draining { sessions: 1 }
@@ -8435,9 +8270,7 @@ async fn a_when_empty_stop_refuses_creates_and_exits_after_the_last_session() {
 
     // And a create arriving during the drain is refused with a reason
     // that names it.
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut new_reader, mut new_writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut new_reader, &mut new_writer, false).await;
+    let (mut new_reader, mut new_writer) = dial(&path, ConnectionMode::Window, false).await;
     send_kind(
         &mut new_writer,
         &SessionToDaemonMsg::Create {
@@ -8567,12 +8400,10 @@ async fn a_stop_whose_reply_cannot_be_written_still_stops_the_daemon() {
         DaemonCaps::default(),
     );
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     create_and_attach(&mut reader, &mut writer).await;
 
-    let (ops_reader, mut ops_writer) = ops_connection!(&path);
+    let (ops_reader, mut ops_writer) = dial(&path, ConnectionMode::Ops, false).await;
     send_request(
         &mut ops_writer,
         &OpsToDaemonMsg::Stop {
@@ -8664,9 +8495,7 @@ async fn an_attach_by_prefix_lands_on_the_session_the_daemon_resolves() {
     spawn_daemon(&path, pool.clone(), shell_factory("sleep 30"));
     let id = pooled_session(&pool).await;
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     let hex = hex(id.0);
     send_kind(
         &mut writer,
@@ -8693,9 +8522,7 @@ async fn a_prefix_whose_session_was_destroyed_refuses_with_no_match() {
     let doomed = pooled_session(&pool).await;
     let hex = hex(doomed.0);
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome_as(&mut reader, &mut writer, ConnectionMode::Ops, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Ops, false).await;
     send_request(
         &mut writer,
         &OpsToDaemonMsg::Destroy {
@@ -8712,9 +8539,7 @@ async fn a_prefix_whose_session_was_destroyed_refuses_with_no_match() {
         }
     ));
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     send_kind(
         &mut writer,
         &SessionToDaemonMsg::Attach {
@@ -8741,9 +8566,7 @@ async fn an_ambiguous_prefix_on_attach_refuses_with_the_match_count() {
     spawn_daemon(&path, pool.clone(), shell_factory("sleep 30"));
     let (prefix, matches) = prefix_matching_several(&pool).await;
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     send_kind(
         &mut writer,
         &SessionToDaemonMsg::Attach {
@@ -8775,9 +8598,7 @@ async fn ops_info_answers_a_row_and_a_short_id_checked_against_the_pool() {
     let second = pooled_session(&pool).await;
     let hex = hex(first.0);
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     send_request(
         &mut writer,
         &OpsToDaemonMsg::Info {
@@ -8806,9 +8627,7 @@ async fn ops_info_reports_no_match_and_ambiguity_as_outcome_arms() {
     spawn_daemon(&path, pool.clone(), shell_factory("sleep 30"));
     let (prefix, matches) = prefix_matching_several(&pool).await;
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     send_request(
         &mut writer,
         &OpsToDaemonMsg::Info {
@@ -9173,9 +8992,7 @@ async fn pty_eof_expires_transient_records_and_keeps_progress_after_the_final_re
     };
     spawn_daemon_with_caps(&path, pool.clone(), factory, caps);
 
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     let id = create_and_attach(&mut reader, &mut writer).await;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);

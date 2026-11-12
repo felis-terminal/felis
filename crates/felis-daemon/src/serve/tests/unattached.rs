@@ -20,9 +20,7 @@ struct Peer {
 
 impl Peer {
     async fn ops(path: &Path) -> Self {
-        let (read_half, write_half) = connect(path).await.unwrap();
-        let (mut reader, mut writer) = framed(read_half, write_half).await;
-        hello_welcome_as(&mut reader, &mut writer, ConnectionMode::Ops, false).await;
+        let (reader, writer) = dial(path, ConnectionMode::Ops, false).await;
         Self {
             reader,
             writer,
@@ -780,9 +778,7 @@ async fn a_capture_names_its_session_and_reads_the_live_screen() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_session_addressed_search_on_an_attached_connection_is_refused() {
     let (_tmp, path, _pool) = daemon(shell_factory("read _x"));
-    let (read_half, write_half) = connect(&path).await.unwrap();
-    let (mut reader, mut writer) = framed(read_half, write_half).await;
-    hello_welcome(&mut reader, &mut writer, false).await;
+    let (mut reader, mut writer) = dial(&path, ConnectionMode::Window, false).await;
     let id = create_and_attach(&mut reader, &mut writer).await;
 
     send_stream(
