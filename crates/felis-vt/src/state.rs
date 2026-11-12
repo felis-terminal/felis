@@ -149,53 +149,7 @@ impl Decoder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Sink;
-
-    /// Every Williams action, in order, so two parsers that dispatch
-    /// alike record alike.
-    #[derive(Default, PartialEq, Eq, Debug)]
-    struct Recorder(Vec<String>);
-
-    impl Sink for Recorder {
-        fn print(&mut self, byte: u8) {
-            self.0.push(format!("print {byte}"));
-        }
-        fn execute(&mut self, byte: u8) {
-            self.0.push(format!("exec {byte}"));
-        }
-        fn esc_dispatch(&mut self, intermediates: &[u8], final_byte: u8) {
-            self.0.push(format!("esc {intermediates:?} {final_byte}"));
-        }
-        fn csi_dispatch(
-            &mut self,
-            params: &[u16],
-            subparams: u32,
-            intermediates: &[u8],
-            ignore: bool,
-            final_byte: u8,
-        ) {
-            self.0.push(format!(
-                "csi {params:?} {subparams} {intermediates:?} {ignore} {final_byte}"
-            ));
-        }
-        fn dcs_hook(&mut self, params: &[u16], intermediates: &[u8], ignore: bool, final_byte: u8) {
-            self.0.push(format!(
-                "hook {params:?} {intermediates:?} {ignore} {final_byte}"
-            ));
-        }
-        fn dcs_put(&mut self, byte: u8) {
-            self.0.push(format!("put {byte}"));
-        }
-        fn dcs_unhook(&mut self) {
-            self.0.push("unhook".to_owned());
-        }
-        fn osc_dispatch(&mut self, body: &[u8], end: crate::OscEnd) {
-            self.0.push(format!("osc {body:?} {end:?}"));
-        }
-        fn apc_dispatch(&mut self, body: &[u8]) {
-            self.0.push(format!("apc {body:?}"));
-        }
-    }
+    use crate::test_support::LogSink;
 
     fn round_trip<T: serde::Serialize + serde::de::DeserializeOwned>(value: &T) -> T {
         serde_json::from_slice(&serde_json::to_vec(value).unwrap()).unwrap()
@@ -218,15 +172,15 @@ mod tests {
         for stream in streams {
             for split in 0..=stream.len() {
                 let mut original = Parser::new();
-                let mut head = Recorder::default();
+                let mut head = LogSink::default();
                 original.advance(&mut head, &stream[..split]);
                 let mut restored = round_trip(&original);
                 restored.check_restored().unwrap();
                 assert_eq!(restored, original);
-                let (mut want, mut got) = (Recorder::default(), Recorder::default());
+                let (mut want, mut got) = (LogSink::default(), LogSink::default());
                 original.advance(&mut want, &stream[split..]);
                 restored.advance(&mut got, &stream[split..]);
-                assert_eq!(got, want, "split at {split} of {stream:?}");
+                assert_eq!(got.events, want.events, "split at {split} of {stream:?}");
             }
         }
     }
