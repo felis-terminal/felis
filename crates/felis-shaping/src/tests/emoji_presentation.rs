@@ -2,7 +2,6 @@ use super::*;
 
 /// A base plus combining mark shapes without panicking. The GPOS
 /// offset is font-dependent, so no portable offset assertion exists.
-#[cfg(not(windows))]
 #[test]
 fn combining_mark_cluster_shapes_without_panicking() {
     let stack = stack();
@@ -16,7 +15,6 @@ fn combining_mark_cluster_shapes_without_panicking() {
 
 /// ❤️‍🔥 shapes against the color-emoji face, not the mono face a bare
 /// U+2764 resolves to, or GSUB never forms the ligature.
-#[cfg(not(windows))]
 #[test]
 fn emoji_zwj_with_text_default_base_shapes_against_emoji_face() {
     let stack = stack();
@@ -41,7 +39,6 @@ fn emoji_zwj_with_text_default_base_shapes_against_emoji_face() {
 
 /// A bare ❤️ (VS16) resolves to the color face; the same base without
 /// VS16 keeps its mono face.
-#[cfg(not(windows))]
 #[test]
 fn standalone_vs16_symbol_prefers_the_color_face() {
     let stack = stack();
@@ -70,7 +67,6 @@ const EMOJI_DEFAULT: [char; 8] = ['⭐', '⚡', '☕', '⌚', '⛔', '☔', '♿
 
 /// The symbol faces sit before the emoji face, so a mono face covers
 /// some of these first; each still resolves to the color face.
-#[cfg(not(windows))]
 #[test]
 fn an_emoji_presentation_scalar_resolves_to_the_color_face() {
     let stack = pinned_stack(&[]);
@@ -100,7 +96,6 @@ fn an_emoji_presentation_scalar_resolves_to_the_color_face() {
 
 /// Text-default symbols keep the first face covering them, which the
 /// chain's symbol-before-emoji order makes a mono one.
-#[cfg(not(windows))]
 #[test]
 fn a_text_presentation_symbol_keeps_its_first_covering_face() {
     let stack = pinned_stack(&[]);
@@ -117,7 +112,6 @@ fn a_text_presentation_symbol_keeps_its_first_covering_face() {
 /// An explicit `font.fallback` list orders everything but the default
 /// emoji: a mono face listed first does not take `⭐`, and with no
 /// color face listed the first covering face still draws it.
-#[cfg(not(windows))]
 #[test]
 fn an_explicit_fallback_order_yields_to_emoji_presentation() {
     let style = FontStyle::REGULAR;
@@ -142,7 +136,6 @@ fn an_explicit_fallback_order_yields_to_emoji_presentation() {
 
 /// The declared entries come first, and discovery still covers what
 /// they miss without adding a declared face a second time.
-#[cfg(not(windows))]
 #[test]
 fn an_explicit_fallback_comes_before_discovery_without_repeating() {
     let style = FontStyle::REGULAR;
@@ -160,7 +153,6 @@ fn an_explicit_fallback_comes_before_discovery_without_repeating() {
 }
 
 /// A VS15 asks for the text face, a VS16 for the color face.
-#[cfg(not(windows))]
 #[test]
 fn a_variation_selector_picks_the_star_face() {
     let stack = pinned_stack(&[]);
@@ -175,7 +167,6 @@ fn a_variation_selector_picks_the_star_face() {
 
 /// The astral anchor would otherwise put `🀄︎` on the color face; the
 /// VS15 right after the base wins over it.
-#[cfg(not(windows))]
 #[test]
 fn a_vs15_keeps_an_astral_emoji_on_its_text_face() {
     let stack = pinned_stack(&[]);
@@ -194,7 +185,6 @@ fn a_vs15_keeps_an_astral_emoji_on_its_text_face() {
 
 /// The keycap ligature needs `#` and U+20E3 adjacent: the VS16
 /// between them must not split it into three glyphs.
-#[cfg(not(windows))]
 #[test]
 fn a_keycap_with_vs16_shapes_to_the_one_keycap_glyph() {
     let stack = pinned_stack(&[]);
@@ -225,7 +215,6 @@ fn a_keycap_with_vs16_shapes_to_the_one_keycap_glyph() {
 
 /// Noto Sans CJK JP names a variant for `葛` + U+E0100, keeps the
 /// default for U+E0101, and has no entry for U+E0102.
-#[cfg(not(windows))]
 #[test]
 fn an_ideographic_variation_sequence_shapes_to_the_face_variant() {
     let stack = pinned_stack(&[]);

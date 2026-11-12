@@ -1,6 +1,5 @@
 use super::*;
 
-#[cfg(not(windows))]
 #[test]
 fn auto_discover_inherits_primary_features_into_fallbacks() {
     let features = vec!["calt".to_owned(), "-clig".to_owned()];
@@ -42,7 +41,6 @@ fn pinned_explicit_fallback(
     stack
 }
 
-#[cfg(not(windows))]
 #[test]
 fn explicit_fallback_with_empty_features_opts_out() {
     let primary_features = vec!["calt".to_owned(), "ss01".to_owned()];
@@ -56,7 +54,6 @@ fn explicit_fallback_with_empty_features_opts_out() {
     );
 }
 
-#[cfg(not(windows))]
 #[test]
 fn explicit_fallback_without_features_inherits_primary() {
     let primary_features = vec!["calt".to_owned(), "ss01".to_owned()];
@@ -68,7 +65,6 @@ fn explicit_fallback_without_features_inherits_primary() {
     );
 }
 
-#[cfg(not(windows))]
 #[test]
 fn explicit_fallback_with_features_overrides_primary() {
     let override_features = vec!["palt".to_owned(), "trad".to_owned()];
@@ -83,7 +79,6 @@ fn explicit_fallback_with_features_overrides_primary() {
 
 /// Feature lists follow the face `font_at` picks; a style with no
 /// override inherits the base list.
-#[cfg(not(windows))]
 #[test]
 fn styled_feature_override_applies_where_the_styled_face_does() {
     let base = vec!["calt".to_owned()];
@@ -128,7 +123,6 @@ fn styled_feature_override_applies_where_the_styled_face_does() {
 /// arrived (a `calt` check passes vacuously). Also pins the two-glyph
 /// blank-lead + body form `apply_shaped_run` in felis-render-core
 /// depends on.
-#[cfg(not(windows))]
 #[test]
 fn shape_run_applies_non_default_stylistic_set() {
     let font = Font::load_test_font();

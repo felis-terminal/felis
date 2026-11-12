@@ -53,7 +53,6 @@ fn system_stack(answers: &[(&str, &'static str)]) -> (FontStack, Arc<AtomicUsize
     (stack, asked)
 }
 
-#[cfg(not(windows))]
 #[test]
 fn a_scalar_no_ordered_face_covers_draws_from_the_system_face_asked_once() {
     let (stack, asked) = system_stack(&[("\u{2602}", SYMBOLS2)]);
@@ -73,7 +72,6 @@ fn a_scalar_no_ordered_face_covers_draws_from_the_system_face_asked_once() {
 
 /// The emoji face the host picks for the scissors also covers the
 /// umbrella, which the host draws from the symbol face.
-#[cfg(not(windows))]
 #[test]
 fn a_system_face_answers_only_the_scalars_the_host_gave_it() {
     let umbrella_in_color = |order: [char; 2]| {
@@ -88,7 +86,6 @@ fn a_system_face_answers_only_the_scalars_the_host_gave_it() {
     assert!(!umbrella_in_color([UMBRELLA, SCISSORS]));
 }
 
-#[cfg(not(windows))]
 #[test]
 fn scalars_the_host_draws_from_one_face_share_its_id() {
     let (stack, _) = system_stack(&[("\u{2602}", SYMBOLS2), ("\u{2702}", SYMBOLS2)]);
@@ -98,7 +95,6 @@ fn scalars_the_host_draws_from_one_face_share_its_id() {
     );
 }
 
-#[cfg(not(windows))]
 #[test]
 fn an_emoji_presentation_scalar_asks_the_host_for_color_first() {
     let (stack, _) = system_stack(&[("\u{2615}\u{FE0F}", EMOJI), ("\u{2615}\u{FE0E}", SYMBOLS2)]);
@@ -109,7 +105,6 @@ fn an_emoji_presentation_scalar_asks_the_host_for_color_first() {
     assert_ne!(text, 0);
 }
 
-#[cfg(not(windows))]
 #[test]
 fn a_mono_answer_to_a_color_request_is_not_taken_as_color() {
     let (stack, _) = system_stack(&[
@@ -125,7 +120,6 @@ fn a_mono_answer_to_a_color_request_is_not_taken_as_color() {
 }
 
 /// A CBDT face has no outline to draw in text presentation.
-#[cfg(not(windows))]
 #[test]
 fn a_color_answer_without_an_outline_stays_in_color_for_text() {
     let (stack, _) = system_stack(&[("\u{2602}", EMOJI)]);
@@ -178,7 +172,6 @@ impl<P: FaceProvider> FaceProvider for Hosted<P> {
     }
 }
 
-#[cfg(not(windows))]
 #[test]
 fn a_nerd_glyph_draws_from_the_nerd_font_without_asking_the_host() {
     const GIT_BRANCH: char = '\u{F418}';
@@ -210,7 +203,6 @@ fn a_nerd_glyph_draws_from_the_nerd_font_without_asking_the_host() {
     assert_eq!(asked.load(Ordering::Relaxed), 0);
 }
 
-#[cfg(not(windows))]
 #[test]
 fn a_failed_lookup_is_asked_again() {
     let (system, asked) = scripted_system(&[("\u{2602}", SYMBOLS2)]);
@@ -224,7 +216,6 @@ fn a_failed_lookup_is_asked_again() {
     assert_eq!(asked.load(Ordering::Relaxed), 2);
 }
 
-#[cfg(not(windows))]
 #[test]
 fn a_system_face_shapes_with_the_primary_features() {
     let (system, _) = scripted_system(&[("\u{2602}", SYMBOLS2)]);
@@ -235,7 +226,6 @@ fn a_system_face_shapes_with_the_primary_features() {
     assert_eq!(stack.features_for(index, FontStyle::REGULAR), features);
 }
 
-#[cfg(not(windows))]
 #[test]
 fn a_full_pool_draws_notdef_for_a_face_it_does_not_hold() {
     let (system, _) = scripted_system(&[("\u{2602}", SYMBOLS2), ("\u{2702}", EMOJI)]);
@@ -247,7 +237,6 @@ fn a_full_pool_draws_notdef_for_a_face_it_does_not_hold() {
 
 /// The pinned variable face and its instance 16's position as
 /// `(tag, value)` pairs.
-#[cfg(not(windows))]
 fn semiwide_position() -> (skrifa::Font, Vec<(u32, f32)>) {
     let files = pinned_files(&["truetype/Monaspace Neon Var.ttf"]);
     let data: FontBytes = Arc::new(std::fs::read(&files[0]).expect("the variable face reads"));
@@ -266,7 +255,6 @@ fn semiwide_position() -> (skrifa::Font, Vec<(u32, f32)>) {
     (face, position)
 }
 
-#[cfg(not(windows))]
 #[test]
 fn a_host_position_resolves_to_the_named_instance_there() {
     let (font, mut position) = semiwide_position();
@@ -281,7 +269,6 @@ fn a_host_position_resolves_to_the_named_instance_there() {
     );
 }
 
-#[cfg(not(windows))]
 #[test]
 fn a_host_position_no_instance_names_is_unrepresentable() {
     let (font, mut position) = semiwide_position();
@@ -298,7 +285,6 @@ fn a_host_position_no_instance_names_is_unrepresentable() {
     assert_eq!(provider::instance_at(&font, &position), None);
 }
 
-#[cfg(not(windows))]
 #[test]
 fn a_host_position_at_every_default_is_representable() {
     let (font, _) = semiwide_position();
@@ -317,7 +303,6 @@ fn a_host_position_at_every_default_is_representable() {
 
 /// `instances().nth(16)` of the pinned variable face is `SemiWide
 /// Regular`: its `wdth` sits off the default while `wght` is 400.
-#[cfg(not(windows))]
 #[test]
 fn a_named_instance_keeps_its_width_through_regular_and_bold_views() {
     let default = pinned_variable_font();

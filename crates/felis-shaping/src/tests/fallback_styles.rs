@@ -121,7 +121,6 @@ impl FaceProvider for UnreadableNamedFaces {
     }
 }
 
-#[cfg(not(windows))]
 #[test]
 fn a_font_family_whose_face_fails_to_load_falls_back_to_monospace() {
     let monospace = pinned_bytes("opentype/MonaspaceNeon-Regular.otf");
@@ -136,7 +135,6 @@ fn a_font_family_whose_face_fails_to_load_falls_back_to_monospace() {
     assert!(stack.primary().has_glyph('A'));
 }
 
-#[cfg(not(windows))]
 #[test]
 fn a_fallback_that_fails_to_load_yields_its_coverage_to_the_next() {
     let symbols = pinned_bytes("NotoSansSymbols2-Regular.otf");
@@ -162,7 +160,6 @@ fn a_fallback_that_fails_to_load_yields_its_coverage_to_the_next() {
 /// The emoji face is reported mono, so it first shadows the mono
 /// symbol face; once it loads as color, the symbol face stops being
 /// shadowed and joins the chain.
-#[cfg(not(windows))]
 #[test]
 fn a_fallback_reported_mono_but_loaded_color_stops_shadowing_mono_faces() {
     let (emoji, symbols) = (
@@ -194,7 +191,6 @@ const MONASPACE_NEON_STATIC: [&str; 4] = [
 ];
 
 /// The pinned CJK subset varies `wght` only and has no italic.
-#[cfg(not(windows))]
 #[test]
 fn variable_fallback_draws_bold_cells_bold() {
     let mut names = MONASPACE_NEON_STATIC.to_vec();
@@ -224,7 +220,6 @@ fn variable_fallback_draws_bold_cells_bold() {
     );
 }
 
-#[cfg(not(windows))]
 #[test]
 fn static_fallback_draws_each_style_from_its_own_file() {
     let mut names = MONASPACE_NEON_STATIC.to_vec();
@@ -248,7 +243,6 @@ fn static_fallback_draws_each_style_from_its_own_file() {
     assert!(ink(faces[0], 'M') < ink(faces[1], 'M'));
 }
 
-#[cfg(not(windows))]
 #[test]
 fn color_fallback_draws_the_same_face_in_every_style() {
     let files = pinned_files(&[MONASPACE_NEON_STATIC[0], "NotoColorEmoji.ttf"]);
@@ -267,7 +261,6 @@ fn color_fallback_draws_the_same_face_in_every_style() {
     }
 }
 
-#[cfg(not(windows))]
 #[test]
 fn coverage_check_rejects_a_face_missing_a_regular_codepoint() {
     let (latin, cjk) = (
@@ -284,7 +277,6 @@ fn coverage_check_rejects_a_face_missing_a_regular_codepoint() {
     ));
 }
 
-#[cfg(not(windows))]
 #[test]
 fn coverage_check_accepts_a_sibling_file_with_the_same_cmap() {
     let (regular, bold) = (
@@ -296,7 +288,6 @@ fn coverage_check_accepts_a_sibling_file_with_the_same_cmap() {
 
 /// Entry 1's bold view covers `A` and its regular does not; a bold `A`
 /// still goes to entry 2, as a regular one does.
-#[cfg(not(windows))]
 #[test]
 fn a_styled_view_covering_more_does_not_take_a_later_entrys_glyph() {
     let (emoji, latin, cjk) = (
@@ -317,7 +308,6 @@ fn a_styled_view_covering_more_does_not_take_a_later_entrys_glyph() {
 /// renderer breaks a shape run when the styled face stops covering.
 /// Bold is pinned to Noto Sans Symbols 2 (⌨, no Latin) against
 /// Monaspace Neon (the reverse).
-#[cfg(not(windows))]
 #[test]
 fn primary_covers_answers_from_the_styled_primary_not_the_regular_one() {
     let dir = test_font_dir();
@@ -362,7 +352,6 @@ fn primary_covers_answers_from_the_styled_primary_not_the_regular_one() {
 
 /// Styled primaries load distinct faces when the family ships them,
 /// and a missing override dedups to the regular `Arc`.
-#[cfg(not(windows))]
 #[test]
 fn styled_primaries_pick_real_faces_and_dedup_missing_to_regular() {
     let dir = test_font_dir();

@@ -2,7 +2,6 @@ use super::*;
 
 /// A typo in `font.family` falls back to `Family::Monospace` and
 /// picks the same face an unset `font.family` would.
-#[cfg(not(windows))]
 #[test]
 fn unknown_primary_family_falls_back_to_monospace() {
     let fallback = discover(
@@ -22,7 +21,6 @@ fn unknown_primary_family_falls_back_to_monospace() {
 
 /// A monospace default the set does not hold, as Debian's fontconfig
 /// rules name `FreeMono` whether or not it is installed.
-#[cfg(not(windows))]
 #[test]
 fn uninstalled_monospace_generic_falls_back_to_an_installed_fixed_pitch_family() {
     let dir = test_font_dir();
@@ -58,7 +56,6 @@ fn uninstalled_monospace_generic_falls_back_to_an_installed_fixed_pitch_family()
     );
 }
 
-#[cfg(not(windows))]
 #[test]
 fn has_glyph_true_for_ascii_in_monospace_font() {
     let font = font();
@@ -67,14 +64,12 @@ fn has_glyph_true_for_ascii_in_monospace_font() {
     }
 }
 
-#[cfg(not(windows))]
 #[test]
 fn has_glyph_false_for_unmapped_private_use_codepoint() {
     let font = font();
     assert!(!font.has_glyph('\u{F8FFD}'));
 }
 
-#[cfg(not(windows))]
 #[test]
 fn stack_with_only_primary_resolves_to_primary() {
     let primary = Arc::new(font());
@@ -90,7 +85,6 @@ fn stack_with_only_primary_resolves_to_primary() {
     assert_eq!(stack.len(), 1);
 }
 
-#[cfg(not(windows))]
 #[test]
 fn stack_resolve_picks_first_match() {
     let primary = Arc::new(font());
@@ -104,7 +98,6 @@ fn stack_resolve_picks_first_match() {
     assert_eq!(stack.len(), 2);
 }
 
-#[cfg(not(windows))]
 #[test]
 fn stack_resolve_walks_past_primary_when_it_lacks_glyph() {
     let dir = test_font_dir();
@@ -126,7 +119,6 @@ fn stack_resolve_walks_past_primary_when_it_lacks_glyph() {
 /// pinned devshell set (Monaspace + Noto Sans Symbols 2 + Noto Color
 /// Emoji, which also covers them); the host's own fontconfig may lack
 /// a mono home and legitimately go color.
-#[cfg(not(windows))]
 #[test]
 fn text_presentation_dingbats_resolve_to_mono_not_color() {
     let dir = test_font_dir();
@@ -160,7 +152,6 @@ fn text_presentation_dingbats_resolve_to_mono_not_color() {
     }
 }
 
-#[cfg(not(windows))]
 #[test]
 fn auto_discover_returns_at_least_the_primary() {
     let stack = stack();
@@ -168,7 +159,6 @@ fn auto_discover_returns_at_least_the_primary() {
     assert!(stack.primary().has_glyph('A'));
 }
 
-#[cfg(not(windows))]
 #[test]
 fn a_missing_explicit_fallback_leaves_auto_discovery_as_it_was() {
     let missing = discover(
@@ -184,7 +174,6 @@ fn a_missing_explicit_fallback_leaves_auto_discovery_as_it_was() {
 
 /// The pinned Neon statics name their wide cuts with the normal
 /// family, so which file comes first must not pick the width.
-#[cfg(not(windows))]
 #[test]
 fn a_file_set_family_resolves_to_its_normal_width_in_any_file_order() {
     let truetype = test_font_dir().join("truetype");
@@ -207,7 +196,6 @@ fn a_file_set_family_resolves_to_its_normal_width_in_any_file_order() {
 
 /// A fallback the system may well have (`DejaVu Sans Mono`) is absent from the
 /// pinned files, so it must not join the stack.
-#[cfg(not(windows))]
 #[test]
 fn discover_in_files_resolves_from_the_given_fonts_alone() {
     let files = test_font_files();
@@ -228,7 +216,6 @@ fn discover_in_files_resolves_from_the_given_fonts_alone() {
     assert_eq!(stack.len(), 1);
 }
 
-#[cfg(not(windows))]
 #[test]
 fn a_described_stack_names_each_primary_style_from_the_name_table() {
     let files = test_font_files();
@@ -250,7 +237,6 @@ fn a_described_stack_names_each_primary_style_from_the_name_table() {
 }
 
 /// A readable file with no face in it fails like a missing one.
-#[cfg(not(windows))]
 #[test]
 fn discover_in_files_reports_a_file_with_no_face() {
     let mut files = test_font_files();

@@ -1,6 +1,5 @@
 use super::*;
 
-#[cfg(not(windows))]
 #[test]
 fn the_default_monospace_face_loads_with_nonzero_metrics() {
     let provider = pinned_system();
@@ -14,7 +13,6 @@ fn the_default_monospace_face_loads_with_nonzero_metrics() {
     assert!(metrics.height > 0);
 }
 
-#[cfg(not(windows))]
 #[test]
 fn rasterizes_capital_a() {
     let font = font();
@@ -29,7 +27,6 @@ fn rasterizes_capital_a() {
 
 /// A mask glyph comes back as `Coverage`; the renderer routes it to
 /// the `R8` atlas on this tag.
-#[cfg(not(windows))]
 #[test]
 fn mask_glyph_rasterizes_as_coverage() {
     let font = font();
@@ -42,7 +39,6 @@ fn mask_glyph_rasterizes_as_coverage() {
 
 /// A color-face glyph (⏸ U+23F8) rasterizes as `Rgba`, not collapsed
 /// to a mask (the ⏸/⏺ solid-square regression).
-#[cfg(not(windows))]
 #[test]
 fn color_emoji_rasterizes_as_rgba_not_a_mask() {
     let dir = test_font_dir();
@@ -57,7 +53,6 @@ fn color_emoji_rasterizes_as_rgba_not_a_mask() {
     );
 }
 
-#[cfg(not(windows))]
 #[test]
 fn cache_returns_stable_results() {
     let font = font();
@@ -70,7 +65,6 @@ fn cache_returns_stable_results() {
 
 /// Once `bytes_used` crosses the cap, inserts evict other entries
 /// but keep the just-inserted one.
-#[cfg(not(windows))]
 #[test]
 fn byte_cap_evicts_old_entries_but_keeps_the_newest() {
     let font = font();
@@ -102,7 +96,6 @@ fn byte_cap_evicts_old_entries_but_keeps_the_newest() {
 /// A cap wide enough for several entries is trimmed to the cap, not
 /// flushed. Five sizings of one glyph cost the same bytes, so the
 /// surviving count is exact.
-#[cfg(not(windows))]
 #[test]
 fn byte_cap_evicts_only_down_to_the_cap_when_it_holds_several_entries() {
     let font = font();
@@ -132,7 +125,6 @@ fn byte_cap_evicts_only_down_to_the_cap_when_it_holds_several_entries() {
     );
 }
 
-#[cfg(not(windows))]
 #[test]
 fn blank_bitmaps_count_against_the_byte_cap() {
     let font = font();
@@ -155,7 +147,6 @@ fn blank_bitmaps_count_against_the_byte_cap() {
 }
 
 /// Distinct `SizingKey` values produce distinct cache entries.
-#[cfg(not(windows))]
 #[test]
 fn sizing_key_prevents_collisions() {
     let font = font();
@@ -175,7 +166,6 @@ fn sizing_key_prevents_collisions() {
     assert_eq!(cache.len(), 3);
 }
 
-#[cfg(not(windows))]
 #[test]
 fn default_sizing_wrapper_shares_an_entry_with_explicit_default() {
     let font = font();
@@ -187,7 +177,6 @@ fn default_sizing_wrapper_shares_an_entry_with_explicit_default() {
     assert_eq!(SizingKey::default(), SizingKey::new(1, 0, 0, 0, 0, 0));
 }
 
-#[cfg(not(windows))]
 #[test]
 fn space_is_blank() {
     let font = font();

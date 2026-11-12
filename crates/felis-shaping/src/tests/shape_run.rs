@@ -1,6 +1,5 @@
 use super::*;
 
-#[cfg(not(windows))]
 #[test]
 fn shape_run_with_empty_text_produces_no_glyphs() {
     let font = font();
@@ -11,7 +10,6 @@ fn shape_run_with_empty_text_produces_no_glyphs() {
 
 /// Features-off shaping is one glyph per byte, or the renderer could
 /// not opt cells into shaping without shifting the grid.
-#[cfg(not(windows))]
 #[test]
 fn shape_run_ascii_no_features_emits_one_glyph_per_byte() {
     let font = font();
@@ -26,7 +24,6 @@ fn shape_run_ascii_no_features_emits_one_glyph_per_byte() {
     }
 }
 
-#[cfg(not(windows))]
 #[test]
 fn shape_run_of_spaces_produces_one_glyph_per_cell() {
     let font = font();
@@ -40,7 +37,6 @@ fn shape_run_of_spaces_produces_one_glyph_per_cell() {
 
 /// Malformed feature strings are dropped silently and the output
 /// equals the empty-feature-list output.
-#[cfg(not(windows))]
 #[test]
 fn shape_run_rejects_malformed_features_without_failing() {
     let font = font();
@@ -60,7 +56,6 @@ fn shape_run_rejects_malformed_features_without_failing() {
 
 /// The char path and the glyph-id path produce identical bitmaps, so
 /// mixed-mode rendering never draws one letter two ways.
-#[cfg(not(windows))]
 #[test]
 fn rasterize_by_char_matches_rasterize_by_glyph_id() {
     let font = font();
@@ -79,7 +74,6 @@ fn rasterize_by_char_matches_rasterize_by_glyph_id() {
 
 /// `rasterize_glyph_id(0)` returns a blank bitmap, matching the char
 /// path's charmap miss.
-#[cfg(not(windows))]
 #[test]
 fn rasterize_glyph_id_zero_returns_blank() {
     let font = font();
@@ -89,7 +83,6 @@ fn rasterize_glyph_id_zero_returns_blank() {
     assert_eq!(bitmap.height(), 0);
 }
 
-#[cfg(not(windows))]
 #[test]
 fn shape_run_is_repeatable_across_calls_on_the_same_shaper() {
     let font = font();
@@ -110,7 +103,6 @@ fn shape_run_is_repeatable_across_calls_on_the_same_shaper() {
 /// `HarfBuzz` and CSS, applies `calt` unrequested) and `-calt` turns
 /// it off. Needs the pinned devshell font: `FiraCode`'s calt never
 /// yields a single ligature glyph.
-#[cfg(not(windows))]
 #[test]
 fn shape_run_calt_texture_healing_defaults_on_and_disables() {
     let font = Font::load_test_font();
@@ -139,7 +131,6 @@ fn shape_run_calt_texture_healing_defaults_on_and_disables() {
 
 /// The probe face tracks every glyph +100 units at 12 pt and -50 at
 /// 24 pt; felis shapes it at its `hmtx` advances at any size.
-#[cfg(not(windows))]
 #[test]
 fn a_face_with_a_trak_table_shapes_untracked() {
     use skrifa::raw::{TableProvider, model::Blob};

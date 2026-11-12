@@ -2,7 +2,6 @@ use super::*;
 
 /// A mark with no precomposed glyph attaches at the face's anchors, so
 /// the cluster is no wider than its base.
-#[cfg(not(windows))]
 #[test]
 fn a_mark_without_a_precomposed_glyph_sits_on_its_base() {
     let stack = pinned_stack(&[]);
@@ -31,7 +30,6 @@ fn a_mark_without_a_precomposed_glyph_sits_on_its_base() {
 
 /// The sequence applies before positioning, so the mark sits on the
 /// variant at no advance of its own.
-#[cfg(not(windows))]
 #[test]
 fn a_mark_after_a_variation_sequence_keeps_the_variant() {
     let stack = pinned_stack(&[]);
@@ -50,7 +48,6 @@ fn a_mark_after_a_variation_sequence_keeps_the_variant() {
 
 /// A mark the face does not map shapes as `.notdef` at zero advance,
 /// as `HarfBuzz` zeroes every mark, so the cluster stays one cell wide.
-#[cfg(not(windows))]
 #[test]
 fn a_mark_the_face_does_not_map_shapes_as_a_zero_advance_notdef() {
     let probe = load_pinned(TRAK_PROBE);
@@ -67,7 +64,6 @@ fn a_mark_the_face_does_not_map_shapes_as_a_zero_advance_notdef() {
 
 /// A `CBDT` face's empty `glyf` entries are no outline; a text face's
 /// glyphs are.
-#[cfg(not(windows))]
 #[test]
 fn only_an_inked_outline_counts_as_one() {
     let emoji = load_pinned("NotoColorEmoji.ttf");
@@ -110,7 +106,6 @@ const fn is_default_ignorable(c: char) -> bool {
     )
 }
 
-#[cfg(not(windows))]
 fn span_faces() -> &'static [Font; 2] {
     static FACES: OnceLock<[Font; 2]> = OnceLock::new();
     FACES.get_or_init(|| {
@@ -154,7 +149,6 @@ fn arb_cluster_text() -> impl Strategy<Value = String> {
         .prop_map(String::from_iter)
 }
 
-#[cfg(not(windows))]
 proptest! {
     #[test]
     fn shaped_spans_cover_the_text_in_order(text in arb_cluster_text()) {
@@ -187,7 +181,6 @@ proptest! {
 
 /// The renderer falls back to the per-char path for a cluster that
 /// shapes to nothing.
-#[cfg(not(windows))]
 #[test]
 fn default_ignorables_alone_shape_to_no_glyphs() {
     let font = font();
@@ -199,7 +192,6 @@ fn default_ignorables_alone_shape_to_no_glyphs() {
 
 /// Without `REMOVE_DEFAULT_IGNORABLES` the face's unmapped VS15
 /// would shape to a second, blank glyph.
-#[cfg(not(windows))]
 #[test]
 fn an_unmapped_selector_adds_no_glyph() {
     let symbols = load_pinned(SYMBOLS2);
@@ -210,7 +202,6 @@ fn an_unmapped_selector_adds_no_glyph() {
 }
 
 /// `BEGINNING_OF_TEXT` would insert U+25CC before a mark with no base.
-#[cfg(not(windows))]
 #[test]
 fn a_lone_mark_shapes_without_a_dotted_circle() {
     let font = font();
@@ -222,7 +213,6 @@ fn a_lone_mark_shapes_without_a_dotted_circle() {
 
 /// Shape plans are cached per face and feature list, so a shaper
 /// that has served other pairs answers as a fresh one does.
-#[cfg(not(windows))]
 #[test]
 fn a_reused_shaper_matches_a_fresh_one_across_faces_and_features() {
     let [mono, emoji] = span_faces();

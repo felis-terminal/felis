@@ -1,6 +1,5 @@
 use super::*;
 
-#[cfg(not(windows))]
 #[test]
 fn a_variation_view_is_named_with_the_position_it_draws_at() {
     let font = pinned_variable_font();
@@ -35,7 +34,6 @@ fn a_variation_view_is_named_with_the_position_it_draws_at() {
 
 /// The pinned variable face defaults to `ExtraLight`, so a stack that
 /// draws its default instance renders regular and bold alike, too thin.
-#[cfg(not(windows))]
 #[test]
 fn variable_face_draws_regular_and_bold_at_their_weights() {
     let dir = test_font_dir();
@@ -76,7 +74,6 @@ fn variable_face_draws_regular_and_bold_at_their_weights() {
 
 /// The variable face defaults to `ExtraLight`, so a fallback loaded at
 /// its default instance draws thinner than the primary beside it.
-#[cfg(not(windows))]
 #[test]
 fn variable_fallback_draws_at_the_regular_weight() {
     let mut files = test_font_files();
@@ -117,7 +114,6 @@ fn pinned_variable_stack(styles: &StyleFaces<'_>) -> (FontStack, std::path::Path
 
 /// Monaspace Neon Var ships no italic file: its "Italic" and "Bold
 /// Italic" named instances sit at `slnt` -11 on the upright file.
-#[cfg(not(windows))]
 #[test]
 fn variable_face_draws_italic_at_its_named_italic_slant() {
     let (stack, _) = pinned_variable_stack(&StyleFaces::default());
@@ -157,7 +153,6 @@ fn variable_face_draws_italic_at_its_named_italic_slant() {
     assert_ne!(ink(regular), ink(italic));
 }
 
-#[cfg(not(windows))]
 #[test]
 fn separate_italic_file_keeps_its_own_design() {
     let italic_family = FaceSpec::named("Monaspace Neon");
@@ -182,7 +177,6 @@ fn separate_italic_file_keeps_its_own_design() {
 
 /// The pinned CJK subset varies `wght` only, so bold italic lands on
 /// the bold view and italic on the regular one.
-#[cfg(not(windows))]
 #[test]
 fn styles_at_the_same_position_share_one_face() {
     let dir = test_font_dir();
@@ -209,7 +203,6 @@ const fn setting(tag: [u8; 4], value: f32) -> AxisSetting {
     AxisSetting { tag, value }
 }
 
-#[cfg(not(windows))]
 #[test]
 fn a_regular_weight_moves_regular_and_italic_and_leaves_bold_at_700() {
     let styles = StyleFaces {
@@ -229,7 +222,6 @@ fn a_regular_weight_moves_regular_and_italic_and_leaves_bold_at_700() {
     );
 }
 
-#[cfg(not(windows))]
 #[test]
 fn bold_italic_takes_the_bold_weight_unless_it_sets_its_own() {
     let bold = FaceSpec {
@@ -267,7 +259,6 @@ fn bold_italic_takes_the_bold_weight_unless_it_sets_its_own() {
 
 /// `instances().nth(16)` of the pinned variable face is `SemiWide
 /// Regular`.
-#[cfg(not(windows))]
 #[test]
 fn an_unset_regular_weight_keeps_a_named_instance_and_a_set_one_moves_only_wght() {
     let default = pinned_variable_font();
@@ -286,7 +277,6 @@ fn an_unset_regular_weight_keeps_a_named_instance_and_a_set_one_moves_only_wght(
 
 /// The pinned variable face has no `HVAR`; its `wdth` axis varies the
 /// advance through `gvar` phantom points alone.
-#[cfg(not(windows))]
 #[test]
 fn a_width_axis_without_hvar_widens_the_cell() {
     let default = pinned_variable_font();
@@ -302,7 +292,6 @@ fn a_width_axis_without_hvar_widens_the_cell() {
     );
 }
 
-#[cfg(not(windows))]
 #[test]
 fn static_styles_are_matched_at_their_configured_weights() {
     let files = pinned_files(&[
@@ -340,7 +329,6 @@ fn static_styles_are_matched_at_their_configured_weights() {
     );
 }
 
-#[cfg(not(windows))]
 #[test]
 fn derived_styles_inherit_the_regular_axes_but_not_its_slant() {
     let regular_axes = [setting(*b"wdth", 110.0), setting(*b"slnt", -5.0)];
@@ -366,7 +354,6 @@ fn derived_styles_inherit_the_regular_axes_but_not_its_slant() {
     );
 }
 
-#[cfg(not(windows))]
 #[test]
 fn a_style_naming_its_own_family_inherits_no_axes() {
     let regular_axes = [setting(*b"wdth", 110.0)];
@@ -387,7 +374,6 @@ fn a_style_naming_its_own_family_inherits_no_axes() {
     );
 }
 
-#[cfg(not(windows))]
 #[test]
 fn an_explicit_slant_replaces_the_named_italic_position() {
     let italic = FaceSpec {
@@ -410,7 +396,6 @@ fn an_explicit_slant_replaces_the_named_italic_position() {
     );
 }
 
-#[cfg(not(windows))]
 #[test]
 fn a_wght_entry_in_axes_and_an_axis_the_face_lacks_are_ignored() {
     let regular_axes = [setting(*b"ZZZZ", 1.0), setting(*b"wght", 800.0)];
@@ -430,7 +415,6 @@ fn a_wght_entry_in_axes_and_an_axis_the_face_lacks_are_ignored() {
     }
 }
 
-#[cfg(not(windows))]
 #[test]
 fn an_axis_value_outside_the_face_range_is_clamped() {
     let regular_axes = [setting(*b"wdth", 500.0)];
@@ -452,7 +436,6 @@ fn an_axis_value_outside_the_face_range_is_clamped() {
     );
 }
 
-#[cfg(not(windows))]
 #[test]
 fn an_explicit_fallback_is_drawn_at_the_configured_weights() {
     let mut files = test_font_files();
