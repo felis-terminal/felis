@@ -3,14 +3,7 @@
 //! Erase operations sweep only placements preceding them in the burst;
 //! running eviction after the batch would remove newly created placements.
 
-use felis_daemon::graphics::ImageEvent;
-use felis_daemon::graphics::{ApcCtx, ShmDeferral, dispatch_apc_body};
-use felis_grid::Grid;
-use felis_grid::images::{ImageStore, Placements};
-use felis_grid::kitty_graphics::Reassembler;
-use felis_vt::Parser;
-
-use crate::common::b64;
+use crate::common::{KittyState, b64};
 
 const TEST_STORE_CAP: usize = 64 * 1024 * 1024;
 
@@ -25,62 +18,10 @@ fn clear_then_place_burst() -> Vec<u8> {
     out
 }
 
-struct Pieces {
-    parser: Parser,
-    reassembler: Reassembler,
-    grid: Grid,
-    images: ImageStore,
-    placements: Placements,
-    events: Vec<ImageEvent>,
-    shm: ShmDeferral,
-}
-
-impl Pieces {
-    fn new() -> Self {
-        Self {
-            parser: Parser::new(),
-            reassembler: Reassembler::new(),
-            grid: Grid::new(24, 80),
-            images: ImageStore::new(TEST_STORE_CAP),
-            placements: Placements::new(),
-            events: Vec::new(),
-            shm: ShmDeferral::default(),
-        }
-    }
-}
-
 #[test]
 fn stream_order_replay_keeps_the_clear_then_draw_image() {
-    use felis_grid::PtyEffect;
-    let mut p = Pieces::new();
-    p.parser.advance(&mut p.grid, &clear_then_place_burst());
-    for effect in p.grid.take_pty_effects() {
-        match effect {
-            PtyEffect::ImagesCleared(scope) => felis_daemon::graphics::clear_images(
-                &mut p.images,
-                &mut p.placements,
-                &mut p.events,
-                scope,
-            ),
-            PtyEffect::Apc(apc) => {
-                dispatch_apc_body(
-                    &mut ApcCtx {
-                        grid: &mut p.grid,
-                        images: &mut p.images,
-                        placements: &mut p.placements,
-                        events: &mut p.events,
-                        shm: &mut p.shm,
-                        cell_pixel_w: 0,
-                        cell_pixel_h: 0,
-                        anchor_cursor: None,
-                    },
-                    &mut p.reassembler,
-                    &apc.body,
-                );
-            }
-            _ => {}
-        }
-    }
+    let mut p = KittyState::new(24, 80, TEST_STORE_CAP);
+    p.replay(&clear_then_place_burst());
     assert_eq!(
         p.placements.len(),
         1,

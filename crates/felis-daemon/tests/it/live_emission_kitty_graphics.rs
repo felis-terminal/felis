@@ -4,99 +4,40 @@
 //! runs the session task's materialization, so the assertions cover
 //! the marker → store → wire path. No `pool::Session`, no PTY.
 
-use felis_daemon::graphics::{
-    ApcCtx, ImageEvent, SavedScreens, ShmDeferral, apply_screen_switch, clear_images,
-    dispatch_apc_body, materialize_image_events,
-};
-use felis_grid::images::{ImageStore, Placements};
-use felis_grid::kitty_graphics::Reassembler;
-use felis_grid::{Grid, PtyEffect};
+use felis_daemon::graphics::materialize_image_events;
+use felis_grid::images::Placements;
 use felis_protocol::{
     ImageId, PlacementId,
     messages::{ImageFormat, ImageMsg, ImageTarget},
 };
-use felis_vt::Parser;
 
-use crate::common::{b64, body};
+use crate::common::{KittyState, b64, body};
 
 const TEST_STORE_CAP: usize = 1024 * 1024;
 
-struct State {
-    reassembler: Reassembler,
-    grid: Grid,
-    images: ImageStore,
-    placements: Placements,
-    /// Mirror of `Session::saved_screens`.
-    saved: SavedScreens,
-    events: Vec<ImageEvent>,
-    shm: ShmDeferral,
+struct State(KittyState);
+
+impl std::ops::Deref for State {
+    type Target = KittyState;
+    fn deref(&self) -> &KittyState {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for State {
+    fn deref_mut(&mut self) -> &mut KittyState {
+        &mut self.0
+    }
 }
 
 impl State {
     fn new() -> Self {
-        Self {
-            reassembler: Reassembler::new(),
-            grid: Grid::new(24, 80),
-            images: ImageStore::new(TEST_STORE_CAP),
-            placements: Placements::new(),
-            saved: SavedScreens::default(),
-            events: Vec::new(),
-            shm: ShmDeferral::default(),
-        }
-    }
-
-    fn dispatch(&mut self, body: &[u8]) -> Option<Vec<u8>> {
-        dispatch_apc_body(
-            &mut ApcCtx {
-                grid: &mut self.grid,
-                images: &mut self.images,
-                placements: &mut self.placements,
-                events: &mut self.events,
-                shm: &mut self.shm,
-                cell_pixel_w: 0,
-                cell_pixel_h: 0,
-                anchor_cursor: None,
-            },
-            &mut self.reassembler,
-            body,
-        )
+        Self(KittyState::new(24, 80, TEST_STORE_CAP))
     }
 
     fn drain_events(&mut self) -> Vec<ImageMsg> {
         let events = std::mem::take(&mut self.events);
         materialize_image_events(&events, &self.images, true)
-    }
-
-    fn advance_and_drain(&mut self, bytes: &[u8]) {
-        let mut parser = Parser::new();
-        parser.advance(&mut self.grid, bytes);
-        for effect in self.grid.take_pty_effects() {
-            match effect {
-                PtyEffect::ScreenSwitch(switch) => apply_screen_switch(
-                    switch,
-                    &mut self.images,
-                    &mut self.placements,
-                    &mut self.saved,
-                    &mut self.events,
-                ),
-                PtyEffect::ImagesCleared(scope) => clear_images(
-                    &mut self.images,
-                    &mut self.placements,
-                    &mut self.events,
-                    scope,
-                ),
-                PtyEffect::HardReset if self.saved.primary.is_some() => {
-                    apply_screen_switch(
-                        felis_grid::ScreenSwitch::LeftAlternate { kept: false },
-                        &mut self.images,
-                        &mut self.placements,
-                        &mut self.saved,
-                        &mut self.events,
-                    );
-                }
-                _ => {}
-            }
-        }
     }
 }
 
@@ -314,7 +255,7 @@ fn alt_screen_round_trip_restores_and_restates_virtual_extents() {
     s.dispatch(&body("Ga=T,U=1,i=12,f=32,s=1,v=1,c=4,r=2", &payload))
         .unwrap();
     s.drain_events();
-    s.advance_and_drain(b"\x1b[?1049h");
+    s.replay(b"\x1b[?1049h");
     assert_eq!(
         s.placements.iter_virtual().count(),
         0,
@@ -331,7 +272,7 @@ fn alt_screen_round_trip_restores_and_restates_virtual_extents() {
         )),
         "the client drops the stashed extent too, got {entered:?}"
     );
-    s.advance_and_drain(b"\x1b[?1049l");
+    s.replay(b"\x1b[?1049l");
     let events = s.drain_events();
     assert!(
         events.iter().any(|e| matches!(
@@ -355,9 +296,9 @@ fn a_delete_on_the_alternate_screen_spares_a_primary_virtual_placement() {
     s.dispatch(&body("Ga=T,U=1,i=12,f=32,s=1,v=1,c=4,r=2", &payload))
         .unwrap();
     s.drain_events();
-    s.advance_and_drain(b"\x1b[?1049h");
+    s.replay(b"\x1b[?1049h");
     assert!(s.dispatch(&body("Ga=d,d=I,i=12", b"")).is_none());
-    s.advance_and_drain(b"\x1b[?1049l");
+    s.replay(b"\x1b[?1049l");
     let events = s.drain_events();
     assert!(
         events.iter().any(|e| matches!(
@@ -589,7 +530,7 @@ fn ed_2_clears_the_screen_placements_and_frees_unreferenced_images() {
     s.dispatch(&body("Ga=p,U=1,i=6,c=2,r=1", b"")).unwrap();
     s.drain_events();
 
-    s.advance_and_drain(b"\x1b[?2J");
+    s.replay(b"\x1b[?2J");
 
     let (removed, deleted) = removed_and_deleted(&s.drain_events());
     assert_eq!(removed, vec![42, 99]);
@@ -612,7 +553,7 @@ fn partial_erases_and_a_soft_reset_leave_images_alone() {
     .unwrap();
     s.drain_events();
 
-    s.advance_and_drain(b"\x1b[H\x1b[J\x1b[1J\x1b[2K\x1b[!p");
+    s.replay(b"\x1b[H\x1b[J\x1b[1J\x1b[2K\x1b[!p");
 
     assert_eq!(s.drain_events(), Vec::new());
     assert_eq!(s.placements.len(), 1);
@@ -629,14 +570,14 @@ fn ed_3_also_clears_scrollback_placements() {
     s.placements.shift_up(30, 1000);
     s.drain_events();
 
-    s.advance_and_drain(b"\x1b[2J");
+    s.replay(b"\x1b[2J");
     assert_eq!(
         s.placements.len(),
         1,
         "ED 2 spares a placement wholly in history"
     );
 
-    s.advance_and_drain(b"\x1b[3J");
+    s.replay(b"\x1b[3J");
     let (removed, deleted) = removed_and_deleted(&s.drain_events());
     assert_eq!((removed, deleted), (vec![42], vec![42]));
 }
@@ -651,7 +592,7 @@ fn ris_clears_the_screen_placements_and_frees_their_images() {
     .unwrap();
     s.drain_events();
 
-    s.advance_and_drain(b"\x1bc");
+    s.replay(b"\x1bc");
 
     let (removed, deleted) = removed_and_deleted(&s.drain_events());
     assert_eq!((removed, deleted), (vec![7], vec![7]));
@@ -695,7 +636,7 @@ fn ris_on_the_alternate_screen_keeps_primary_scrollback_placements() {
         &tiny_rgba_payload(),
     ))
     .unwrap();
-    s.advance_and_drain(b"\x1b[?1049h");
+    s.replay(b"\x1b[?1049h");
     s.dispatch(&body(
         "Ga=T,i=44,f=32,s=1,v=1,c=4,r=2",
         &tiny_rgba_payload(),
@@ -703,7 +644,7 @@ fn ris_on_the_alternate_screen_keeps_primary_scrollback_placements() {
     .unwrap();
     s.drain_events();
 
-    s.advance_and_drain(b"\x1bc");
+    s.replay(b"\x1bc");
 
     assert_eq!(s.saved.primary, None);
     assert_eq!(
@@ -728,12 +669,12 @@ fn a_clear_on_the_alternate_screen_keeps_the_primary_screen_images() {
         &tiny_rgba_payload(),
     ))
     .unwrap();
-    s.advance_and_drain(b"\x1b[?1049h\x1b[2J");
+    s.replay(b"\x1b[?1049h\x1b[2J");
     s.drain_events();
     let saved = s.saved.primary.as_ref().unwrap();
     assert!(saved.images.get(ImageId(42)).is_some());
 
-    s.advance_and_drain(b"\x1b[?1049l");
+    s.replay(b"\x1b[?1049l");
     assert_eq!(s.placements.len(), 1);
 }
 
@@ -751,7 +692,7 @@ fn alt_screen_entry_hides_primary_placements() {
     let primary_refcount = s.images.get(ImageId(11)).unwrap().refcount();
     assert!(primary_refcount >= 1, "primary placement holds a refcount");
 
-    s.advance_and_drain(b"\x1b[?1049h");
+    s.replay(b"\x1b[?1049h");
 
     assert!(
         s.placements.is_empty(),
@@ -799,10 +740,10 @@ fn alt_screen_leave_restores_primary_placements() {
     s.drain_events();
     let primary_anchor = s.placements.iter().next().unwrap().anchor;
 
-    s.advance_and_drain(b"\x1b[?1049h");
+    s.replay(b"\x1b[?1049h");
     s.drain_events();
 
-    s.advance_and_drain(b"\x1b[?1049l");
+    s.replay(b"\x1b[?1049l");
 
     assert_eq!(s.placements.len(), 1, "primary placement restored");
     assert!(
@@ -849,7 +790,7 @@ fn alt_screen_placements_are_destroyed_on_leave() {
     s.drain_events();
     let primary_refs = s.images.get(ImageId(1)).unwrap().refcount();
 
-    s.advance_and_drain(b"\x1b[?1049h");
+    s.replay(b"\x1b[?1049h");
     s.drain_events();
 
     s.dispatch(&body("Ga=T,i=2,f=32,s=1,v=1,c=4,r=2", &payload))
@@ -863,7 +804,7 @@ fn alt_screen_placements_are_destroyed_on_leave() {
     let alt_refs = s.images.get(ImageId(2)).unwrap().refcount();
     assert!(alt_refs >= 1, "alt placement pins image 2");
 
-    s.advance_and_drain(b"\x1b[?1049l");
+    s.replay(b"\x1b[?1049l");
 
     let ids: Vec<u32> = s.placements.iter().map(|p| p.image_id.0).collect();
     assert_eq!(ids, vec![1], "only the primary placement survives");
@@ -890,18 +831,18 @@ fn second_alt_screen_entry_starts_with_no_alt_placements() {
     s.drain_events();
     assert_eq!(s.placements.len(), 1, "primary placement seeded");
 
-    s.advance_and_drain(b"\x1b[?1049h");
+    s.replay(b"\x1b[?1049h");
     s.drain_events();
     s.dispatch(&body("Ga=T,i=42,f=32,s=1,v=1,c=4,r=2", &payload))
         .unwrap();
     s.drain_events();
     assert_eq!(s.placements.len(), 1);
-    s.advance_and_drain(b"\x1b[?1049l");
+    s.replay(b"\x1b[?1049l");
     s.drain_events();
     let ids: Vec<u32> = s.placements.iter().map(|p| p.image_id.0).collect();
     assert_eq!(ids, vec![9], "primary restored before the second entry");
 
-    s.advance_and_drain(b"\x1b[?1049h");
+    s.replay(b"\x1b[?1049h");
 
     assert!(
         s.placements.is_empty(),
@@ -929,12 +870,12 @@ fn redundant_alt_screen_entry_does_not_overwrite_saved_primary() {
         .unwrap();
     s.drain_events();
 
-    s.advance_and_drain(b"\x1b[?1049h\x1b[?1049h");
+    s.replay(b"\x1b[?1049h\x1b[?1049h");
     s.drain_events();
     assert!(s.saved.primary.is_some());
     assert_eq!(s.saved.primary.as_ref().unwrap().placements.len(), 1);
 
-    s.advance_and_drain(b"\x1b[?1049l");
+    s.replay(b"\x1b[?1049l");
     assert_eq!(
         s.placements.len(),
         1,
@@ -947,7 +888,7 @@ fn a_range_delete_on_the_alternate_screen_keeps_the_primary_screen_images() {
     let mut s = State::new();
     let payload = tiny_rgba_payload();
     s.dispatch(&body("Ga=T,i=12,f=32,s=1,v=1,q=2", &payload));
-    s.advance_and_drain(b"\x1b[?1049h");
+    s.replay(b"\x1b[?1049h");
     s.dispatch(&body("Ga=d,d=R,x=1,y=20", b""));
     assert!(
         s.saved
@@ -958,7 +899,7 @@ fn a_range_delete_on_the_alternate_screen_keeps_the_primary_screen_images() {
             .get(ImageId(12))
             .is_some()
     );
-    s.advance_and_drain(b"\x1b[?1049l");
+    s.replay(b"\x1b[?1049l");
     assert_eq!(s.placements.len(), 1);
 }
 
@@ -971,12 +912,12 @@ fn an_alternate_screen_image_does_not_replace_a_primary_one_with_its_id() {
         "Ga=T,i=5,f=32,s=1,v=1,c=4,r=2,q=2",
         &b64(&[1, 1, 1, 1]),
     ));
-    s.advance_and_drain(b"\x1b[?1049h");
+    s.replay(b"\x1b[?1049h");
     s.dispatch(&body(
         "Ga=T,i=5,f=32,s=1,v=1,c=4,r=2,q=2",
         &b64(&[2, 2, 2, 2]),
     ));
-    s.advance_and_drain(b"\x1b[?1049l");
+    s.replay(b"\x1b[?1049l");
 
     let entry = s.images.get(ImageId(5)).unwrap();
     assert_eq!(&entry.frame(0).unwrap().pixels[..], &[1, 1, 1, 1]);
@@ -992,15 +933,15 @@ fn a_47_reentry_brings_back_the_alternate_screen_images() {
         "Ga=T,i=1,f=32,s=1,v=1,c=4,r=2,q=2",
         &tiny_rgba_payload(),
     ));
-    s.advance_and_drain(b"\x1b[?47h");
+    s.replay(b"\x1b[?47h");
     s.dispatch(&body(
         "Ga=T,i=2,f=32,s=1,v=1,c=4,r=2,q=2",
         &tiny_rgba_payload(),
     ));
-    s.advance_and_drain(b"\x1b[?47l");
+    s.replay(b"\x1b[?47l");
     s.drain_events();
 
-    s.advance_and_drain(b"\x1b[?47h");
+    s.replay(b"\x1b[?47h");
 
     assert_eq!(
         s.placements
@@ -1026,12 +967,12 @@ fn a_47_reentry_brings_back_the_alternate_screen_images() {
 #[test]
 fn a_1047_leave_discards_the_alternate_screen_images() {
     let mut s = State::new();
-    s.advance_and_drain(b"\x1b[?1047h");
+    s.replay(b"\x1b[?1047h");
     s.dispatch(&body(
         "Ga=T,i=2,f=32,s=1,v=1,c=4,r=2,q=2",
         &tiny_rgba_payload(),
     ));
-    s.advance_and_drain(b"\x1b[?1047l\x1b[?47h");
+    s.replay(b"\x1b[?1047l\x1b[?47h");
 
     assert!(s.placements.is_empty());
     assert!(s.images.is_empty());

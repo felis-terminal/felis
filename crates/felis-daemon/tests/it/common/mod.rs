@@ -8,9 +8,12 @@ use std::time::Duration;
 use felis_client_core::{AttachIntent, Offer, ShadowScreen, connect};
 use felis_protocol::{MessageKind, codec, messages::GridMsg};
 
+mod kitty;
 #[cfg(windows)]
 pub(crate) mod medium;
+
 use felis_grid::Grapheme;
+pub(crate) use kitty::KittyState;
 
 pub(crate) fn daemon_bin() -> String {
     std::env::var("CARGO_BIN_EXE_felis-daemon").expect(

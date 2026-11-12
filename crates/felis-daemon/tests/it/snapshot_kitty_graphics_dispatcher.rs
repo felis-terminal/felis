@@ -4,57 +4,21 @@
 //! medium, format, `q=` gating, error mapping).
 //! `felis-grid`'s `snapshot_kitty_graphics` pins the parser side.
 
-use felis_daemon::graphics::{ApcCtx, ShmDeferral, dispatch_apc_body};
-use felis_grid::Grid;
-use felis_grid::images::{ImageId, ImageStore, Placements};
-use felis_grid::kitty_graphics::Reassembler;
+use felis_grid::images::ImageId;
 
-use crate::common::{b64, body};
+use crate::common::{KittyState, b64, body};
 
 const TEST_STORE_CAP: usize = 1024 * 1024;
 
-struct State {
-    reassembler: Reassembler,
-    grid: Grid,
-    images: ImageStore,
-    placements: Placements,
-    shm: ShmDeferral,
-}
-
-impl State {
-    fn new() -> Self {
-        Self {
-            reassembler: Reassembler::new(),
-            grid: Grid::new(24, 80),
-            images: ImageStore::new(TEST_STORE_CAP),
-            placements: Placements::new(),
-            shm: ShmDeferral::default(),
-        }
-    }
-
-    fn dispatch(&mut self, body: &[u8]) -> Option<Vec<u8>> {
-        dispatch_apc_body(
-            &mut ApcCtx {
-                grid: &mut self.grid,
-                images: &mut self.images,
-                placements: &mut self.placements,
-                events: &mut Vec::new(),
-                shm: &mut self.shm,
-                cell_pixel_w: 0,
-                cell_pixel_h: 0,
-                anchor_cursor: None,
-            },
-            &mut self.reassembler,
-            body,
-        )
-    }
+fn state() -> KittyState {
+    KittyState::new(24, 80, TEST_STORE_CAP)
 }
 
 const TEST_PIXEL: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
 
 #[test]
 fn action_q_validates_without_storing() {
-    let mut s = State::new();
+    let mut s = state();
     let response = s
         .dispatch(&body("Ga=q,i=1,f=32,s=1,v=1", &b64(&TEST_PIXEL)))
         .unwrap();
@@ -64,7 +28,7 @@ fn action_q_validates_without_storing() {
 
 #[test]
 fn action_t_transmits_and_stores_without_placement() {
-    let mut s = State::new();
+    let mut s = state();
     let response = s
         .dispatch(&body("Ga=t,i=2,f=32,s=1,v=1", &b64(&TEST_PIXEL)))
         .unwrap();
@@ -76,7 +40,7 @@ fn action_t_transmits_and_stores_without_placement() {
 
 #[test]
 fn action_uppercase_t_transmits_and_records_placement_and_advances_cursor() {
-    let mut s = State::new();
+    let mut s = state();
     let response = s
         .dispatch(&body("Ga=T,i=3,f=32,s=1,v=1,c=2,r=2", &b64(&TEST_PIXEL)))
         .unwrap();
@@ -92,7 +56,7 @@ fn action_uppercase_t_transmits_and_records_placement_and_advances_cursor() {
 
 #[test]
 fn action_p_displays_previously_transmitted_image() {
-    let mut s = State::new();
+    let mut s = state();
     s.dispatch(&body("Ga=t,i=4,f=32,s=1,v=1", &b64(&TEST_PIXEL)))
         .unwrap();
     let response = s.dispatch(&body("Ga=p,i=4,z=2", b"")).unwrap();
@@ -103,7 +67,7 @@ fn action_p_displays_previously_transmitted_image() {
 
 #[test]
 fn action_p_for_unknown_image_returns_enoent() {
-    let mut s = State::new();
+    let mut s = state();
     let response = s.dispatch(&body("Ga=p,i=99", b"")).unwrap();
     assert!(
         response.starts_with(b"\x1b_Gi=99;ENOENT"),
@@ -114,7 +78,7 @@ fn action_p_for_unknown_image_returns_enoent() {
 
 #[test]
 fn action_d_with_d_eq_i_drops_placement_but_keeps_image() {
-    let mut s = State::new();
+    let mut s = state();
     s.dispatch(&body("Ga=T,i=5,f=32,s=1,v=1", &b64(&TEST_PIXEL)))
         .unwrap();
     assert!(s.dispatch(&body("Ga=d,d=i,i=5", b"")).is_none());
@@ -124,7 +88,7 @@ fn action_d_with_d_eq_i_drops_placement_but_keeps_image() {
 
 #[test]
 fn a_query_is_answered_with_its_image_id_alone() {
-    let mut s = State::new();
+    let mut s = state();
     let q = |keys: &str| format!("Ga=q,{keys},f=32,s=1,v=1");
     assert_eq!(
         s.dispatch(&body(&q("i=17,p=2"), &b64(&TEST_PIXEL))),
@@ -135,7 +99,7 @@ fn a_query_is_answered_with_its_image_id_alone() {
 
 #[test]
 fn a_command_with_both_image_id_and_number_is_refused_before_it_runs() {
-    let mut s = State::new();
+    let mut s = state();
     s.dispatch(&body("Ga=T,i=5,f=32,s=1,v=1", &b64(&TEST_PIXEL)))
         .unwrap();
     let reply = s.dispatch(&body("Ga=d,d=i,i=5,I=9", b"")).unwrap();
@@ -146,7 +110,7 @@ fn a_command_with_both_image_id_and_number_is_refused_before_it_runs() {
 
 #[test]
 fn a_zero_id_key_is_not_echoed() {
-    let mut s = State::new();
+    let mut s = state();
     assert_eq!(
         s.dispatch(&body("Ga=t,i=7,I=0,f=32,s=1,v=1", &b64(&TEST_PIXEL))),
         Some(b"\x1b_Gi=7;OK\x1b\\".to_vec())
@@ -155,13 +119,13 @@ fn a_zero_id_key_is_not_echoed() {
 
 #[test]
 fn a_failed_delete_sends_no_reply() {
-    let mut s = State::new();
+    let mut s = state();
     assert_eq!(s.dispatch(&body("Ga=d,d=?,i=5", b"")), None);
 }
 
 #[test]
 fn an_error_without_an_image_id_sends_no_reply() {
-    let mut s = State::new();
+    let mut s = state();
     assert_eq!(
         s.dispatch(&body("Ga=t,f=64,s=1,v=1", &b64(&TEST_PIXEL))),
         None
@@ -171,7 +135,7 @@ fn an_error_without_an_image_id_sends_no_reply() {
 
 #[test]
 fn action_d_with_d_eq_capital_a_clears_everything() {
-    let mut s = State::new();
+    let mut s = state();
     for id in [6u32, 7, 8] {
         let id_str = id.to_string();
         let payload = b64(&TEST_PIXEL);
@@ -185,7 +149,7 @@ fn action_d_with_d_eq_capital_a_clears_everything() {
 
 #[test]
 fn transmission_d_direct_base64_payload() {
-    let mut s = State::new();
+    let mut s = state();
     let response = s
         .dispatch(&body("Ga=t,t=d,i=10,f=32,s=1,v=1", &b64(&TEST_PIXEL)))
         .unwrap();
@@ -208,7 +172,7 @@ fn transmission_s_shared_memory_round_trips() {
     std::fs::File::from(fd)
         .write_all(&TEST_PIXEL)
         .expect("fill test shm object");
-    let mut s = State::new();
+    let mut s = state();
     let response = s
         .dispatch(&body(
             "Ga=t,t=s,i=11,f=32,s=1,v=1",
@@ -224,7 +188,7 @@ fn transmission_s_shared_memory_round_trips() {
 
 #[test]
 fn format_24_raw_rgb_round_trips() {
-    let mut s = State::new();
+    let mut s = state();
     let pixels = [0x11, 0x22, 0x33];
     s.dispatch(&body("Ga=t,t=d,i=20,f=24,s=1,v=1", &b64(&pixels)))
         .unwrap();
@@ -235,7 +199,7 @@ fn format_24_raw_rgb_round_trips() {
 
 #[test]
 fn format_32_raw_rgba_round_trips() {
-    let mut s = State::new();
+    let mut s = state();
     s.dispatch(&body("Ga=t,t=d,i=21,f=32,s=1,v=1", &b64(&TEST_PIXEL)))
         .unwrap();
     let entry = s.images.get(ImageId(21)).expect("stored");
@@ -253,7 +217,7 @@ fn format_100_png_round_trips_to_rgba8() {
     writer.write_image_data(&TEST_PIXEL).expect("png data");
     writer.finish().expect("png finish");
 
-    let mut s = State::new();
+    let mut s = state();
     s.dispatch(&body("Ga=t,t=d,i=22,f=100", &b64(&png)))
         .unwrap();
     let entry = s.images.get(ImageId(22)).expect("stored");
@@ -263,7 +227,7 @@ fn format_100_png_round_trips_to_rgba8() {
 
 #[test]
 fn quiet_zero_emits_ok_and_errors() {
-    let mut s = State::new();
+    let mut s = state();
     let ok = s
         .dispatch(&body("Ga=t,q=0,i=30,f=32,s=1,v=1", &b64(&TEST_PIXEL)))
         .unwrap();
@@ -274,7 +238,7 @@ fn quiet_zero_emits_ok_and_errors() {
 
 #[test]
 fn quiet_one_suppresses_ok_keeps_errors() {
-    let mut s = State::new();
+    let mut s = state();
     assert!(
         s.dispatch(&body("Ga=t,q=1,i=31,f=32,s=1,v=1", &b64(&TEST_PIXEL),))
             .is_none(),
@@ -286,7 +250,7 @@ fn quiet_one_suppresses_ok_keeps_errors() {
 
 #[test]
 fn quiet_two_silences_everything_including_errors() {
-    let mut s = State::new();
+    let mut s = state();
     assert!(
         s.dispatch(&body("Ga=t,q=2,i=32,f=32,s=1,v=1", &b64(&TEST_PIXEL),))
             .is_none(),
@@ -300,14 +264,14 @@ fn quiet_two_silences_everything_including_errors() {
 #[test]
 fn missing_image_id_auto_allocates_without_a_reply() {
     // Valid per the Kitty spec (yazi's direct preview relies on it).
-    let mut s = State::new();
+    let mut s = state();
     let response = s.dispatch(&body("Ga=t,f=32,s=1,v=1", &b64(&TEST_PIXEL)));
     assert_eq!(response, None);
 }
 
 #[test]
 fn error_einval_on_malformed_base64() {
-    let mut s = State::new();
+    let mut s = state();
     let response = s
         .dispatch(&body("Ga=t,i=40,f=32,s=1,v=1", b"!@#$NOT-B64"))
         .unwrap();
@@ -319,7 +283,7 @@ fn error_einval_on_malformed_base64() {
 
 #[test]
 fn error_einval_on_unknown_format() {
-    let mut s = State::new();
+    let mut s = state();
     let response = s
         .dispatch(&body("Ga=t,i=41,f=64,s=1,v=1", &b64(&TEST_PIXEL)))
         .unwrap();
@@ -331,7 +295,7 @@ fn error_einval_on_unknown_format() {
 
 #[test]
 fn animation_actions_are_routed_not_enotsup() {
-    let mut s = State::new();
+    let mut s = state();
     for action in *b"fac" {
         let response = s
             .dispatch(&body(&format!("Ga={},i=42", action as char), b""))
@@ -347,7 +311,7 @@ fn animation_actions_are_routed_not_enotsup() {
 
 #[test]
 fn chunked_transmission_assembles_across_three_bodies() {
-    let mut s = State::new();
+    let mut s = state();
     let pixels = [0x11u8, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
     let encoded = b64(&pixels);
     // Split on multiples of 4 so each chunk is whole base64 quanta.
@@ -375,7 +339,7 @@ fn chunked_transmission_assembles_across_three_bodies() {
 /// `kitty_tests/graphics.py` `test_load_images`, the image-number part.
 #[test]
 fn each_numbered_transmission_gets_the_lowest_free_id() {
-    let mut s = State::new();
+    let mut s = state();
     let t = |keys: &str| format!("Ga=t,{keys},f=32,s=1,v=1");
     let mut send = |keys: &str| s.dispatch(&body(&t(keys), &b64(&TEST_PIXEL))).unwrap();
     assert_eq!(send("I=1"), b"\x1b_Gi=1,I=1;OK\x1b\\");
@@ -388,7 +352,7 @@ fn each_numbered_transmission_gets_the_lowest_free_id() {
 
 #[test]
 fn a_put_by_number_shows_the_newest_image_and_answers_with_its_id() {
-    let mut s = State::new();
+    let mut s = state();
     for _ in 0..2 {
         s.dispatch(&body("Ga=t,I=93,f=32,s=1,v=1", &b64(&TEST_PIXEL)));
     }
@@ -403,7 +367,7 @@ fn a_put_by_number_shows_the_newest_image_and_answers_with_its_id() {
 
 #[test]
 fn a_number_delete_reaches_only_the_newest_image_with_it() {
-    let mut s = State::new();
+    let mut s = state();
     for _ in 0..2 {
         s.dispatch(&body("Ga=T,I=7,f=32,s=1,v=1", &b64(&TEST_PIXEL)));
     }
@@ -419,7 +383,7 @@ fn a_number_delete_reaches_only_the_newest_image_with_it() {
 
 #[test]
 fn an_id_delete_ignores_an_image_number() {
-    let mut s = State::new();
+    let mut s = state();
     s.dispatch(&body("Ga=T,I=7,f=32,s=1,v=1", &b64(&TEST_PIXEL)));
     s.dispatch(&body("Ga=d,d=I,I=7", b""));
     assert!(s.images.get(ImageId(1)).is_some());
@@ -427,7 +391,7 @@ fn an_id_delete_ignores_an_image_number() {
 
 #[test]
 fn sending_a_numbered_image_again_by_id_keeps_its_number() {
-    let mut s = State::new();
+    let mut s = state();
     s.dispatch(&body("Ga=t,I=7,f=32,s=1,v=1", &b64(&TEST_PIXEL)));
     s.dispatch(&body("Ga=t,i=1,f=32,s=1,v=1", &b64(&TEST_PIXEL)));
     assert_eq!(s.images.newest_with_number(7), Some(ImageId(1)));
@@ -435,7 +399,7 @@ fn sending_a_numbered_image_again_by_id_keeps_its_number() {
 
 #[test]
 fn sending_an_older_numbered_image_again_does_not_make_it_the_newest() {
-    let mut s = State::new();
+    let mut s = state();
     for _ in 0..2 {
         s.dispatch(&body("Ga=t,I=7,f=32,s=1,v=1", &b64(&TEST_PIXEL)));
     }
@@ -445,7 +409,7 @@ fn sending_an_older_numbered_image_again_does_not_make_it_the_newest() {
 
 #[test]
 fn a_frame_reply_echoes_the_frame_it_edited() {
-    let mut s = State::new();
+    let mut s = state();
     s.dispatch(&body("Ga=t,i=5,f=32,s=1,v=1", &b64(&TEST_PIXEL)));
     assert_eq!(
         s.dispatch(&body("Ga=f,i=5,r=1,f=32,s=1,v=1", &b64(&TEST_PIXEL))),
@@ -457,15 +421,15 @@ fn a_frame_reply_echoes_the_frame_it_edited() {
     );
 }
 
-fn virtual_ids(s: &State) -> Vec<(u32, Option<u32>)> {
+fn virtual_ids(s: &KittyState) -> Vec<(u32, Option<u32>)> {
     s.placements
         .iter_virtual()
         .map(|v| (v.image_id.0, v.placement_id.map(|p| p.0)))
         .collect()
 }
 
-fn with_two_virtual_placements() -> State {
-    let mut s = State::new();
+fn with_two_virtual_placements() -> KittyState {
+    let mut s = state();
     s.dispatch(&body("Ga=t,i=7,f=32,s=1,v=1,q=2", &b64(&TEST_PIXEL)));
     s.dispatch(&body("Ga=p,U=1,i=7,p=1,c=2,r=1,q=2", b""));
     s.dispatch(&body("Ga=p,U=1,i=7,p=2,c=4,r=2,q=2", b""));
@@ -525,7 +489,7 @@ fn a_put_replaces_the_placement_of_the_other_kind_under_its_id() {
 
 #[test]
 fn each_virtual_put_without_a_placement_id_is_a_placement_of_its_own() {
-    let mut s = State::new();
+    let mut s = state();
     s.dispatch(&body("Ga=t,i=7,f=32,s=1,v=1,q=2", &b64(&TEST_PIXEL)));
     s.dispatch(&body("Ga=p,U=1,i=7,q=2", b""));
     s.dispatch(&body("Ga=p,U=1,i=7,q=2", b""));
@@ -534,7 +498,7 @@ fn each_virtual_put_without_a_placement_id_is_a_placement_of_its_own() {
 
 #[test]
 fn a_range_delete_skips_an_image_sent_without_an_id() {
-    let mut s = State::new();
+    let mut s = state();
     s.dispatch(&body("Ga=T,U=1,f=32,s=1,v=1,q=2", &b64(&TEST_PIXEL)));
     s.dispatch(&body(&format!("Ga=d,d=R,x=1,y={}", u32::MAX), b""));
     assert_eq!(s.placements.iter_virtual().count(), 1);

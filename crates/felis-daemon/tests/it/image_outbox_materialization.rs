@@ -5,54 +5,32 @@
 //! marker whose image the same batch evicted ships nothing.
 
 use felis_client_core::image_shadow::ImageShadow;
-use felis_daemon::graphics::{
-    ApcCtx, ImageEvent, ShmDeferral, dispatch_apc_body, materialize_image_events,
-};
-use felis_grid::Grid;
-use felis_grid::images::{ImageId, ImageStore, Placements};
-use felis_grid::kitty_graphics::Reassembler;
+use felis_daemon::graphics::materialize_image_events;
+use felis_grid::images::ImageId;
 use felis_protocol::messages::{ImageMsg, ImageTarget, SourceRect};
 
-use crate::common::{b64, body};
+use crate::common::{KittyState, b64, body};
 
 const ROOMY_CAP: usize = 1024 * 1024;
 
-struct State {
-    reassembler: Reassembler,
-    grid: Grid,
-    images: ImageStore,
-    placements: Placements,
-    events: Vec<ImageEvent>,
-    shm: ShmDeferral,
+struct State(KittyState);
+
+impl std::ops::Deref for State {
+    type Target = KittyState;
+    fn deref(&self) -> &KittyState {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for State {
+    fn deref_mut(&mut self) -> &mut KittyState {
+        &mut self.0
+    }
 }
 
 impl State {
     fn with_cap(cap: usize) -> Self {
-        Self {
-            reassembler: Reassembler::new(),
-            grid: Grid::new(24, 80),
-            images: ImageStore::new(cap),
-            placements: Placements::new(),
-            events: Vec::new(),
-            shm: ShmDeferral::default(),
-        }
-    }
-
-    fn dispatch(&mut self, body: &[u8]) {
-        dispatch_apc_body(
-            &mut ApcCtx {
-                grid: &mut self.grid,
-                images: &mut self.images,
-                placements: &mut self.placements,
-                events: &mut self.events,
-                shm: &mut self.shm,
-                cell_pixel_w: 0,
-                cell_pixel_h: 0,
-                anchor_cursor: None,
-            },
-            &mut self.reassembler,
-            body,
-        );
+        Self(KittyState::new(24, 80, cap))
     }
 
     fn ship(&mut self, shadow: &mut ImageShadow) -> Vec<ImageMsg> {

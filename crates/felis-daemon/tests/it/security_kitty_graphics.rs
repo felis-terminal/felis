@@ -5,56 +5,17 @@
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
 
-use felis_daemon::graphics::{ApcCtx, MAX_DECODED_BYTES, ShmDeferral, dispatch_apc_body};
-use felis_grid::Grid;
-use felis_grid::images::{ImageEntry, ImageFormat, ImageId, ImageStore, Placements};
-use felis_grid::kitty_graphics::Reassembler;
+use felis_daemon::graphics::MAX_DECODED_BYTES;
+use felis_grid::images::{ImageEntry, ImageFormat, ImageId};
 
-use crate::common::{b64, body};
+use crate::common::{KittyState, b64, body};
 
 const SECURITY_TEST_STORE_CAP: usize = 4 * 1024;
-
-struct State {
-    reassembler: Reassembler,
-    grid: Grid,
-    images: ImageStore,
-    placements: Placements,
-    shm: ShmDeferral,
-}
-
-impl State {
-    fn new(store_cap: usize) -> Self {
-        Self {
-            reassembler: Reassembler::new(),
-            grid: Grid::new(24, 80),
-            images: ImageStore::new(store_cap),
-            placements: Placements::new(),
-            shm: ShmDeferral::default(),
-        }
-    }
-
-    fn dispatch(&mut self, body: &[u8]) -> Option<Vec<u8>> {
-        dispatch_apc_body(
-            &mut ApcCtx {
-                grid: &mut self.grid,
-                images: &mut self.images,
-                placements: &mut self.placements,
-                events: &mut Vec::new(),
-                shm: &mut self.shm,
-                cell_pixel_w: 0,
-                cell_pixel_h: 0,
-                anchor_cursor: None,
-            },
-            &mut self.reassembler,
-            body,
-        )
-    }
-}
 
 #[test]
 fn raw_dimensions_past_per_image_cap_reject_before_allocation() {
     // 8000 × 8000 RGBA = 256 MiB.
-    let mut s = State::new(SECURITY_TEST_STORE_CAP);
+    let mut s = KittyState::new(24, 80, SECURITY_TEST_STORE_CAP);
     let response = s
         .dispatch(&body("Ga=t,i=1,f=32,s=8000,v=8000", &b64(b"")))
         .unwrap();
@@ -66,7 +27,7 @@ fn raw_dimensions_past_per_image_cap_reject_before_allocation() {
 
 #[test]
 fn zlib_zip_bomb_is_capped_at_max_decoded_bytes() {
-    let mut s = State::new(SECURITY_TEST_STORE_CAP);
+    let mut s = KittyState::new(24, 80, SECURITY_TEST_STORE_CAP);
     let huge = vec![0u8; MAX_DECODED_BYTES + 1024];
     let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&huge, 6);
     let response = s
@@ -89,7 +50,7 @@ fn t_eq_f_with_symlink_to_real_file_returns_ebadf_under_nofollow() {
     let link = link_dir.path().join("attacker_swap");
     symlink(real.path(), &link).unwrap();
 
-    let mut s = State::new(SECURITY_TEST_STORE_CAP);
+    let mut s = KittyState::new(24, 80, SECURITY_TEST_STORE_CAP);
     let response = s
         .dispatch(&body(
             "Ga=t,i=3,t=f,f=32,s=1,v=1",
@@ -105,7 +66,7 @@ fn t_eq_f_with_symlink_to_real_file_returns_ebadf_under_nofollow() {
 #[cfg(unix)]
 #[test]
 fn t_eq_t_leaves_a_file_without_the_protocol_marker_in_place() {
-    let mut s = State::new(SECURITY_TEST_STORE_CAP);
+    let mut s = KittyState::new(24, 80, SECURITY_TEST_STORE_CAP);
     let f = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(f.path(), b"ab").unwrap();
     s.dispatch(&body(
@@ -121,7 +82,7 @@ fn t_eq_t_leaves_a_file_without_the_protocol_marker_in_place() {
 fn t_eq_t_unlinks_temp_file_even_when_decode_fails() {
     // A leftover file would let a producer fill /tmp by retrying a bad
     // path.
-    let mut s = State::new(SECURITY_TEST_STORE_CAP);
+    let mut s = KittyState::new(24, 80, SECURITY_TEST_STORE_CAP);
     let f = tempfile::Builder::new()
         .prefix("tty-graphics-protocol-")
         .tempfile()
@@ -159,7 +120,7 @@ fn store_full_of_pinned_images_recycles_the_oldest() {
     // The cap is derived from what the store charges for one entry,
     // not a pixel count: a literal cap silently becomes "nothing fits".
     let small_cap = ImageEntry::new(1, 1, ImageFormat::Rgb24, vec![0u8; 3]).byte_len();
-    let mut s = State::new(small_cap);
+    let mut s = KittyState::new(24, 80, small_cap);
     let payload = b64(&[0xAA, 0xBB, 0xCC]);
     s.dispatch(&body("Ga=T,i=1,f=24,s=1,v=1", &payload))
         .unwrap();
@@ -190,7 +151,7 @@ fn store_full_of_pinned_images_recycles_the_oldest() {
 
 #[test]
 fn t_eq_f_with_null_byte_in_path_is_rejected() {
-    let mut s = State::new(SECURITY_TEST_STORE_CAP);
+    let mut s = KittyState::new(24, 80, SECURITY_TEST_STORE_CAP);
     let bad_path = b"/tmp/test\x00.png";
     let response = s
         .dispatch(&body("Ga=t,i=5,t=f,f=32,s=1,v=1", &b64(bad_path)))
@@ -212,7 +173,7 @@ fn t_eq_f_with_null_byte_in_path_is_rejected() {
 fn fuzz_random_apc_bodies_never_panic() {
     // Every body starts with the `G` introducer; otherwise ~255/256
     // samples bounce off the not-graphics gate and no handler runs.
-    let mut s = State::new(SECURITY_TEST_STORE_CAP);
+    let mut s = KittyState::new(24, 80, SECURITY_TEST_STORE_CAP);
     let mut state: u32 = 0xDEAD_BEEF;
     for _ in 0..256 {
         let len = {

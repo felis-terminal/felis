@@ -4,20 +4,13 @@
 //! takes frame edits as regions or as whole frames.
 
 use felis_client_core::image_shadow::ImageShadow;
-use felis_daemon::graphics::{
-    ApcCtx, ImageEvent, SavedScreens, ShmDeferral, apply_screen_switch, clear_images,
-    dispatch_apc_body, free_unreferenced_anonymous, materialize_image_events,
-    scroll_region_placements,
-};
+use felis_daemon::graphics::materialize_image_events;
 use std::fmt::Write as _;
 
-use felis_grid::images::{ImageStore, Placements};
-use felis_grid::kitty_graphics::Reassembler;
-use felis_grid::{Grid, PtyEffect};
-use felis_vt::Parser;
+use felis_grid::images::Placements;
 use proptest::prelude::*;
 
-use crate::common::{b64, body};
+use crate::common::{KittyState, b64, body};
 
 /// Three of the 2×2 images the ops send, so eviction runs too.
 fn store_cap() -> usize {
@@ -154,14 +147,7 @@ fn op() -> impl Strategy<Value = Op> {
 }
 
 struct Session {
-    reassembler: Reassembler,
-    parser: Parser,
-    grid: Grid,
-    images: ImageStore,
-    placements: Placements,
-    saved: SavedScreens,
-    events: Vec<ImageEvent>,
-    shm: ShmDeferral,
+    kitty: KittyState,
     /// Takes frame edits as regions.
     window: ImageShadow,
     /// Below the region minor or not opted in: takes them as whole frames.
@@ -170,17 +156,27 @@ struct Session {
     fill: u8,
 }
 
+impl std::ops::Deref for Session {
+    type Target = KittyState;
+    fn deref(&self) -> &KittyState {
+        &self.kitty
+    }
+}
+
+impl std::ops::DerefMut for Session {
+    fn deref_mut(&mut self) -> &mut KittyState {
+        &mut self.kitty
+    }
+}
+
 impl Session {
     fn new() -> Self {
         Self {
-            reassembler: Reassembler::new(),
-            parser: Parser::new(),
-            grid: Grid::new(6, 20),
-            images: ImageStore::new(store_cap()),
-            placements: Placements::with_cap(4),
-            saved: SavedScreens::default(),
-            events: Vec::new(),
-            shm: ShmDeferral::default(),
+            kitty: KittyState {
+                placements: Placements::with_cap(4),
+                cell_px: (8, 16),
+                ..KittyState::new(6, 20, store_cap())
+            },
             window: ImageShadow::new(),
             whole: ImageShadow::new(),
             fill: 0,
@@ -188,83 +184,7 @@ impl Session {
     }
 
     fn apc(&mut self, controls: &str, payload: &[u8]) {
-        dispatch_apc_body(
-            &mut ApcCtx {
-                grid: &mut self.grid,
-                images: &mut self.images,
-                placements: &mut self.placements,
-                events: &mut self.events,
-                shm: &mut self.shm,
-                cell_pixel_w: 8,
-                cell_pixel_h: 16,
-                anchor_cursor: None,
-            },
-            &mut self.reassembler,
-            &body(controls, payload),
-        );
-    }
-
-    fn screen(&mut self, bytes: &str) {
-        self.parser.advance(&mut self.grid, bytes.as_bytes());
-        for effect in self.grid.take_pty_effects() {
-            match effect {
-                PtyEffect::ScreenSwitch(switch) => apply_screen_switch(
-                    switch,
-                    &mut self.images,
-                    &mut self.placements,
-                    &mut self.saved,
-                    &mut self.events,
-                ),
-                PtyEffect::ImagesCleared(scope) => clear_images(
-                    &mut self.images,
-                    &mut self.placements,
-                    &mut self.events,
-                    scope,
-                ),
-                PtyEffect::HardReset => {
-                    apply_screen_switch(
-                        felis_grid::ScreenSwitch::LeftAlternate { kept: false },
-                        &mut self.images,
-                        &mut self.placements,
-                        &mut self.saved,
-                        &mut self.events,
-                    );
-                    self.saved.alternate = None;
-                }
-                PtyEffect::ScrolledIntoScrollback(n) => {
-                    let retain = u32::try_from(self.grid.scrollback().len()).unwrap();
-                    self.shift(n, retain);
-                }
-                PtyEffect::AltScreenScrolled(n) => self.shift(n, 0),
-                PtyEffect::RegionScrolled { op, into_history } => {
-                    let retain = u32::try_from(self.grid.scrollback().len()).unwrap();
-                    scroll_region_placements(
-                        &mut self.images,
-                        &mut self.placements,
-                        &mut self.events,
-                        (op, into_history),
-                        (8, 16),
-                        retain,
-                    );
-                }
-                _ => {}
-            }
-        }
-    }
-
-    /// `serve::streaming::shift_placements`, which is crate-private.
-    fn shift(&mut self, n: u32, retain: u32) {
-        if !self.placements.is_empty() {
-            self.events.push(ImageEvent::PlacementsShifted { lines: n });
-        }
-        for p in self.placements.shift_up(n, retain) {
-            self.images.release(p.image_id);
-            self.events.push(ImageEvent::PlacementRemoved {
-                image_id: p.image_id,
-                placement_id: p.placement_id,
-            });
-        }
-        free_unreferenced_anonymous(&mut self.images, &mut self.placements, &mut self.events);
+        self.dispatch(&body(controls, payload));
     }
 
     fn run(&mut self, op: &Op) {
@@ -308,7 +228,7 @@ impl Session {
                 }
                 self.apc(&controls, b"");
             }
-            Op::Screen(bytes) => self.screen(bytes),
+            Op::Screen(bytes) => self.replay(bytes.as_bytes()),
             Op::Frame { id, edit } => {
                 self.fill = self.fill.wrapping_add(1);
                 let (keys, w, h) = match edit {
@@ -344,7 +264,7 @@ impl Session {
     fn flush(&mut self) {
         let events = std::mem::take(&mut self.events);
         for (window, regions) in [(&mut self.window, true), (&mut self.whole, false)] {
-            for msg in materialize_image_events(&events, &self.images, regions) {
+            for msg in materialize_image_events(&events, &self.kitty.images, regions) {
                 window
                     .apply(&msg)
                     .expect("the daemon sends a well-formed stream");

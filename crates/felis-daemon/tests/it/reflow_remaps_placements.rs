@@ -4,70 +4,13 @@
 //! `LeftAlternate` restores the saved primary placements. Mirrors
 //! `serve::streaming::drive_pty_batch`'s stream-order replay.
 
-use felis_daemon::graphics::ImageEvent;
-use felis_daemon::graphics::{
-    ApcCtx, SavedScreens, ShmDeferral, apply_reflow_remap, apply_screen_switch, dispatch_apc_body,
-};
-use felis_grid::images::{ImageStore, Placements};
-use felis_grid::kitty_graphics::Reassembler;
-use felis_grid::{Grid, PtyEffect};
-use felis_vt::Parser;
-
-use crate::common::{apc, b64};
+use crate::common::{KittyState, apc, b64};
 
 const TEST_STORE_CAP: usize = 1024 * 1024;
 
-#[allow(clippy::too_many_arguments)]
-fn drive_burst(
-    parser: &mut Parser,
-    reassembler: &mut Reassembler,
-    grid: &mut Grid,
-    images: &mut ImageStore,
-    placements: &mut Placements,
-    saved: &mut SavedScreens,
-    events: &mut Vec<ImageEvent>,
-    burst: &[u8],
-) {
-    parser.advance(grid, burst);
-    let mut shm = ShmDeferral::default();
-    for effect in grid.take_pty_effects() {
-        match effect {
-            PtyEffect::Apc(apc) => {
-                dispatch_apc_body(
-                    &mut ApcCtx {
-                        grid: &mut *grid,
-                        images: &mut *images,
-                        placements: &mut *placements,
-                        events: &mut *events,
-                        shm: &mut shm,
-                        cell_pixel_w: 0,
-                        cell_pixel_h: 0,
-                        anchor_cursor: None,
-                    },
-                    reassembler,
-                    &apc.body,
-                );
-            }
-            PtyEffect::ScreenSwitch(switch) => {
-                apply_screen_switch(switch, images, placements, saved, events);
-            }
-            PtyEffect::PrimaryReflowed(remap) => {
-                apply_reflow_remap(&remap, images, placements, events);
-            }
-            _ => {}
-        }
-    }
-}
-
 #[test]
 fn resize_under_alt_screen_remaps_restored_placements_on_exit() {
-    let mut parser = Parser::new();
-    let mut reassembler = Reassembler::new();
-    let mut grid = Grid::new(6, 10);
-    let mut images = ImageStore::new(TEST_STORE_CAP);
-    let mut placements = Placements::new();
-    let mut saved = SavedScreens::default();
-    let mut events = Vec::new();
+    let mut s = KittyState::new(6, 10, TEST_STORE_CAP);
 
     let mut burst = Vec::new();
     burst.extend_from_slice(b"abcdefghijklmnopqr");
@@ -75,45 +18,18 @@ fn resize_under_alt_screen_remaps_restored_placements_on_exit() {
         "Ga=T,i=11,f=32,s=1,v=1",
         &b64(&[0xAA, 0xBB, 0xCC, 0xDD]),
     ));
-    drive_burst(
-        &mut parser,
-        &mut reassembler,
-        &mut grid,
-        &mut images,
-        &mut placements,
-        &mut saved,
-        &mut events,
-        &burst,
-    );
-    assert_eq!(placements.len(), 1);
-    assert_eq!(placements.iter().next().unwrap().anchor.row, 2);
+    s.replay(&burst);
+    assert_eq!(s.placements.len(), 1);
+    assert_eq!(s.placements.iter().next().unwrap().anchor.row, 2);
 
-    drive_burst(
-        &mut parser,
-        &mut reassembler,
-        &mut grid,
-        &mut images,
-        &mut placements,
-        &mut saved,
-        &mut events,
-        b"\x1b[?1049h",
-    );
-    grid.resize(6, 4);
+    s.replay(b"\x1b[?1049h");
+    s.grid.resize(6, 4);
 
     // The anchor must follow its cell ("k", run offset 10) onto the
     // new third row.
-    drive_burst(
-        &mut parser,
-        &mut reassembler,
-        &mut grid,
-        &mut images,
-        &mut placements,
-        &mut saved,
-        &mut events,
-        b"\x1b[?1049l",
-    );
+    s.replay(b"\x1b[?1049l");
 
-    assert!(!grid.on_alternate_screen());
-    assert_eq!(placements.len(), 1, "events={events:?}");
-    assert_eq!(placements.iter().next().unwrap().anchor.row, 3);
+    assert!(!s.grid.on_alternate_screen());
+    assert_eq!(s.placements.len(), 1, "events={:?}", s.events);
+    assert_eq!(s.placements.iter().next().unwrap().anchor.row, 3);
 }

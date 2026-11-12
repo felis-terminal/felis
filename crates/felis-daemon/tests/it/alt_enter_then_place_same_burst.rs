@@ -3,66 +3,13 @@
 //! Placements created after `?1049h` in the same burst stay live on the alt screen
 //! rather than being swept into primary placements before screen-switch processing.
 
-use felis_daemon::graphics::ImageEvent;
-use felis_daemon::graphics::{
-    ApcCtx, SavedScreens, ShmDeferral, apply_screen_switch, dispatch_apc_body,
-};
-use felis_grid::images::{ImageStore, Placements};
-use felis_grid::kitty_graphics::Reassembler;
-use felis_grid::{Grid, PtyEffect};
-use felis_vt::Parser;
-
-use crate::common::{apc, b64};
+use crate::common::{KittyState, apc, b64};
 
 const TEST_STORE_CAP: usize = 1024 * 1024;
 
-fn drive_burst(
-    parser: &mut Parser,
-    reassembler: &mut Reassembler,
-    grid: &mut Grid,
-    images: &mut ImageStore,
-    placements: &mut Placements,
-    saved: &mut SavedScreens,
-    events: &mut Vec<ImageEvent>,
-    burst: &[u8],
-) {
-    parser.advance(grid, burst);
-    let mut shm = ShmDeferral::default();
-    for effect in grid.take_pty_effects() {
-        match effect {
-            PtyEffect::Apc(apc) => {
-                dispatch_apc_body(
-                    &mut ApcCtx {
-                        grid: &mut *grid,
-                        images: &mut *images,
-                        placements: &mut *placements,
-                        events: &mut *events,
-                        shm: &mut shm,
-                        cell_pixel_w: 0,
-                        cell_pixel_h: 0,
-                        anchor_cursor: None,
-                    },
-                    reassembler,
-                    &apc.body,
-                );
-            }
-            PtyEffect::ScreenSwitch(switch) => {
-                apply_screen_switch(switch, images, placements, saved, events);
-            }
-            _ => {}
-        }
-    }
-}
-
 #[test]
 fn alt_enter_then_image_in_one_burst_keeps_the_placement() {
-    let mut parser = Parser::new();
-    let mut reassembler = Reassembler::new();
-    let mut grid = Grid::new(24, 80);
-    let mut images = ImageStore::new(TEST_STORE_CAP);
-    let mut placements = Placements::new();
-    let mut saved = SavedScreens::default();
-    let mut events = Vec::new();
+    let mut s = KittyState::new(24, 80, TEST_STORE_CAP);
 
     let mut burst = Vec::new();
     burst.extend_from_slice(b"\x1b[?1049h");
@@ -71,21 +18,13 @@ fn alt_enter_then_image_in_one_burst_keeps_the_placement() {
         &b64(&[0xAA, 0xBB, 0xCC, 0xDD]),
     ));
 
-    drive_burst(
-        &mut parser,
-        &mut reassembler,
-        &mut grid,
-        &mut images,
-        &mut placements,
-        &mut saved,
-        &mut events,
-        &burst,
-    );
+    s.replay(&burst);
 
-    assert!(grid.on_alternate_screen(), "burst entered the alt screen");
+    assert!(s.grid.on_alternate_screen(), "burst entered the alt screen");
     assert_eq!(
-        placements.len(),
+        s.placements.len(),
         1,
-        "the image placed after ?1049h must stay live on the alt screen, not be swept into the saved primary screen; events={events:?}"
+        "the image placed after ?1049h must stay live on the alt screen, not be swept into the saved primary screen; events={:?}",
+        s.events
     );
 }

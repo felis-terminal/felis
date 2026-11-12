@@ -2,16 +2,9 @@
 //! toggle sequences (`docs/reference/protocols/kitty-graphics.md`
 //! "Lifecycle").
 
-use felis_daemon::graphics::ImageEvent;
-use felis_daemon::graphics::{
-    ApcCtx, SavedScreens, ShmDeferral, apply_screen_switch, dispatch_apc_body,
-};
 use felis_grid::images::{ImageStore, Placements};
-use felis_grid::kitty_graphics::Reassembler;
-use felis_grid::{Grid, PtyEffect};
-use felis_vt::Parser;
 
-use crate::common::b64;
+use crate::common::{KittyState, b64, body};
 use proptest::prelude::*;
 
 const TEST_STORE_CAP: usize = 1024 * 1024;
@@ -33,77 +26,42 @@ fn toggle_strategy() -> impl Strategy<Value = Toggle> {
     ]
 }
 
-struct Harness {
-    reassembler: Reassembler,
-    grid: Grid,
-    images: ImageStore,
-    placements: Placements,
-    saved: SavedScreens,
-    events: Vec<ImageEvent>,
-    shm: ShmDeferral,
+struct Harness(KittyState);
+
+impl std::ops::Deref for Harness {
+    type Target = KittyState;
+    fn deref(&self) -> &KittyState {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Harness {
+    fn deref_mut(&mut self) -> &mut KittyState {
+        &mut self.0
+    }
 }
 
 impl Harness {
     fn new() -> Self {
-        Self {
-            reassembler: Reassembler::new(),
-            grid: Grid::new(24, 80),
-            images: ImageStore::new(TEST_STORE_CAP),
-            placements: Placements::new(),
-            saved: SavedScreens::default(),
-            events: Vec::new(),
-            shm: ShmDeferral::default(),
-        }
-    }
-
-    fn apply_alt_switch(&mut self, bytes: &[u8]) {
-        let mut parser = Parser::new();
-        parser.advance(&mut self.grid, bytes);
-        for effect in self.grid.take_pty_effects() {
-            if let PtyEffect::ScreenSwitch(switch) = effect {
-                apply_screen_switch(
-                    switch,
-                    &mut self.images,
-                    &mut self.placements,
-                    &mut self.saved,
-                    &mut self.events,
-                );
-            }
-        }
+        Self(KittyState::new(24, 80, TEST_STORE_CAP))
     }
 
     fn place(&mut self, id: u32) {
-        let controls = format!("Ga=T,i={id},f=32,s=1,v=1,c=4,r=2");
-        let payload = b64(&[0xAA, 0xBB, 0xCC, 0xDD]);
-        let mut body = Vec::with_capacity(controls.len() + 1 + payload.len());
-        body.extend_from_slice(controls.as_bytes());
-        body.push(b';');
-        body.extend_from_slice(&payload);
-        dispatch_apc_body(
-            &mut ApcCtx {
-                grid: &mut self.grid,
-                images: &mut self.images,
-                placements: &mut self.placements,
-                events: &mut self.events,
-                shm: &mut self.shm,
-                cell_pixel_w: 0,
-                cell_pixel_h: 0,
-                anchor_cursor: None,
-            },
-            &mut self.reassembler,
-            &body,
-        );
+        self.dispatch(&body(
+            &format!("Ga=T,i={id},f=32,s=1,v=1,c=4,r=2"),
+            &b64(&[0xAA, 0xBB, 0xCC, 0xDD]),
+        ));
     }
 
     fn drive(&mut self, t: Toggle) {
         match t {
-            Toggle::Enter => self.apply_alt_switch(b"\x1b[?1049h"),
-            Toggle::Leave => self.apply_alt_switch(b"\x1b[?1049l"),
+            Toggle::Enter => self.replay(b"\x1b[?1049h"),
+            Toggle::Leave => self.replay(b"\x1b[?1049l"),
             Toggle::PlacePrimary { id } | Toggle::PlaceAlt { id } => self.place(id),
         }
     }
 
-    const fn on_primary(&self) -> bool {
+    fn on_primary(&self) -> bool {
         !self.grid.on_alternate_screen()
     }
 }
