@@ -240,6 +240,7 @@ impl RealAppSession {
         self.server.as_ref().is_none_or(JoinHandle::is_finished)
     }
 
+    #[cfg(unix)]
     async fn server_outcome(&mut self) -> Option<Result<(), felis_daemon::serve::ConnError>> {
         match self.server.take() {
             Some(h) => Some(h.await.unwrap_or(Ok(()))),
@@ -256,6 +257,7 @@ impl RealAppSession {
         self.counters.lock().expect("counters lock").clone()
     }
 
+    #[cfg(unix)]
     async fn wait_for_shadow<F>(&self, mut predicate: F, timeout: Duration) -> bool
     where
         F: FnMut(&ShadowScreen) -> bool,
@@ -270,6 +272,7 @@ impl RealAppSession {
         false
     }
 
+    #[cfg(unix)]
     async fn wait_for_counters<F>(&self, mut predicate: F, timeout: Duration) -> bool
     where
         F: FnMut(&FrameCounters) -> bool,
