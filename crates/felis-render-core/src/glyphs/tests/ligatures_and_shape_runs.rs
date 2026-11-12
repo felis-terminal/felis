@@ -2,7 +2,6 @@ use super::*;
 
 /// Non-ASCII graphemes split the run; the wide cell falls back to
 /// the per-char path.
-#[cfg(not(windows))]
 #[test]
 fn shape_run_stops_at_non_ascii_grapheme() {
     let mut screen = Grid::new(1, 5);
@@ -22,7 +21,6 @@ fn shape_run_stops_at_non_ascii_grapheme() {
 /// Single-glyph ligature cluster (the FiraCode-style collapse).
 /// Hand-rolled `ShapedGlyph` values so the shape under test cannot
 /// drift with the pinned font's GSUB.
-#[cfg(not(windows))]
 #[test]
 fn single_glyph_ligature_cluster_marks_primary_then_trailing() {
     let stack = stack();
@@ -63,7 +61,6 @@ fn single_glyph_ligature_cluster_marks_primary_then_trailing() {
 /// blank lead glyph plus the body, both claiming the full span). The
 /// body's ink hangs off the second cell's pen with a negative left
 /// bearing, so it must land on cell 1.
-#[cfg(not(windows))]
 #[test]
 fn multi_glyph_ligature_cluster_places_pieces_by_pen_position() {
     let stack = stack();
@@ -111,7 +108,6 @@ fn multi_glyph_ligature_cluster_places_pieces_by_pen_position() {
 
 /// A ligature wider than the cells it replaces is dropped, so the
 /// per-char path draws its source chars; one within them is kept.
-#[cfg(not(windows))]
 #[test]
 fn a_ligature_wider_than_its_cells_leaves_them_unshaped() {
     let mut idx = GlyphIndex::new(stack(), 14.0, nz(512));
@@ -162,7 +158,6 @@ fn a_ligature_wider_than_its_cells_leaves_them_unshaped() {
 /// Shaping `"->"` with `ss03` through the real run-scan + shape +
 /// apply pipeline against Monaspace Neon: both cells consumed, the
 /// visible arrow on cell 1.
-#[cfg(not(windows))]
 #[test]
 fn ligature_run_places_monaspace_arrow_pieces() {
     use felis_shaping::{Font, FontStack, Shaper};
@@ -249,7 +244,6 @@ fn ligature_run_places_monaspace_arrow_pieces() {
 
 /// The memo returns byte-identical output to a direct
 /// `Shaper::shape_run` and reports hit/miss like `ensure`.
-#[cfg(not(windows))]
 #[test]
 fn shape_run_cached_matches_direct_output_and_hits_on_repeat() {
     let stack = stack();
@@ -281,7 +275,6 @@ fn shape_run_cached_matches_direct_output_and_hits_on_repeat() {
 
 /// Scrollback produces unbounded unique row texts, so the memo must
 /// stay bounded.
-#[cfg(not(windows))]
 #[test]
 fn shape_run_cache_stays_bounded_under_unique_text_pressure() {
     let stack = stack();
@@ -308,7 +301,6 @@ fn shape_run_cache_stays_bounded_under_unique_text_pressure() {
 /// A color change mid-row must not end a run (kitty ligates across
 /// syntax-highlight boundaries); per-cell color is applied at
 /// emission by `push_sliced_by_cell`.
-#[cfg(not(windows))]
 #[test]
 fn shape_run_continues_across_attribute_boundary() {
     use felis_grid::{Attributes, Cell, Color};
@@ -350,7 +342,6 @@ fn shape_run_continues_across_attribute_boundary() {
 }
 
 /// Unlike color, a bold/italic change ends the run.
-#[cfg(not(windows))]
 #[test]
 fn shape_run_breaks_at_bold_italic_boundary() {
     use felis_grid::{AttrFlags, Attributes, Cell};

@@ -6,7 +6,6 @@ fn slot_after_ensure(idx: &mut GlyphIndex, c: char, sizing: SizingKey) -> GlyphS
     idx.slot(c, h, sizing).expect("placed")
 }
 
-#[cfg(not(windows))]
 #[test]
 fn a_grown_cell_shifts_font_glyphs_by_the_left_pad() {
     let plain = slot_after_ensure(
@@ -31,7 +30,6 @@ fn a_grown_cell_shifts_font_glyphs_by_the_left_pad() {
     assert_eq!(grown_s2.offset_px[0], plain_s2.offset_px[0] + 2 * pad[0]);
 }
 
-#[cfg(not(windows))]
 #[test]
 fn box_drawing_fills_the_scaled_cell_without_a_pad() {
     for scale in [[1.5, 1.3], [0.6, 0.7]] {
@@ -44,7 +42,6 @@ fn box_drawing_fills_the_scaled_cell_without_a_pad() {
     }
 }
 
-#[cfg(not(windows))]
 #[test]
 fn a_shrunk_cell_never_fits_primary_ascii() {
     let font = Arc::new(Font::load_test_font());
@@ -58,7 +55,6 @@ fn a_shrunk_cell_never_fits_primary_ascii() {
     }
 }
 
-#[cfg(not(windows))]
 #[test]
 fn fractional_scale_rasterizes_below_default_for_sub_cell_shrink() {
     // `s=1, n=1, d=2` is effective scale 0.5, so the bitmap must be
@@ -90,7 +86,6 @@ fn fractional_scale_rasterizes_below_default_for_sub_cell_shrink() {
     );
 }
 
-#[cfg(not(windows))]
 #[test]
 fn primary_face_ascii_is_never_fitted_at_any_osc66_scale() {
     let font = Arc::new(Font::load_test_font());
@@ -121,7 +116,6 @@ const OVERWIDE: [char; 6] = [
 
 /// The ink fills the block along its binding axis and is centred on
 /// both, so a fitted glyph reads as large as the cell allows.
-#[cfg(not(windows))]
 #[test]
 fn a_fallback_glyph_wider_than_its_cell_fills_and_centres_in_it() {
     let stack = FontStack::pinned_test_stack();
@@ -172,7 +166,6 @@ fn a_fallback_glyph_wider_than_its_cell_fills_and_centres_in_it() {
 /// An OSC 66 block is `w` (or the char's width) cells at the integer
 /// `s`, so a glyph between one and two cells wide fits `w=2` and a
 /// halved glyph in an `s=2` block, and is fitted only for `w=1`.
-#[cfg(not(windows))]
 #[test]
 fn osc66_width_and_fractional_scale_set_the_fitted_block() {
     let stack = FontStack::pinned_test_stack();
@@ -202,7 +195,6 @@ fn osc66_width_and_fractional_scale_set_the_fitted_block() {
 
 /// A star the symbol faces cover is still drawn in color, as an
 /// emoji-presentation scalar.
-#[cfg(not(windows))]
 #[test]
 fn an_emoji_presentation_char_rasterizes_in_color() {
     let stack = FontStack::pinned_test_stack();
@@ -249,7 +241,6 @@ fn cluster_fit_px_at(p: &Walked, col: u16) -> u16 {
 /// path: a ligated flag, a widened VS16 emoji, a keycap, a combining
 /// mark, and one the face attaches at its anchor with no precomposed
 /// glyph.
-#[cfg(not(windows))]
 #[test]
 fn a_cluster_within_its_cells_is_not_fitted() {
     for text in [
@@ -266,7 +257,6 @@ fn a_cluster_within_its_cells_is_not_fitted() {
 
 /// The fit is measured once per cluster: a later walk reads the memo,
 /// so a repainted prompt does not rasterize its clusters again.
-#[cfg(not(windows))]
 #[test]
 fn a_fitted_cluster_is_measured_once() {
     let mut p = walk_pinned("\u{1F408}\u{200D}\u{1F408}".as_bytes(), 4);
@@ -293,7 +283,6 @@ fn a_fitted_cluster_is_measured_once() {
 /// A font-supplied `│` lands a glyph-sized bitmap shorter than the
 /// cell, so `size_px[1] == cell_height` only holds on the synthetic
 /// path.
-#[cfg(not(windows))]
 #[test]
 fn vertical_box_drawing_bitmap_exactly_fills_the_cell() {
     let mut idx = GlyphIndex::new(stack(), 14.0, nz(256));

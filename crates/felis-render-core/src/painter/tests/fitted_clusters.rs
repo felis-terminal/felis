@@ -2,14 +2,12 @@ use super::*;
 
 /// A one-row grid fed `bytes`, walked and painted against the pinned
 /// set.
-#[cfg(not(windows))]
 struct Painted {
     index: GlyphIndex,
     frame: ShapeFrame,
     glyphs: Vec<GlyphDraw>,
 }
 
-#[cfg(not(windows))]
 fn paint_pinned(bytes: &[u8], cols: u16) -> Painted {
     let stack = FontStack::pinned_test_stack();
     let mut grid = Grid::new(1, cols);
@@ -42,7 +40,6 @@ fn paint_pinned(bytes: &[u8], cols: u16) -> Painted {
     }
 }
 
-#[cfg(not(windows))]
 fn cluster_fit_px_at(p: &Painted, col: u16) -> u16 {
     match p.frame.cell_at(0, col) {
         ShapedCell::Cluster { fit_px, .. } => fit_px,
@@ -51,7 +48,6 @@ fn cluster_fit_px_at(p: &Painted, col: u16) -> u16 {
 }
 
 /// The fg quads' union as `[x0, y0, x1, y1]`.
-#[cfg(not(windows))]
 fn ink(fg: &[GlyphDraw]) -> [f32; 4] {
     fg.iter()
         .map(|q| {
@@ -65,7 +61,6 @@ fn ink(fg: &[GlyphDraw]) -> [f32; 4] {
 /// Each repro is the only ink on its row, its cluster at `col` with
 /// `cells` cells: a ZWJ pair the face has no glyph for, a modifier on a
 /// base that takes none, and a VS16 widen refused at the last column.
-#[cfg(not(windows))]
 #[test]
 fn a_cluster_wider_than_its_cells_fills_and_centres_in_them() {
     let repros: [(&str, &[u8], u16, u16); 3] = [
@@ -101,7 +96,6 @@ fn a_cluster_wider_than_its_cells_fills_and_centres_in_them() {
 
 /// The fit is the bare char's: a cluster of one glyph shrinks to the
 /// size `fitted_bitmap` gives that glyph alone.
-#[cfg(not(windows))]
 #[test]
 fn a_one_glyph_cluster_fits_as_its_bare_char_does() {
     let cluster = paint_pinned("\x1b[4G\u{263A}\u{FE0F}".as_bytes(), 4);
@@ -121,7 +115,6 @@ fn a_one_glyph_cluster_fits_as_its_bare_char_does() {
 /// Under an OSC 66 fractional scale a fitted cluster's pen shrinks
 /// with its glyphs: the second cat sits one advance at the fitted
 /// size after the first, not one advance at the native size.
-#[cfg(not(windows))]
 #[test]
 fn a_fitted_cluster_advances_its_pen_at_the_fitted_size() {
     let cats = "\u{1F408}\u{200D}\u{1F408}";

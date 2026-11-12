@@ -1,6 +1,5 @@
 use super::*;
 
-#[cfg(not(windows))]
 #[test]
 fn an_overlay_cluster_is_shaped_and_its_glyphs_primed() {
     let mut idx = GlyphIndex::new(stack(), 14.0, nz(256));
@@ -18,7 +17,6 @@ fn an_overlay_cluster_is_shaped_and_its_glyphs_primed() {
     );
 }
 
-#[cfg(not(windows))]
 #[test]
 fn overlay_shapes_survive_the_frame_that_primed_them() {
     let mut idx = GlyphIndex::new(stack(), 14.0, nz(256));
@@ -42,7 +40,6 @@ fn overlay_shapes_survive_the_frame_that_primed_them() {
     );
 }
 
-#[cfg(not(windows))]
 #[test]
 fn ensure_records_a_slot_and_pending_upload_for_a_printable_glyph() {
     let mut idx = GlyphIndex::new(stack(), 14.0, nz(256));
@@ -65,7 +62,6 @@ fn ensure_records_a_slot_and_pending_upload_for_a_printable_glyph() {
     );
 }
 
-#[cfg(not(windows))]
 #[test]
 fn ensure_is_idempotent_for_the_same_key() {
     let mut idx = GlyphIndex::new(stack(), 14.0, nz(256));
@@ -80,7 +76,6 @@ fn ensure_is_idempotent_for_the_same_key() {
     );
 }
 
-#[cfg(not(windows))]
 #[test]
 fn whitespace_caches_a_negative_entry_with_no_upload() {
     let mut idx = GlyphIndex::new(stack(), 14.0, nz(256));
@@ -95,7 +90,6 @@ fn whitespace_caches_a_negative_entry_with_no_upload() {
     );
 }
 
-#[cfg(not(windows))]
 #[test]
 fn populate_walks_the_grid_and_caches_unique_glyphs_once() {
     let mut screen = Grid::new(2, 5);
@@ -113,7 +107,6 @@ fn populate_walks_the_grid_and_caches_unique_glyphs_once() {
     assert_eq!(pending_count, 4);
 }
 
-#[cfg(not(windows))]
 #[test]
 fn sized_variant_takes_a_distinct_atlas_slot_from_default() {
     // An OSC 66 `s=2` 'A' must not share a slot with the default 'A'.
@@ -142,7 +135,6 @@ fn sized_variant_takes_a_distinct_atlas_slot_from_default() {
     );
 }
 
-#[cfg(not(windows))]
 #[test]
 fn a_full_atlas_resets_and_keeps_placing_glyphs() {
     // A small atlas so one page of distinct glyphs overflows; the
@@ -190,7 +182,6 @@ fn osc66_sizings() -> impl Iterator<Item = SizingKey> {
     })
 }
 
-#[cfg(not(windows))]
 #[test]
 fn distinct_blank_keys_keep_the_slot_map_under_the_blank_cap() {
     let mut idx = GlyphIndex::new(stack(), 14.0, nz(256));
@@ -206,7 +197,6 @@ fn distinct_blank_keys_keep_the_slot_map_under_the_blank_cap() {
     }
 }
 
-#[cfg(not(windows))]
 #[test]
 fn dropping_blank_entries_keeps_placed_slots_and_the_atlas() {
     let mut idx = GlyphIndex::new(stack(), 14.0, nz(256));
@@ -232,7 +222,6 @@ fn placed_slot_count(idx: &GlyphIndex) -> usize {
     idx.slots.values().filter(|s| s.is_some()).count()
 }
 
-#[cfg(not(windows))]
 #[test]
 fn distinct_tiny_placed_glyphs_recycle_the_atlas_at_the_placed_cap() {
     let mut idx = GlyphIndex::new(stack(), 14.0, nz(GLYPH_ATLAS_SIDE));
@@ -276,7 +265,6 @@ fn distinct_tiny_placed_glyphs_recycle_the_atlas_at_the_placed_cap() {
 /// Overlay text (a chrome bar's label, the pre-edit) is primed
 /// after the grid walk, so its own overflow drops the grid's fresh
 /// slots; the renderer reads the same reported reset to walk again.
-#[cfg(not(windows))]
 #[test]
 fn an_overlay_char_that_overflows_after_the_walk_reports_the_reset() {
     let mut idx = GlyphIndex::new(stack(), 14.0, nz(32));
@@ -313,7 +301,6 @@ fn an_overlay_char_that_overflows_after_the_walk_reports_the_reset() {
 /// A reset partway through a walk drops slots already handed out,
 /// and rendering is damage-driven, so nothing would repaint those
 /// cells; the reported reset drives a second walk.
-#[cfg(not(windows))]
 #[test]
 fn a_mid_walk_reset_is_reported_and_a_second_walk_reslots_the_grid() {
     let mut idx = GlyphIndex::new(stack(), 14.0, nz(48));
@@ -370,7 +357,6 @@ fn a_mid_walk_reset_is_reported_and_a_second_walk_reslots_the_grid() {
     }
 }
 
-#[cfg(not(windows))]
 #[test]
 fn a_glyph_too_large_for_the_atlas_degrades_without_looping() {
     // An atlas so small nothing fits even when empty: a reset frees
@@ -386,7 +372,6 @@ fn a_glyph_too_large_for_the_atlas_degrades_without_looping() {
     );
 }
 
-#[cfg(not(windows))]
 #[test]
 fn allocations_within_the_atlas_never_overlap() {
     let mut idx = GlyphIndex::new(stack(), 14.0, nz(256));
@@ -410,7 +395,6 @@ fn allocations_within_the_atlas_never_overlap() {
 
 /// Same idempotence and negative-entry handling as the per-char
 /// path.
-#[cfg(not(windows))]
 #[test]
 fn ensure_glyph_id_is_idempotent_and_caches_a_slot() {
     use felis_shaping::Shaper;
@@ -431,7 +415,6 @@ fn ensure_glyph_id_is_idempotent_and_caches_a_slot() {
 }
 
 /// `.notdef` stores a negative entry, like a charmap miss.
-#[cfg(not(windows))]
 #[test]
 fn ensure_glyph_id_zero_lands_a_negative_slot() {
     let mut idx = GlyphIndex::new(stack(), 14.0, nz(256));
@@ -446,7 +429,6 @@ fn ensure_glyph_id_zero_lands_a_negative_slot() {
 /// The same raw `glyph_id` primed against two faces keys two slots;
 /// the second `ensure_glyph_id` reports work only because the key
 /// differs.
-#[cfg(not(windows))]
 #[test]
 fn glyph_id_slots_key_on_font_id_so_faces_do_not_collide() {
     let mut idx = GlyphIndex::new(stack(), 14.0, nz(512));
@@ -472,7 +454,6 @@ fn glyph_id_slots_key_on_font_id_so_faces_do_not_collide() {
 
 /// The style rides the `SizingKey`, so bold and regular `'A'` key
 /// separate slots.
-#[cfg(not(windows))]
 #[test]
 fn styled_cells_get_distinct_atlas_slots() {
     let stack = stack();
