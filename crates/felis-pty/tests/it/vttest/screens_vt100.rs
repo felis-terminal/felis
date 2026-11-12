@@ -80,7 +80,7 @@ async fn wrap_around_cursor_addressing_pins_stars_to_last_column() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn decstr_soft_reset_completes_in_menu_10() {
+async fn decstr_soft_reset_redraws_the_return_prompt() {
     let session = VttestSession::open();
     session
         .navigate(&["Test of reset", "Soft Terminal Reset"])

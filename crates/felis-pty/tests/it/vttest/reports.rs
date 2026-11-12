@@ -140,7 +140,7 @@ async fn xtversion_round_trips_felis_name_and_version() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn window_state_report_returns_normal_in_menu_11_8_9() {
+async fn window_state_report_returns_normal_for_csi_11_t() {
     let session = VttestSession::open();
     session
         .navigate(&[

@@ -264,7 +264,7 @@ async fn ech_paints_clear_gap_diagonal() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn dectcem_hides_cursor_in_menu_11_1_2_2() {
+async fn dectcem_off_hides_the_cursor() {
     let session = VttestSession::open();
     session
         .navigate(&[
