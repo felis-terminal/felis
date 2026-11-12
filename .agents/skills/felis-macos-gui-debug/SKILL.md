@@ -21,7 +21,7 @@ nothing, check Accessibility for the terminal running `osascript`).
 
 Keyboard and mouse events both reach the window through `CGEventPost`, so every `[keymap]` chord (`pipe`, `run`, the
 switch actions) is drivable from here (see "Keyboard input", "Mouse gestures"). What a chord does _below_ the client is
-still worth an integration test against a real daemon: `crates/felis-client-core/tests/transient_spawn.rs` spawns the
+still worth an integration test against a real daemon: `crates/felis-client-core/tests/it/transient_spawn.rs` spawns the
 session the chord would have spawned and asserts on what the child received, without a window in the loop.
 
 ## Launch → window id → capture

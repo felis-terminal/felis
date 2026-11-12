@@ -2,9 +2,6 @@
 //! connection each request and stream rides shows in what keeps
 //! answering while another stalls, and in how a stream ends.
 
-#![cfg(unix)]
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;

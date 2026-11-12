@@ -4,8 +4,6 @@
 //! way the daemon's parse does
 //! (docs/explanation/data-model/grid-and-cells.md).
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use felis_client_core::ShadowScreen;
 use felis_grid::{Grid, RowEncode, encode_row};
 use felis_protocol::{RowPayload, messages::GridMsg};

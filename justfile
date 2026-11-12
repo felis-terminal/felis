@@ -114,7 +114,7 @@ schema:
 # Regenerate the golden JSON protocol messages, the cell instance fixtures and the font goldens.
 [group('lint')]
 golden:
-    UPDATE_GOLDEN=1 cargo nextest run -p felis-client-core --features json --test json_protocol
+    UPDATE_GOLDEN=1 cargo nextest run -p felis-client-core --features json --test it json_protocol::
     UPDATE_GOLDEN=1 cargo nextest run -p felis-render-wgpu row_cache::golden_tests
     UPDATE_GOLDEN=1 cargo nextest run -p felis-shaping --all-features goldens:: outlines_match_their_golden
 

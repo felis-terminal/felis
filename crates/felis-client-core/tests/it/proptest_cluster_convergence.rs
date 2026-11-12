@@ -3,8 +3,6 @@
 //! Asserts the shadow mirrors daemon cell handles and resolved cluster text
 //! even when entries arrive permuted or after referencing row deltas.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use felis_client_core::ShadowScreen;
 use felis_grid::{Grapheme, Grid, RowEncode, encode_row};
 use felis_protocol::{RowPayload, messages::GridMsg};

@@ -2,8 +2,6 @@
 //! one frame carrying N `(row, packed_cells)` entries must leave the
 //! shadow identical to N one-entry frames.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use felis_client_core::ShadowScreen;
 use felis_grid::{Grapheme, Grid, RowEncode, encode_row};
 use felis_protocol::{RowPayload, messages::GridMsg};

@@ -3,9 +3,6 @@
 //! Asserts arguments from [`felis_client_core::pipe::prepare_spawn`] survive
 //! `SessionToDaemonMsg::Create` intact (`docs/explanation/data-model/scrollback.md`).
 
-#![cfg(unix)]
-#![allow(clippy::unwrap_used)]
-
 use std::sync::Arc;
 use std::time::Duration;
 

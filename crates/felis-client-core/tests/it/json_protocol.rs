@@ -2,9 +2,6 @@
 //! for byte, what a reader must still accept, and what the published
 //! schema says of both. Regenerate with `just golden`.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-#![cfg(feature = "json")]
-
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::OnceLock;

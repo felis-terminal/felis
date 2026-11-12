@@ -3,8 +3,6 @@
 //! reproduce the source `Grid` in the `ShadowScreen`
 //! (`docs/explanation/architecture/session-lifecycle.md` "Attach").
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use std::fmt::Write as _;
 use std::num::{NonZeroU16, NonZeroU32};
 
