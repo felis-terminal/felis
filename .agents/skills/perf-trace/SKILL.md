@@ -162,8 +162,8 @@ end-to-end A/B:
   `nix run nixpkgs#python3`).
 
 Single-thread floor and full-daemon drain for any payload file (the two ends that bracket every end-to-end number) are
-the two ignored `felis-daemon` probes that read `FELIS_BENCH_FILE` (`rg -l FELIS_BENCH_FILE crates/felis-daemon` finds
-them, in `parse_sink.rs` and `serve/tests.rs`):
+the two ignored `felis-daemon` probes that read `FELIS_BENCH_FILE` (`rg -l FELIS_BENCH_FILE crates/felis-daemon/src`
+finds them):
 
 ```sh
 FELIS_BENCH_FILE=/abs/path/payload \

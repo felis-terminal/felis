@@ -485,24 +485,24 @@ async fn pathological_escape_barrage_does_not_kill_the_session() {
 /// minus the GUI render loop and socket syscalls. Reports MiB/s and
 /// the frame breakdown.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "needs FELIS_CAT_FILE=/path/to/big.txt; run with --ignored"]
+#[ignore = "needs FELIS_BENCH_FILE=/path/to/big.txt; run with --ignored"]
 async fn profile_cat_throughput() {
     use std::time::Instant;
 
-    let Some(file) = std::env::var_os("FELIS_CAT_FILE") else {
-        eprintln!("skipping: set FELIS_CAT_FILE=/path/to/big.txt");
+    let Some(file) = std::env::var_os("FELIS_BENCH_FILE") else {
+        eprintln!("skipping: set FELIS_BENCH_FILE=/path/to/big.txt");
         return;
     };
     let bytes = std::fs::metadata(&file).map_or(0, |m| m.len());
     if bytes == 0 {
-        eprintln!("skipping: FELIS_CAT_FILE is empty or unreadable");
+        eprintln!("skipping: FELIS_BENCH_FILE is empty or unreadable");
         return;
     }
 
     let cat = require_tool("cat");
-    // `FELIS_CAT_ITERS` repeats the burst so a `samply` run gets enough
+    // `FELIS_BENCH_ITERS` repeats the burst so a `samply` run gets enough
     // samples; one cat is ~50 ms.
-    let iters: u32 = std::env::var("FELIS_CAT_ITERS")
+    let iters: u32 = std::env::var("FELIS_BENCH_ITERS")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1);
@@ -565,21 +565,21 @@ async fn profile_cat_throughput() {
 /// runs only ~vsync-many times, so a codec win need not move the
 /// real-client wall-clock.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "needs FELIS_CAT_FILE=/path/to/big.txt; run with --ignored"]
+#[ignore = "needs FELIS_BENCH_FILE=/path/to/big.txt; run with --ignored"]
 async fn profile_cat_pull_paced() {
     use std::time::Instant;
 
-    let Some(file) = std::env::var_os("FELIS_CAT_FILE") else {
-        eprintln!("skipping: set FELIS_CAT_FILE=/path/to/big.txt");
+    let Some(file) = std::env::var_os("FELIS_BENCH_FILE") else {
+        eprintln!("skipping: set FELIS_BENCH_FILE=/path/to/big.txt");
         return;
     };
     let bytes = std::fs::metadata(&file).map_or(0, |m| m.len());
     if bytes == 0 {
-        eprintln!("skipping: FELIS_CAT_FILE is empty or unreadable");
+        eprintln!("skipping: FELIS_BENCH_FILE is empty or unreadable");
         return;
     }
     let cat = require_tool("cat");
-    let iters: u32 = std::env::var("FELIS_CAT_ITERS")
+    let iters: u32 = std::env::var("FELIS_BENCH_ITERS")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1);
