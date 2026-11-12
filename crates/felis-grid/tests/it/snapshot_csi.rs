@@ -111,23 +111,9 @@ fn ed_1_clears_from_start_of_screen_to_cursor() {
 }
 
 #[test]
-fn ed_3_clears_scrollback_only_and_leaves_screen_intact() {
+fn ed_3_drops_scrollback_rows() {
     // esctest `test_ED_3`: the visible screen stays untouched, only
     // history drops.
-    let after_ed3 = drive(3, 6, b"AAAAAABBBBBBCCCCCC\x1b[3J");
-    insta::assert_snapshot!(render(&after_ed3), @r"
-    cursor: row=2 col=5 visible=1 pending_wrap=1
-    pen: fg=default bg=default flags=-
-    grid 3x6:
-    |AAAAAA|
-    |BBBBBB|
-    |CCCCCC|
-    attrs: (all default)
-    ");
-}
-
-#[test]
-fn ed_3_drops_scrollback_rows() {
     let g = drive(2, 3, b"AAA\r\nBBB\r\nCCC\r\nDDD\r\nEEE\x1b[3J");
     assert_eq!(g.scrollback().len(), 0);
     insta::assert_snapshot!(render(&g), @r"

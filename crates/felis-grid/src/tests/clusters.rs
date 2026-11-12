@@ -11,31 +11,22 @@ fn utf8_print_lands_a_single_char() {
 }
 
 #[test]
-fn east_asian_wide_at_end_of_line_wraps_instead_of_squashing() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(2, 4);
-    drive(&mut p, &mut g, "abあ".as_bytes());
-    assert_eq!(g.cell(0, 2).unwrap().grapheme, Grapheme::Char('あ'));
-    assert_eq!(g.cell(0, 3).unwrap().grapheme, Grapheme::Spacer);
-    assert_eq!(g.cursor().col, 3);
-    assert!(g.cursor().pending_wrap);
-
-    drive(&mut p, &mut g, "い".as_bytes());
-    assert_eq!(g.cell(1, 0).unwrap().grapheme, Grapheme::Char('い'));
-    assert_eq!(g.cell(1, 1).unwrap().grapheme, Grapheme::Spacer);
-}
-
-#[test]
 fn wide_glyph_at_last_two_columns_parks_cursor_with_pending_wrap() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(2, 6);
-    drive(&mut p, &mut g, "abcdあ".as_bytes());
-    assert_eq!(g.cell(0, 4).unwrap().grapheme, Grapheme::Char('あ'));
-    assert_eq!(g.cell(0, 5).unwrap().grapheme, Grapheme::Spacer);
-    assert_eq!(g.cursor().col, 5);
-    assert!(g.cursor().pending_wrap);
-    drive(&mut p, &mut g, b"X");
-    assert_eq!(g.cell(1, 0).unwrap().grapheme, Grapheme::Ascii(b'X'));
+    for (next, landing) in [
+        ("X", [Grapheme::Ascii(b'X'), Grapheme::Empty]),
+        ("い", [Grapheme::Char('い'), Grapheme::Spacer]),
+    ] {
+        let mut p = Parser::new();
+        let mut g = Grid::new(2, 6);
+        drive(&mut p, &mut g, "abcdあ".as_bytes());
+        assert_eq!(g.cell(0, 4).unwrap().grapheme, Grapheme::Char('あ'));
+        assert_eq!(g.cell(0, 5).unwrap().grapheme, Grapheme::Spacer);
+        assert_eq!(g.cursor().col, 5);
+        assert!(g.cursor().pending_wrap);
+        drive(&mut p, &mut g, next.as_bytes());
+        let landed = [0, 1].map(|c| g.cell(1, c).unwrap().grapheme);
+        assert_eq!(landed, landing, "{next} after the pending wrap");
+    }
 }
 
 #[test]

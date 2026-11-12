@@ -414,15 +414,6 @@ fn text_after_a_sized_block_prints_beside_it() {
     assert_eq!(g.screen.cell(0, 5).unwrap().grapheme, Grapheme::Spacer);
 }
 
-/// Text that starts right after a sized block does not touch it: the
-/// block keeps its cells and the text lands beside it.
-#[test]
-fn text_right_after_a_sized_block_leaves_it_alone() {
-    let g = drive_new(4, 10, b"\x1b]66;s=2;A\x07xyz");
-    assert_eq!(g.row_sized_cells(0).len(), 2);
-    assert_eq!(g.screen.cell(0, 2).unwrap().grapheme, Grapheme::Ascii(b'x'));
-}
-
 /// Every live cell carrying a sizing handle belongs to a block that is
 /// on the grid in full: each footprint cell is live and carries it.
 fn assert_blocks_whole(g: &Grid, case: &str) {

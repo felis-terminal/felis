@@ -65,21 +65,13 @@ fn the_held_cell_bytes_match_the_budgeted_worst_case() {
 fn line_feed_at_bottom_scrolls_into_scrollback() {
     let mut p = Parser::new();
     let mut g = Grid::new(2, 4);
+    assert!(g.scrollback().is_empty());
     drive(&mut p, &mut g, b"row1\r\nrow2\r\nrow3");
+    assert!(!g.scrollback().is_empty());
     assert_eq!(g.cursor().row, 1);
     assert_eq!(g.cell(0, 0).unwrap().grapheme, Grapheme::Ascii(b'r'));
     assert_eq!(g.cell(0, 3).unwrap().grapheme, Grapheme::Ascii(b'2'));
     assert_eq!(g.cell(1, 3).unwrap().grapheme, Grapheme::Ascii(b'3'));
-    assert_eq!(g.scrollback().len(), 1);
-}
-
-#[test]
-fn scrollback_is_empty_reflects_pushed_rows() {
-    let mut p = Parser::new();
-    let mut g = Grid::new(2, 4);
-    assert!(g.scrollback().is_empty());
-    drive(&mut p, &mut g, b"a\r\nb\r\nc");
-    assert!(!g.scrollback().is_empty());
     assert_eq!(g.scrollback().len(), 1);
 }
 
