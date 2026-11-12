@@ -107,13 +107,5 @@ harness = false
 name = "attach"
 required-features = ["native"]
 
-[[test]]
-name = "transient_spawn"
-required-features = ["daemon-tests"]
-
-[[test]]
-name = "relay"
-required-features = ["daemon-tests", "json"]
-
 [lints]
 workspace = true

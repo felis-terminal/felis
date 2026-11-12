@@ -3,13 +3,13 @@
 //! Asserts the shadow mirrors daemon cell handles and resolved cluster text
 //! even when entries arrive permuted or after referencing row deltas.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use felis_client_core::ShadowScreen;
-use felis_grid::{Grapheme, Grid, RowEncode, encode_row};
-use felis_protocol::{RowPayload, messages::GridMsg};
+use felis_grid::{Grapheme, Grid};
+use felis_protocol::messages::GridMsg;
 use felis_vt::Parser;
 use proptest::prelude::*;
+
+use crate::support::encode_dirty_rows;
 
 const MARKS: &[char] = &['\u{0301}', '\u{0308}', '\u{0327}', '\u{0323}'];
 
@@ -72,23 +72,9 @@ proptest! {
                 .apply(&GridMsg::Cluster { id, text })
                 .expect("cluster apply");
         }
-        let dirty: Vec<usize> = grid.damage().dirty_rows().collect();
-        for row_idx in dirty {
-            let r = u16::try_from(row_idx).unwrap();
-            let cells = grid.row_cells(r).unwrap_or(&[]);
-            let sized = grid.row_sized_cells(r);
-            let body = encode_row(
-                RowEncode {
-                    cells,
-                    pad_to: cells.len(),
-                    sized_cells: &sized,
-                    soft_wrap_continued: grid.row_soft_wrap_continued(r),
-                },
-                grid.style_table(),
-            )
-            .unwrap();
+        for row in encode_dirty_rows(&grid) {
             shadow
-                .apply(&GridMsg::RowDelta { rows: vec![(r, RowPayload(body))] })
+                .apply(&GridMsg::RowDelta { rows: vec![row] })
                 .expect("row delta apply");
         }
 
@@ -144,29 +130,7 @@ proptest! {
         parser.advance(&mut grid, input.as_bytes());
 
         let entries = cluster_entries(&grid);
-        let dirty: Vec<u16> = grid
-            .damage()
-            .dirty_rows()
-            .map(|r| u16::try_from(r).unwrap())
-            .collect();
-        let encoded: Vec<(u16, Vec<u8>)> = dirty
-            .iter()
-            .map(|r| {
-                let cells = grid.row_cells(*r).unwrap_or(&[]);
-                let sized = grid.row_sized_cells(*r);
-                let body = encode_row(
-                    RowEncode {
-                        cells,
-                        pad_to: cells.len(),
-                        sized_cells: &sized,
-                        soft_wrap_continued: grid.row_soft_wrap_continued(*r),
-                    },
-                    grid.style_table(),
-                )
-                .unwrap();
-                (*r, body)
-            })
-            .collect();
+        let encoded = encode_dirty_rows(&grid);
 
         // A row whose entries have not landed ends the attachment.
         let mut early = ShadowScreen::new(rows, cols);
@@ -180,7 +144,7 @@ proptest! {
                 encoded.iter().skip(1).map(|(r, b)| (*r, b.clone())),
             ) {
                 if early
-                    .apply(&GridMsg::RowDelta { rows: vec![(row, RowPayload(body))] })
+                    .apply(&GridMsg::RowDelta { rows: vec![(row, body)] })
                     .is_err()
                 {
                     refused = true;
@@ -198,9 +162,9 @@ proptest! {
                 .apply(&GridMsg::Cluster { id: *id, text: text.clone() })
                 .expect("cluster apply");
         }
-        for (row, body) in encoded {
+        for row in encoded {
             shadow
-                .apply(&GridMsg::RowDelta { rows: vec![(row, RowPayload(body))] })
+                .apply(&GridMsg::RowDelta { rows: vec![row] })
                 .expect("row delta apply");
         }
 

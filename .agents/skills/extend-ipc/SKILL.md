@@ -113,7 +113,7 @@ A new message/verb typically touches, in dependency order:
 - `fuzz/fuzz_targets/ipc_frame.rs` owns frame-decode totality and `ipc_body.rs` owns body-decode totality (prost/JSON +
   `convert/`); drop a seed for the new message into `fuzz/seeds/ipc_body/` (encoded body bytes) and run
   `just fuzz-smoke`.
-- Rehydration/snapshot coverage: `crates/felis-client-core/tests/rehydration_snapshot.rs` if the shadow-grid state is
+- Rehydration/snapshot coverage: `crates/felis-client-core/tests/it/rehydration_snapshot.rs` if the shadow-grid state is
   affected.
 - Version-skew behavior: assert the old-daemon path degrades to exit code `2` (or the documented fallback), not a panic.
 

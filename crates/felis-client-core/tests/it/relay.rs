@@ -2,9 +2,6 @@
 //! connection each request and stream rides shows in what keeps
 //! answering while another stalls, and in how a stream ends.
 
-#![cfg(unix)]
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,37 +14,14 @@ use felis_client_core::json::{
 };
 use felis_client_core::relay::{InputError, Relay, RelayConfig, RelayStream, StreamMessage, Theme};
 use felis_client_core::{Carrier, DEFAULT_STREAM_BUFFER};
-use felis_daemon::SessionPool;
-use felis_daemon::serve::{DaemonCaps, bind_unix, default_session_factory};
-use tempfile::TempDir;
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, timeout};
 
+use crate::support::{daemon, private_dir};
+
 const PATIENCE: Duration = Duration::from_secs(10);
-
-fn private_dir() -> TempDir {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    let tmp = TempDir::new().unwrap();
-    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    tmp
-}
-
-fn daemon(tmp: &TempDir) -> PathBuf {
-    let path = tmp.path().join("daemon.sock");
-    let pool = Arc::new(Mutex::new(SessionPool::new()));
-    let serving = bind_unix(
-        &path,
-        DaemonCaps::default(),
-        pool,
-        default_session_factory(),
-    )
-    .expect("the test daemon binds its socket");
-    drop(tokio::spawn(async move { drop(serving.await) }));
-    path
-}
 
 async fn relay_on(socket: &Path, theme: Theme) -> Relay {
     Relay::connect(RelayConfig {

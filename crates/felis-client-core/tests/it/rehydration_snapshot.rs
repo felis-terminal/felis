@@ -3,15 +3,15 @@
 //! reproduce the source `Grid` in the `ShadowScreen`
 //! (`docs/explanation/architecture/session-lifecycle.md` "Attach").
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use std::fmt::Write as _;
 use std::num::{NonZeroU16, NonZeroU32};
 
 use felis_client_core::ShadowScreen;
-use felis_grid::{AttrFlags, Color, Grapheme, Grid, RowEncode, ScreenBuffer, encode_row};
-use felis_protocol::{RowPayload, messages::GridMsg};
+use felis_grid::{AttrFlags, Cell, Color, Grapheme, Grid, ScreenBuffer};
+use felis_protocol::messages::GridMsg;
 use felis_vt::Parser;
+
+use crate::support::{encode_rows, visible_registry_msgs};
 
 /// The burst is composed the way the daemon's
 /// `serve::streaming::compose_rehydrate` composes it: visible-first,
@@ -27,28 +27,11 @@ fn rehydrate(rows: u16, cols: u16, bytes: &[u8]) -> (Grid, ShadowScreen) {
     let cursor = grid.cursor();
     let mut burst = vec![GridMsg::RehydrateBegin];
     burst.extend(visible_registry_msgs(&grid));
-    burst.extend((0..grid.rows()).map(|r| {
-        let row_cells: Vec<_> = (0..grid.cols())
-            .map(|c| grid.cell(r, c).copied().unwrap_or_default())
-            .collect();
-        GridMsg::RowDelta {
-            rows: vec![(
-                r,
-                RowPayload(
-                    encode_row(
-                        RowEncode {
-                            cells: &row_cells,
-                            pad_to: row_cells.len(),
-                            sized_cells: &[],
-                            soft_wrap_continued: false,
-                        },
-                        grid.style_table(),
-                    )
-                    .unwrap(),
-                ),
-            )],
-        }
-    }));
+    burst.extend(
+        encode_rows(&grid, 0..grid.rows())
+            .into_iter()
+            .map(|row| GridMsg::RowDelta { rows: vec![row] }),
+    );
     burst.push(GridMsg::CursorState {
         row: cursor.row,
         col: cursor.col,
@@ -63,41 +46,6 @@ fn rehydrate(rows: u16, cols: u16, bytes: &[u8]) -> (Grid, ShadowScreen) {
     (grid, shadow)
 }
 
-fn visible_registry_msgs(grid: &Grid) -> Vec<GridMsg> {
-    let mut msgs = Vec::new();
-    let mut links: Vec<u16> = Vec::new();
-    let mut clusters: Vec<u32> = Vec::new();
-    for r in 0..grid.rows() {
-        for c in 0..grid.cols() {
-            let Some(cell) = grid.cell(r, c) else {
-                continue;
-            };
-            if let Some(id) = cell.link
-                && !links.contains(&id.get())
-                && let Some(entry) = grid.hyperlink(id)
-            {
-                links.push(id.get());
-                msgs.push(GridMsg::Hyperlink {
-                    id: id.get(),
-                    anchor: entry.id.as_ref().map(|a| a.as_str().to_owned()),
-                    uri: entry.uri.as_str().to_owned(),
-                });
-            }
-            if let Grapheme::Cluster(id) = cell.grapheme
-                && !clusters.contains(&id.get())
-                && let Some(text) = grid.cluster_str(id)
-            {
-                clusters.push(id.get());
-                msgs.push(GridMsg::Cluster {
-                    id: id.get(),
-                    text: text.to_owned(),
-                });
-            }
-        }
-    }
-    msgs
-}
-
 fn first_mismatch(src: &ScreenBuffer, shadow: &ScreenBuffer) -> Option<String> {
     if src.rows() != shadow.rows() || src.cols() != shadow.cols() {
         return Some(format!(
@@ -109,10 +57,29 @@ fn first_mismatch(src: &ScreenBuffer, shadow: &ScreenBuffer) -> Option<String> {
         ));
     }
     for r in 0..src.rows() {
+        if src.row_soft_wrap_continued(r) != shadow.row_soft_wrap_continued(r) {
+            return Some(format!("row {r}: soft wrap diverged"));
+        }
+        let (s, d) = (src.row_sized_cells(r), shadow.row_sized_cells(r));
+        if s != d {
+            return Some(format!("row {r} sized cells: src={s:?} shadow={d:?}"));
+        }
         for c in 0..src.cols() {
             let s = src.cell(r, c).unwrap();
             let d = shadow.cell(r, c).unwrap();
-            if s != d {
+            // Each side interns its own sizing handles and none crosses
+            // the wire, so a handle compares by what it resolves to.
+            let key = |screen: &ScreenBuffer, cell: &Cell| {
+                let handle_free = Cell {
+                    sizing: None,
+                    ..*cell
+                };
+                (
+                    handle_free,
+                    cell.sizing.map(|h| screen.sizing_by_handle(h).copied()),
+                )
+            };
+            if key(src, s) != key(shadow, d) {
                 return Some(format!("cell ({r},{c}): src={s:?} shadow={d:?}"));
             }
         }
@@ -364,6 +331,29 @@ fn rehydration_preserves_an_empty_grid() {
     grid 2x3:
     |...|
     |...|
+    attrs: (all default)
+    ");
+}
+
+#[test]
+fn rehydration_preserves_a_soft_wrap_and_an_osc66_sized_run() {
+    let (src, shadow) = rehydrate(4, 6, b"abcdefgh\r\n\x1b]66;s=2;HI\x1b\\");
+    assert!(
+        src.screen().row_soft_wrap_continued(1),
+        "the overflow continues on row 1"
+    );
+    assert!(
+        !src.screen().row_sized_cells(2).is_empty(),
+        "row 2 carries the sized run"
+    );
+    assert_eq!(first_mismatch(src.screen(), shadow.screen()), None);
+    insta::assert_snapshot!(render(shadow.screen()), @"
+    cursor: row=2 col=4 visible=1
+    grid 4x6:
+    |abcdef|
+    |gh....|
+    |H.I...|
+    |......|
     attrs: (all default)
     ");
 }

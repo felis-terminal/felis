@@ -2,82 +2,18 @@
 //! one frame carrying N `(row, packed_cells)` entries must leave the
 //! shadow identical to N one-entry frames.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use felis_client_core::ShadowScreen;
-use felis_grid::{Grapheme, Grid, RowEncode, encode_row};
-use felis_protocol::{RowPayload, messages::GridMsg};
+use felis_grid::Grid;
+use felis_protocol::messages::GridMsg;
 use felis_vt::Parser;
 use proptest::prelude::*;
+
+use crate::support::{encode_dirty_rows, visible_registry_msgs};
 
 fn build_dirty_grid(rows: u16, cols: u16, bytes: &[u8]) -> Grid {
     let mut grid = Grid::new(rows, cols);
     Parser::new().advance(&mut grid, bytes);
     grid
-}
-
-fn encode_dirty_rows(grid: &Grid) -> Vec<(u16, Vec<u8>)> {
-    grid.damage()
-        .dirty_rows()
-        .map(|row_idx| {
-            let r = u16::try_from(row_idx).unwrap();
-            let cells: Vec<_> = (0..grid.cols())
-                .map(|c| grid.cell(r, c).copied().unwrap_or_default())
-                .collect();
-            let sized = grid.row_sized_cells(r);
-            (
-                r,
-                encode_row(
-                    RowEncode {
-                        cells: &cells,
-                        pad_to: cells.len(),
-                        sized_cells: &sized,
-                        soft_wrap_continued: grid.row_soft_wrap_continued(r),
-                    },
-                    grid.style_table(),
-                )
-                .unwrap(),
-            )
-        })
-        .collect()
-}
-
-/// The daemon ships every entry a row names before that row, and the
-/// shadow refuses a row that names an absent one, so the property must
-/// drive it in that order too.
-fn registry_msgs(grid: &Grid) -> Vec<GridMsg> {
-    let mut msgs = Vec::new();
-    let mut links: Vec<u16> = Vec::new();
-    let mut clusters: Vec<u32> = Vec::new();
-    for r in 0..grid.rows() {
-        for c in 0..grid.cols() {
-            let Some(cell) = grid.cell(r, c) else {
-                continue;
-            };
-            if let Some(id) = cell.link
-                && !links.contains(&id.get())
-                && let Some(entry) = grid.hyperlink(id)
-            {
-                links.push(id.get());
-                msgs.push(GridMsg::Hyperlink {
-                    id: id.get(),
-                    anchor: entry.id.as_ref().map(|a| a.as_str().to_owned()),
-                    uri: entry.uri.as_str().to_owned(),
-                });
-            }
-            if let Grapheme::Cluster(id) = cell.grapheme
-                && !clusters.contains(&id.get())
-                && let Some(text) = grid.cluster_str(id)
-            {
-                clusters.push(id.get());
-                msgs.push(GridMsg::Cluster {
-                    id: id.get(),
-                    text: text.to_owned(),
-                });
-            }
-        }
-    }
-    msgs
 }
 
 proptest! {
@@ -93,15 +29,15 @@ proptest! {
         let payloads = encode_dirty_rows(&grid);
         prop_assume!(!payloads.is_empty());
 
-        let registry = registry_msgs(&grid);
+        let registry = visible_registry_msgs(&grid);
         let mut shadow_a = ShadowScreen::new(rows, cols);
         for msg in &registry {
             shadow_a.apply(msg).expect("registry apply");
         }
-        for (row, packed_cells) in &payloads {
+        for row in &payloads {
             shadow_a
                 .apply(&GridMsg::RowDelta {
-                    rows: vec![(*row, RowPayload(packed_cells.clone()))],
+                    rows: vec![row.clone()],
                 })
                 .expect("individual apply");
         }
@@ -111,12 +47,7 @@ proptest! {
             shadow_b.apply(msg).expect("registry apply");
         }
         shadow_b
-            .apply(&GridMsg::RowDelta {
-                rows: payloads
-                    .into_iter()
-                    .map(|(row, body)| (row, RowPayload(body)))
-                    .collect(),
-            })
+            .apply(&GridMsg::RowDelta { rows: payloads })
             .expect("batch apply");
 
         let g_a = shadow_a.screen();

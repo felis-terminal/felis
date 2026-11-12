@@ -533,7 +533,8 @@ async fn the_last_drop_stops_a_stalled_writer_and_sends_nothing_queued() {
 #[cfg(all(unix, feature = "daemon-tests"))]
 mod daemon {
     use super::*;
-    use crate::connector::{DEFAULT_STREAM_BUFFER, Offer, connect, tests::daemon_running};
+    use crate::connector::{DEFAULT_STREAM_BUFFER, Offer, connect};
+    use crate::test_support::daemon_running;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn a_point_call_completes_past_a_stalled_stream_which_then_ends_lagged() {

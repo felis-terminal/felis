@@ -4,37 +4,21 @@
 //! way the daemon's parse does
 //! (docs/explanation/data-model/grid-and-cells.md).
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use felis_client_core::ShadowScreen;
-use felis_grid::{Grid, RowEncode, encode_row};
-use felis_protocol::{RowPayload, messages::GridMsg};
+use felis_grid::Grid;
+use felis_protocol::messages::GridMsg;
 use felis_vt::Parser;
 
-fn sized_row(grid: &Grid) -> GridMsg {
-    let cells = grid.row_cells(0).unwrap_or(&[]);
-    let sized = grid.row_sized_cells(0);
-    let body = encode_row(
-        RowEncode {
-            cells,
-            pad_to: cells.len(),
-            sized_cells: &sized,
-            soft_wrap_continued: false,
-        },
-        grid.style_table(),
-    )
-    .expect("encode row");
-    GridMsg::RowDelta {
-        rows: vec![(0, RowPayload(body))],
-    }
-}
+use crate::support::encode_rows;
 
 #[test]
 fn repainting_one_sized_row_does_not_grow_the_shadow_registries_without_bound() {
     let mut grid = Grid::new(2, 20);
     let mut parser = Parser::default();
     parser.advance(&mut grid, b"\x1b]66;s=2;HEADER\x1b\\");
-    let delta = sized_row(&grid);
+    let delta = GridMsg::RowDelta {
+        rows: encode_rows(&grid, [0]),
+    };
 
     let mut shadow = ShadowScreen::new(2, 20);
     for _ in 0..20_000 {
