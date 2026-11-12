@@ -2,31 +2,13 @@
 //! (`docs/explanation/architecture/overview.md` "In-place upgrade").
 
 use std::path::Path;
-use std::process::{Child, Command as StdCommand};
+use std::process::Command as StdCommand;
 use std::time::Duration;
 
 use felis_client_core::{Offer, connect};
 use felis_protocol::messages::{SpawnArgs, UpgradeOutcome};
-use tempfile::TempDir;
 
-use crate::common;
-
-fn private_dir() -> TempDir {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    let tmp = TempDir::new().unwrap();
-    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    tmp
-}
-
-struct DaemonProc(Child);
-
-impl Drop for DaemonProc {
-    fn drop(&mut self) {
-        self.0.kill().ok();
-        self.0.wait().ok();
-    }
-}
+use crate::common::{self, DaemonProc, private_dir};
 
 fn spawn_real_daemon(tmp: &Path, socket: &Path) -> DaemonProc {
     let child = StdCommand::new(common::daemon_bin())

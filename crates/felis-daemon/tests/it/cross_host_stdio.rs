@@ -14,17 +14,7 @@ use felis_protocol::{
 };
 use felis_transport::{FrameReader, FrameWriter, StdioSession, spawn_command};
 
-use crate::common::{daemon_bin, wait_connectable};
-
-/// A socket parent must be a `0700` directory this uid owns (REQ-107),
-/// and `TempDir` follows the process umask.
-fn private_dir() -> tempfile::TempDir {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    let tmp = tempfile::TempDir::new().unwrap();
-    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    tmp
-}
+use crate::common::{daemon_bin, private_dir, wait_connectable};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn felis_daemon_stdio_relay_bridges_to_the_persistent_daemon() {

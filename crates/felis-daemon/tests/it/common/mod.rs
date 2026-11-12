@@ -22,6 +22,40 @@ pub(crate) fn daemon_bin() -> String {
     )
 }
 
+/// A socket parent must be a `0700` directory this uid owns
+/// (REQ-107), and `TempDir` follows the process umask.
+#[cfg(unix)]
+pub(crate) fn private_dir() -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    tmp
+}
+
+/// A daemon child killed and reaped on drop.
+#[cfg(unix)]
+pub(crate) struct DaemonProc(pub(crate) std::process::Child);
+
+#[cfg(unix)]
+impl DaemonProc {
+    pub(crate) fn pid(&self) -> u32 {
+        self.0.id()
+    }
+
+    pub(crate) fn is_alive(&mut self) -> bool {
+        self.0.try_wait().unwrap().is_none()
+    }
+}
+
+#[cfg(unix)]
+impl Drop for DaemonProc {
+    fn drop(&mut self) {
+        self.0.kill().ok();
+        self.0.wait().ok();
+    }
+}
+
 /// Wait for the test-owned daemon before starting a relay; a relay
 /// that connects first auto-spawns its own daemon, which outlives the
 /// test as a detached process.

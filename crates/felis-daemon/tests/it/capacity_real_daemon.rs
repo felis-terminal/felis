@@ -4,46 +4,13 @@
 //! Both tests are ignored; run on demand on macOS with `--run-ignored all`.
 
 use std::path::Path;
-use std::process::{Child, Command as StdCommand};
+use std::process::Command as StdCommand;
 use std::time::Duration;
 
 use felis_client_core::{Offer, connect};
 use felis_protocol::messages::SpawnArgs;
-use tempfile::TempDir;
 
-use crate::common;
-
-/// A socket parent must be a `0700` directory this uid owns
-/// (REQ-107), and `TempDir` follows the process umask.
-fn private_dir() -> TempDir {
-    let tmp = TempDir::new().unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-    }
-    tmp
-}
-
-struct DaemonProc(Child);
-
-impl DaemonProc {
-    fn pid(&self) -> u32 {
-        self.0.id()
-    }
-
-    fn is_alive(&mut self) -> bool {
-        self.0.try_wait().unwrap().is_none()
-    }
-}
-
-impl Drop for DaemonProc {
-    fn drop(&mut self) {
-        self.0.kill().ok();
-        self.0.wait().ok();
-    }
-}
+use crate::common::{self, DaemonProc, private_dir};
 
 async fn spawn_real_daemon(socket: &Path, nofile: Option<u64>) -> DaemonProc {
     let bin = common::daemon_bin();
