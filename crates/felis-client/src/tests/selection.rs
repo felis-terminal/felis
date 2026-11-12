@@ -55,7 +55,6 @@ fn a_browsed_view_that_moves_off_its_lines_clears_the_selection() {
 
 #[test]
 fn viewport_state_into_scrollback_clears_selection() {
-    // Pins: the highlight must not outlive the cells it was anchored to.
     assert!(viewport_message_enters_scrollback(
         &GridMsg::ViewportState {
             lines_from_bottom: 1,
@@ -116,7 +115,7 @@ fn unrelated_grid_messages_never_request_a_selection_clear() {
 
 #[test]
 fn a_press_the_program_consumes_still_dismisses_the_selection() {
-    // Pins: a forwarded press still counts as click-elsewhere, or the
+    // A forwarded press still counts as click-elsewhere, or the
     // highlight has no gesture left that can clear it.
     assert!(forwarded_press_dismisses_selection(MouseButton::Left));
     assert!(forwarded_press_dismisses_selection(MouseButton::Right));

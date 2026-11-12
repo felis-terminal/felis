@@ -59,11 +59,10 @@ fn format_search_label_renders_each_search_state() {
     }
 }
 
-/// Pins: a query the client refuses to send leaves no stream behind and
-/// says why. `commit_search_query` runs this before it opens a stream, so
-/// a bar in this state means the daemon was never told about a stream id
-/// the client had already burned, a mismatch it answers by dropping
-/// the connection.
+/// `commit_search_query` runs this before it opens a stream, so a bar
+/// in this state means the daemon was never told about a stream id the
+/// client had already burned, a mismatch it answers by dropping the
+/// connection.
 #[test]
 fn refused_search_reports_the_limit_and_holds_no_stream() {
     use felis_protocol::codec::WireCodec;
@@ -183,8 +182,6 @@ mod search_navigation {
         }
     }
 
-    /// Pins: the jump centers on the first painted segment; the logical
-    /// line's top may be a row where nothing is highlighted.
     const fn at(pushed: u64, generation: u64) -> ViewportAnchor {
         ViewportAnchor { pushed, generation }
     }
@@ -293,6 +290,7 @@ mod search_navigation {
         assert_eq!(hit_navigation(&hit, shown, 24, 100), shown);
     }
 
+    /// The logical line's top may be a row where nothing is highlighted.
     #[test]
     fn search_hit_anchor_line_prefers_the_first_painted_segment() {
         assert_eq!(search_hit_anchor_line(&stitched_hit(-40, 3, 2)), -37);
@@ -325,8 +323,7 @@ mod search_navigation {
         assert!(none_current.iter().all(|s| !s.is_current));
     }
 
-    /// Pins: off-screen segments are dropped, not clamped; a clamped row
-    /// would paint a highlight over unrelated text.
+    /// Clamping them instead would paint a highlight over unrelated text.
     #[test]
     fn visible_hit_spans_drop_offscreen_segments_and_keep_the_visible_ones() {
         let spans = visible_hit_spans(&[stitched_hit(-6, 0, 2)], Some(0), None, 5, 24);
@@ -338,8 +335,6 @@ mod search_navigation {
         );
     }
 
-    /// Pins: an empty column range never reaches the renderer as a
-    /// zero-width quad.
     #[test]
     fn visible_hit_spans_skip_empty_column_ranges() {
         let empty = SearchHitRecord {

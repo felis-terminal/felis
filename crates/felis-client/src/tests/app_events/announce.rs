@@ -1,7 +1,5 @@
 use super::*;
 
-/// Pins: an assistive technology's first query on an idle window
-/// still reaches the redraw that carries the initial tree.
 #[test]
 fn an_initial_tree_request_on_an_idle_window_requests_a_redraw() {
     let runtime = runtime();

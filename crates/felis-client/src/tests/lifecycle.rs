@@ -1,4 +1,4 @@
-//! Issue #22: a window takes the exit ladder when its shell exits, and
+//! A window takes the exit ladder when its shell exits, and
 //! re-dials the same session when the transport drops under it.
 
 use super::*;

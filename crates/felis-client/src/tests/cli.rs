@@ -1,8 +1,5 @@
 use super::*;
 
-/// Pins: args after the program (including a `-c` string with
-/// spaces) survive as separate argv entries, never re-split or
-/// shell-evaluated.
 #[test]
 fn cli_captures_trailing_command_after_double_dash() {
     let cli = Cli::try_parse_from(["felis", "--", "htop"]).expect("parses felis -- htop");
@@ -25,8 +22,7 @@ fn cli_flags_before_double_dash_do_not_leak_into_command() {
     assert_eq!(cli.command, vec!["ls"]);
 }
 
-/// Pins: an unknown bare token is a hard error, not a command to
-/// exec; the front-door `felis` answers a typo the same way.
+/// The front-door `felis` answers a typo the same way.
 #[test]
 fn cli_bare_token_without_double_dash_is_a_subcommand_not_a_command() {
     assert!(Cli::try_parse_from(["felis-client", "definitely-not-a-subcommand"]).is_err());

@@ -69,8 +69,6 @@ fn renderer_config_from_leaves_the_font_size_to_the_window() {
 
 #[test]
 fn renderer_config_from_default_config_is_all_none() {
-    // Pins: no config file leaves every override slot empty, so the
-    // renderer keeps its built-in defaults.
     let rc = renderer_config_from(&config::EffectiveConfig::default());
     assert!(rc.font_family.is_none());
     assert!(rc.font_size_physical_px.is_none());

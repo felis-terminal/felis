@@ -51,7 +51,7 @@ mod click_streak {
     }
 }
 
-mod wheel {
+mod mouse_input {
     use super::*;
 
     #[test]
@@ -92,8 +92,6 @@ mod wheel {
 
     #[test]
     fn wheel_encoding_routes_by_grid_state() {
-        // Pins the precedence: mouse-mode over alt-screen over the
-        // primary-screen scroll fallback.
         assert_eq!(
             wheel_encoding_for(true, true),
             WheelEncoding::MouseButtons,
@@ -112,73 +110,85 @@ mod wheel {
         );
     }
 
+    /// Up and down are the CSI arrows whatever DECCKM says, and with
+    /// Shift held Page Up / Page Down, the bytes `encode_named` sends
+    /// for the keys themselves, so wheel and key never differ.
     #[test]
-    fn wheel_arrow_bytes_line_delta_emits_csi_arrow_per_tick() {
-        let three_up = wheel_arrow_bytes(WheelDelta::Lines(0.0, 3.0), false);
-        assert_eq!(three_up, b"\x1b[A\x1b[A\x1b[A".to_vec());
-        let two_down = wheel_arrow_bytes(WheelDelta::Lines(0.0, -2.0), false);
-        assert_eq!(two_down, b"\x1b[B\x1b[B".to_vec());
-    }
-
-    #[test]
-    fn wheel_arrow_bytes_pixel_delta_collapses_to_one_arrow() {
-        // Pins: per-pixel deltas collapse to one arrow, the way
-        // `wheel_buttons` counts a notch.
-        let down = wheel_arrow_bytes(WheelDelta::Pixels(0.0, -42.0), false);
-        assert_eq!(down, b"\x1b[B".to_vec());
-        let up = wheel_arrow_bytes(WheelDelta::Pixels(0.0, 7.0), false);
-        assert_eq!(up, b"\x1b[A".to_vec());
-    }
-
-    #[test]
-    fn wheel_arrow_bytes_zero_delta_is_silent() {
-        // A pure horizontal scroll over a pager must not eat the wheel.
-        assert_eq!(
-            wheel_arrow_bytes(WheelDelta::Lines(0.0, 0.0), false),
-            Vec::<u8>::new()
-        );
-        assert_eq!(
-            wheel_arrow_bytes(WheelDelta::Pixels(50.0, 0.0), false),
-            Vec::<u8>::new()
-        );
-    }
-
-    #[test]
-    fn wheel_arrow_bytes_ignores_horizontal_axis() {
-        // No pager interprets `ESC [ C` / `ESC [ D` as scroll.
-        let diag = wheel_arrow_bytes(WheelDelta::Lines(2.0, 1.0), false);
-        assert_eq!(diag, b"\x1b[A".to_vec(), "horizontal axis must not leak");
-    }
-
-    #[test]
-    fn wheel_arrow_bytes_uses_csi_form_not_app_cursor_form() {
-        // Pins: `ESC [ A` regardless of DECCKM, like `encode_named`, so
-        // wheel-up and ArrowUp never differ.
-        let one = wheel_arrow_bytes(WheelDelta::Lines(0.0, 1.0), false);
-        assert_eq!(one, b"\x1b[A".to_vec());
-        assert_ne!(one, b"\x1bOA".to_vec());
-    }
-
-    #[test]
-    fn wheel_arrow_bytes_shift_held_emits_pageup_pagedown() {
-        // Matches `encode_named`'s PageUp / PageDown bytes.
-        let pgup = wheel_arrow_bytes(WheelDelta::Lines(0.0, 1.0), true);
-        assert_eq!(pgup, b"\x1b[5~".to_vec());
-        let pgdn = wheel_arrow_bytes(WheelDelta::Lines(0.0, -1.0), true);
-        assert_eq!(pgdn, b"\x1b[6~".to_vec());
-    }
-
-    #[test]
-    fn wheel_arrow_bytes_shift_held_count_matches_unshifted() {
-        let delta = WheelDelta::Lines(0.0, 3.0);
-        assert_eq!(wheel_arrow_bytes(delta, false), b"\x1b[A".repeat(3));
-        assert_eq!(wheel_arrow_bytes(delta, true), b"\x1b[5~".repeat(3));
-    }
-
-    #[test]
-    fn wheel_arrow_bytes_shift_held_pixel_delta_still_collapses_to_one() {
-        let down = wheel_arrow_bytes(WheelDelta::Pixels(0.0, -42.0), true);
-        assert_eq!(down, b"\x1b[6~".to_vec());
+    fn wheel_arrow_bytes_encodes_each_delta_and_shift_state() {
+        let cases: &[(&str, WheelDelta, bool, &[u8])] = &[
+            (
+                "one arrow per line tick up",
+                WheelDelta::Lines(0.0, 3.0),
+                false,
+                b"\x1b[A\x1b[A\x1b[A",
+            ),
+            (
+                "one arrow per line tick down",
+                WheelDelta::Lines(0.0, -2.0),
+                false,
+                b"\x1b[B\x1b[B",
+            ),
+            // The way `wheel_buttons` counts a notch.
+            (
+                "a pixel delta down collapses to one arrow",
+                WheelDelta::Pixels(0.0, -42.0),
+                false,
+                b"\x1b[B",
+            ),
+            (
+                "a pixel delta up collapses to one arrow",
+                WheelDelta::Pixels(0.0, 7.0),
+                false,
+                b"\x1b[A",
+            ),
+            // A pure horizontal scroll over a pager must not eat the wheel.
+            (
+                "a zero line delta is silent",
+                WheelDelta::Lines(0.0, 0.0),
+                false,
+                b"",
+            ),
+            (
+                "a horizontal-only pixel delta is silent",
+                WheelDelta::Pixels(50.0, 0.0),
+                false,
+                b"",
+            ),
+            // No pager interprets `ESC [ C` / `ESC [ D` as scroll.
+            (
+                "the horizontal axis does not leak",
+                WheelDelta::Lines(2.0, 1.0),
+                false,
+                b"\x1b[A",
+            ),
+            (
+                "shift turns up into PageUp",
+                WheelDelta::Lines(0.0, 1.0),
+                true,
+                b"\x1b[5~",
+            ),
+            (
+                "shift turns down into PageDown",
+                WheelDelta::Lines(0.0, -1.0),
+                true,
+                b"\x1b[6~",
+            ),
+            (
+                "shift keeps one key per line tick",
+                WheelDelta::Lines(0.0, 3.0),
+                true,
+                b"\x1b[5~\x1b[5~\x1b[5~",
+            ),
+            (
+                "shift keeps a pixel delta at one key",
+                WheelDelta::Pixels(0.0, -42.0),
+                true,
+                b"\x1b[6~",
+            ),
+        ];
+        for (label, delta, shift_held, want) in cases {
+            assert_eq!(wheel_arrow_bytes(*delta, *shift_held), *want, "{label}");
+        }
     }
 
     #[test]

@@ -39,7 +39,7 @@ fn preedit_from_ime_commit_event_clears_overlay() {
 }
 
 #[test]
-fn ime_preedit_enabled_disabled_carry_no_bytes_today() {
+fn ime_preedit_enabled_disabled_carry_no_bytes() {
     // Pre-edit text rides the renderer overlay, never the PTY.
     assert_eq!(ime_commit_bytes(&ImeInput::Enabled), None);
     assert_eq!(ime_commit_bytes(&ImeInput::Disabled), None);
