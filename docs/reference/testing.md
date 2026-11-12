@@ -282,13 +282,13 @@ published Forgejo release to GitHub, crates.io, and the Homebrew tap ([workspace
 
 | Workflow      | Triggers                  | Purpose                                                                                                              |
 | ------------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `pr.yml`      | Push, PR                  | `nix flake check`, the Cargo suite (clippy, nextest, `just deny`, tool tests), the wire check, Linux smoke.          |
-| `windows.yml` | Push, PR                  | Windows clippy, nextest, headless smoke, and package artifact.                                                       |
-| `darwin.yml`  | Push, PR                  | aarch64-darwin nextest, package and release-archive build, with the archive's manifest, signature, and smoke checks. |
+| `pr.yml`      | Push, PR, release call    | `nix flake check`, the Cargo suite (clippy, nextest, `just deny`, tool tests), the wire check, Linux smoke.          |
+| `windows.yml` | Push, PR, release call    | Windows clippy, nextest, headless smoke, and package artifact.                                                       |
+| `darwin.yml`  | Push, PR, release call    | aarch64-darwin nextest, package and release-archive build, with the archive's manifest, signature, and smoke checks. |
 | `fuzz.yml`    | Push, PR, Nightly, Manual | Fuzz smoke on push and PR; the nightly long run with corpus minification.                                            |
 | `kani.yml`    | Weekly, PR, Manual        | Every Kani proof; on a PR, only when `dev/packages/kani/` changes.                                                   |
 | `bench.yml`   | PR, PR label change       | Instruction-count regression gate against the PR's base commit.                                                      |
-| `release.yml` | Tag (`v*`)                | The release gate on the tag's revision, then the release assets ([workspace.md](workspace.md) "Release gate").       |
+| `release.yml` | Tag (`v*`)                | Runs the three above as the tag's gate, then the release assets ([workspace.md](workspace.md) "Release gate").       |
 
 ### Frontend smoke test
 

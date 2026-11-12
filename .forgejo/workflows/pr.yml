@@ -5,14 +5,22 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # release.yml's gate on a tag's revision. Inside a call github.event_name
+  # is `workflow_call`, so the main-or-tag path tests for "not a pull request".
+  workflow_call:
+    inputs:
+      release:
+        type: boolean
+        default: false
 
 # Forgejo ignores GitHub's `permissions: id-token: write` (forgejo/forgejo#10481).
 enable-openid-connect: true
 
 # Superseding a PR commit cancels its runs; main's runs never cancel, since
-# publication is gated per revision on that revision's own jobs.
+# publication is gated per revision on that revision's own jobs. The group
+# is spelled out because github.workflow names the caller inside a call.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: pr-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -27,7 +35,7 @@ jobs:
   build:
     name: cargo build / clippy / test / deny
     runs-on: x86_64-linux
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.forgejo/actions/cargo-env
@@ -35,6 +43,8 @@ jobs:
       - run: nix develop -c just test
       - run: nix develop -c just deny
       - run: nix develop -c just publish-dry-run
+      - if: inputs.release
+        run: nix develop -c just package-tests
       - name: the portable cores of felis-client-core and felis-render-core still build for wasm32
         run: nix develop -c just check-portable
       # Here rather than beside each tool's own job: the release gate runs
@@ -47,13 +57,23 @@ jobs:
   proto-compat:
     # Not covered by flake-check's buf-breaking hook: nix flake check evaluates a
     # store copy without .git, so comparing two revisions requires a full clone.
+    # On a tag, compat.py compares with the newest published final release
+    # rather than with history: a tag can be pushed at any commit.
     name: wire schema is compatible with the base
     runs-on: x86_64-linux
     timeout-minutes: 45
+    env:
+      # Reading the release listing needs no credential while the
+      # repository is public; the run's own token keeps the gate working
+      # rather than failing closed if that ever changes.
+      FORGEJO_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      - name: the gate tells additive from breaking
+        if: inputs.release
+        run: nix develop -c pytest tools/proto/compat_test.py
       - name: buf breaking against the selected base
         env:
           PROTO_COMPAT_PR_BASE: ${{ github.event.pull_request.base.sha }}
@@ -89,12 +109,20 @@ jobs:
         run: |
           nix build .#felis --print-build-logs
           echo "SMOKE_BIN_DIR=$PWD/result/bin" >> "$GITHUB_ENV"
+      # Before the cache push: a tag's binary that misreports its revision
+      # must not reach the cache under the tag's name.
+      - name: the built binary reports the tag's own revision
+        if: inputs.release
+        run: |
+          ./result/bin/felis version --format json > "${RUNNER_TEMP:-/tmp}/version.json"
+          nix develop -c python3 tools/release/verify.py --identity \
+            "$GITHUB_REF_NAME" "$GITHUB_SHA" "${RUNNER_TEMP:-/tmp}/version.json"
       # At build time rather than behind the smoke: a revision the cache
       # lacks still builds to the same store path on a user's machine, so
       # holding the push back gates nothing (docs/explanation/testing.md
       # "The cache is a substituter; the release is the claim").
       - uses: ./.forgejo/actions/niks3-push
-        if: github.event_name == 'push'
+        if: github.event_name != 'pull_request'
       # --no-link so `result` stays the package the smoke drives. A tag
       # is where the archive is exercised; here it only has to assemble,
       # which is what a new runtime dependency breaks.
