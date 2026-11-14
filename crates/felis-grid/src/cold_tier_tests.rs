@@ -200,6 +200,11 @@ fn apply(op: &Op, p: &mut Parser, g: &mut Grid, tp: &mut Parser, twin: &mut Grid
             }
         }
         Op::WholeScreen(_) => {
+            // A UTF-8 sequence the previous op left unfinished prints
+            // its U+FFFD at the command's ESC, and that cell belongs to
+            // the text before the command: CAN ends it first.
+            drive(p, g, b"\x18");
+            drive(tp, twin, b"\x18");
             let before = history(g);
             let bytes = bytes_of(op, g.rows());
             drive(p, g, &bytes);

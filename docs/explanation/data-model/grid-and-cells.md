@@ -49,6 +49,15 @@ felis runs no upstream grapheme segmenter. The parser decodes UTF-8 and hands th
 grapheme. That incremental fold is what grapheme-cluster mode (DECSET `?2027`, reported permanently set, REQ-602)
 promises a running program: the cursor advances by grapheme cluster, not by scalar.
 
+What reaches a cell follows the Kitty text sizing protocol's "The algorithm for splitting text into cells"
+(<https://sw.kovidgoyal.net/kitty/text-sizing-protocol/>), the one published rule set that pins down every case a
+program measuring its own output needs. Each maximal subpart of ill-formed UTF-8 becomes one U+FFFD, so a byte that cuts
+a sequence short (printable ASCII, a control, the start of an escape sequence) yields the replacement and then itself;
+the code points the spec calls invalid (controls, U+FDD0..U+FDEF, U+xFFFE and U+xFFFF) are dropped before the fold sees
+them. Widths are `unicode-width`'s with the spec's two corrections a cell can observe: a regional indicator is two cells
+even without a partner, and a VS15 right after an emoji that defaults to emoji presentation narrows its cell to one,
+giving back the second cell and stepping a cursor parked after it back with it.
+
 Folding is decided per scalar against UAX#29, and the reason it is not simply "width 0 extends the previous cell" is
 that the width table disagrees with the segmentation rules in both directions. An emoji skin-tone modifier is GB9 Extend
 but scores width 2; the pictographic base after a ZWJ (GB11) and the second regional indicator of a flag (GB12/GB13) are
@@ -69,11 +78,13 @@ conjunct. Folding would need a width for the whole conjunct, and none fits: a ch
 `wcswidth`, past the two-cell cluster cap, and the terminals that fold disagree (Ghostty, Windows Terminal and WezTerm
 cap it at 2, Kitty uses 1).
 
-A bidi override is the one zero-width scalar that outlives a missing owner. At column 0 or after an empty cell the grid
-holds it and folds it into the next character printed, after that character's own scalar, and a regional indicator
-carrying it still pairs into a flag. Any control or escape sequence other than SGR, OSC, BEL or ST discards it first, as
-does a resize; an SOS or PM string, which the parser drops whole, does not
-([security-model.md](../security-model.md#text-rendering) "Text rendering").
+A bidi override is the one zero-width scalar that outlives a missing owner. The splitting algorithm discards a
+zero-width code point with no previous cell, and felis does so for every other one; an override instead is held for its
+marker (REQ-909). Either way it takes no cell and moves no cursor, so the layout is the spec's and only copied text
+differs. At column 0 or after an empty cell the grid holds it and folds it into the next character printed, after that
+character's own scalar, and a regional indicator carrying it still pairs into a flag. Any control or escape sequence
+other than SGR, OSC, BEL or ST discards it first, as does a resize; an SOS or PM string, which the parser drops whole,
+does not ([security-model.md](../security-model.md#text-rendering) "Text rendering").
 
 A cluster can also outgrow the cells its base reserved. A narrow base placed at width 1 (❤, U+2764; a keycap digit)
 becomes width-2 once a variation selector or keycap combiner requests emoji presentation, yet the base was already

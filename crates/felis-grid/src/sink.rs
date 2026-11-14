@@ -54,16 +54,22 @@ fn store_ascii_run(row: &mut [Cell], start: usize, occ: usize, bytes: &[u8], pen
 
 impl Sink for Grid {
     fn print(&mut self, byte: u8) {
-        if (0x20..=0x7E).contains(&byte) {
+        if (0x20..=0x7E).contains(&byte) && !self.utf8.is_pending() {
             self.put_grapheme(Grapheme::Ascii(byte));
             return;
         }
-        let mut produced: Option<char> = None;
+        // A byte that ends a malformed sequence yields its U+FFFD and
+        // then itself.
+        let mut produced = ['\0'; 2];
+        let mut n = 0;
         self.utf8.push(byte, |c| {
-            produced = Some(c);
+            if let Some(slot) = produced.get_mut(n) {
+                *slot = c;
+                n += 1;
+            }
         });
-        if let Some(c) = produced {
-            self.put_grapheme(Grapheme::Char(c));
+        for &c in &produced[..n] {
+            self.put_grapheme(grapheme_for_char(c));
         }
     }
 
@@ -75,6 +81,7 @@ impl Sink for Grid {
         if bytes.is_empty() {
             return;
         }
+        self.flush_utf8();
         // An ASCII base never joins a ZWJ sequence, and the fast loops do
         // not go through `put_grapheme`, which would disarm it.
         self.zwj_pending = false;
@@ -220,7 +227,7 @@ impl Sink for Grid {
     }
 
     fn execute(&mut self, byte: u8) {
-        self.utf8.reset();
+        self.flush_utf8();
         // xterm scopes REP to consecutive graphic prints.
         self.last_printed = None;
         // BEL leaves the cursor at the fold site, so a joiner stays armed
@@ -263,6 +270,7 @@ impl Sink for Grid {
         ignore: bool,
         final_byte: u8,
     ) {
+        self.flush_utf8();
         let p1 = params.first().copied().unwrap_or(0);
         let p2 = params.get(1).copied().unwrap_or(0);
         // REP scopes its anchor to consecutive graphic prints; REP itself
@@ -554,6 +562,7 @@ impl Sink for Grid {
     }
 
     fn esc_dispatch(&mut self, intermediates: &[u8], final_byte: u8) {
+        self.flush_utf8();
         self.last_printed = None;
         // ST closes the OSC that keeps an override pending.
         if !(intermediates.is_empty() && final_byte == b'\\') {
@@ -670,6 +679,7 @@ impl Sink for Grid {
     }
 
     fn dcs_hook(&mut self, _params: &[u16], intermediates: &[u8], ignore: bool, final_byte: u8) {
+        self.flush_utf8();
         self.last_printed = None;
         self.pending_bidi.discard();
         // REQ-903 exceed → discard: an overflowed DCS opener leaves
@@ -711,6 +721,7 @@ impl Sink for Grid {
     }
 
     fn osc_dispatch(&mut self, body: &[u8], end: OscEnd) {
+        self.flush_utf8();
         self.last_printed = None;
         // The payload arrives verbatim; each handler splits only the
         // fields its wire form defines, so a literal `;` past the last
@@ -816,6 +827,7 @@ impl Sink for Grid {
     }
 
     fn apc_dispatch(&mut self, body: &[u8]) {
+        self.flush_utf8();
         // A Kitty graphics placement can move the cursor.
         self.pending_bidi.discard();
         // Grid acts as relay (`docs/reference/protocols/kitty-graphics.md`);
@@ -855,6 +867,14 @@ impl Sink for Grid {
 }
 
 impl Grid {
+    /// Anything but a UTF-8 byte ends a held sequence, which is then a
+    /// maximal subpart of an ill-formed one.
+    fn flush_utf8(&mut self) {
+        if self.utf8.flush() {
+            self.put_grapheme(Grapheme::Char('\u{FFFD}'));
+        }
+    }
+
     /// The single writer for DECSET/DECRST state, shared with
     /// `xterm_restore_modes` so a restore runs the same side effects as
     /// a set; a second partial writer is how a restore silently misses

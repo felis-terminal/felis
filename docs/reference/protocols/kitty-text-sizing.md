@@ -58,6 +58,18 @@ cluster's own width) and `s` rows tall. An explicit `w` sizes each cluster, not 
 - A mark printed after the run joins its last character without widening its block; with `w = 0`, a mark that would
   change the character's width (VS16 after `❤`) is dropped instead.
 
+## Splitting text into cells
+
+The spec's "The algorithm for splitting text into cells" and "Unicode variation selectors" apply to all printed text,
+sized or not. The decoding rules (U+FFFD per maximal subpart, discarded invalid code points) are in
+[vt-compliance.md "Charset handling"](vt-compliance.md#charset-handling). Of the width rules:
+
+- A regional indicator is two cells, alone or as a flag pair.
+- U+FE0E right after an emoji that defaults to emoji presentation narrows a two-cell character to one cell, and a cursor
+  parked after it moves back one column.
+- U+FE0F after a narrow emoji widens it to two cells.
+- A sized character keeps its block under either selector ("Placing a sized character" above).
+
 ## Editing over a sized character
 
 Each character of a run owns its own block of cells; the rules below apply per character, so editing one character of

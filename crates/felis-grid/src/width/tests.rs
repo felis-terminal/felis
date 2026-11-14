@@ -2,16 +2,21 @@ use super::*;
 use crate::{Grapheme, Grid};
 
 #[test]
-fn grapheme_width_matches_unicode_width() {
+fn grapheme_width_matches_unicode_width_but_for_regional_indicators() {
     use unicode_width::UnicodeWidthChar;
     let g = Grid::new(1, 4);
     for cp in 0..=0x0010_FFFF_u32 {
         let Some(c) = char::from_u32(cp) else {
             continue;
         };
+        let expected = if is_regional_indicator(c) {
+            2
+        } else {
+            c.width().unwrap_or(0) as u8
+        };
         assert_eq!(
             g.screen.grapheme_width(Grapheme::Char(c)),
-            c.width().unwrap_or(0) as u8,
+            expected,
             "U+{cp:04X}"
         );
     }
@@ -35,8 +40,8 @@ fn bulk_width_matches_grapheme_width() {
             let is_fold_defer =
                 matches!(c, '\u{1F3FB}'..='\u{1F3FF}') || matches!(c, '\u{1F1E6}'..='\u{1F1FF}');
             assert!(
-                real == 0 || is_fold_defer,
-                "U+{cp:04X} deferred but not a fold candidate"
+                real == 0 || is_fold_defer || is_discarded_scalar(c),
+                "U+{cp:04X} deferred but neither a fold candidate nor discarded"
             );
         } else {
             assert_eq!(bulk, real, "U+{cp:04X} width diverges");

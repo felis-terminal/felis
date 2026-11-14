@@ -37,7 +37,7 @@ fn clusters_take_the_cells_the_grid_gives_them() {
     assert_eq!(laid_out("👍🏻"), [("👍🏻", 2)]);
     assert_eq!(laid_out("👩\u{200D}💻"), [("👩\u{200D}💻", 2)]);
     assert_eq!(laid_out("👩\u{200D}字"), [("👩\u{200D}", 2), ("字", 2)]);
-    assert_eq!(laid_out("🇯🇵🇯"), [("🇯🇵", 2), ("🇯", 1)]);
+    assert_eq!(laid_out("🇯🇵🇯"), [("🇯🇵", 2), ("🇯", 2)]);
     assert_eq!(laid_out("1\u{FE0F}\u{20E3}"), [("1\u{FE0F}\u{20E3}", 2)]);
 }
 

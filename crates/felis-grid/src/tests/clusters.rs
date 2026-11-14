@@ -274,10 +274,10 @@ fn two_flags_pair_independently() {
     assert_eq!(g.cursor().col, 4);
 }
 
+/// The text sizing spec's width classes give a regional indicator two
+/// cells even with no partner.
 #[test]
-fn odd_regional_indicator_stays_a_lone_letter() {
-    // A lone trailing indicator has no pair, so it stays its own
-    // width-1 cell.
+fn odd_regional_indicator_stays_a_lone_two_cell_letter() {
     let mut p = Parser::new();
     let mut g = Grid::new(1, 8);
     drive(&mut p, &mut g, "\u{1F1EF}\u{1F1F5}\u{1F1F0}".as_bytes());
@@ -286,7 +286,8 @@ fn odd_regional_indicator_stays_a_lone_letter() {
         "cell 0,0 should hold the flag cluster"
     );
     assert_eq!(g.cell(0, 2).unwrap().grapheme, Grapheme::Char('\u{1F1F0}'));
-    assert_eq!(g.cursor().col, 3);
+    assert_eq!(g.cell(0, 3).unwrap().grapheme, Grapheme::Spacer);
+    assert_eq!(g.cursor().col, 4);
 }
 
 #[test]
@@ -377,14 +378,92 @@ fn char_span_is_one_column_for_an_emoji_that_could_not_widen_at_the_edge() {
     assert_eq!(g.screen().char_span(0, 2), (2, 2));
 }
 
+/// The renderer picks a text face for the cluster from the VS15, so the
+/// selector must reach it inside the cluster, not as a lone cell; the
+/// text sizing spec's VS15 rule then gives the cluster one cell.
 #[test]
-fn a_vs15_after_a_wide_emoji_folds_into_one_wide_cluster() {
-    // The renderer picks a text face for the cluster from the VS15, so
-    // the selector must reach it inside the cluster, not as a lone cell.
-    let mut p = Parser::new();
-    let mut g = Grid::new(1, 8);
-    drive(&mut p, &mut g, "\u{2B50}\u{FE0E}x".as_bytes());
-    assert_eq!(cluster_at(&g, 0, 0), Some("\u{2B50}\u{FE0E}"));
+fn a_vs15_after_a_wide_emoji_narrows_its_cluster_to_one_cell() {
+    for (case, text, at) in [
+        ("listed text variant", "\u{231A}\u{FE0E}", 1),
+        ("no listed text variant", "\u{1F600}\u{FE0E}", 1),
+        ("a mark between", "\u{231A}\u{301}\u{FE0E}", 2),
+    ] {
+        let g = drive_new(1, 8, format!("{text}x").as_bytes());
+        assert_eq!(cluster_at(&g, 0, 0), Some(text), "{case}");
+        assert_eq!(
+            g.cell(0, at).unwrap().grapheme,
+            Grapheme::Ascii(b'x'),
+            "{case}"
+        );
+    }
+}
+
+#[test]
+fn a_vs15_at_the_right_edge_clears_the_pending_wrap() {
+    let g = drive_new(2, 4, "ab\u{231A}\u{FE0E}x".as_bytes());
+    assert_eq!(cluster_at(&g, 0, 2), Some("\u{231A}\u{FE0E}"));
+    assert_eq!(g.cell(0, 3).unwrap().grapheme, Grapheme::Ascii(b'x'));
+}
+
+#[test]
+fn a_vs15_after_a_regional_indicator_keeps_its_two_cells() {
+    let g = drive_new(1, 8, "\u{1F1EF}\u{FE0E}x".as_bytes());
     assert_eq!(g.cell(0, 1).unwrap().grapheme, Grapheme::Spacer);
     assert_eq!(g.cell(0, 2).unwrap().grapheme, Grapheme::Ascii(b'x'));
+}
+
+/// Each maximal subpart of ill-formed UTF-8 takes one U+FFFD cell,
+/// whether the byte ending it is printable, a control, or an escape,
+/// and whichever print loop carries it.
+#[test]
+fn each_ill_formed_subpart_takes_one_replacement_cell() {
+    for (case, chunks, replacement_at, col) in [
+        (
+            "ASCII after a truncated sequence",
+            &[&b"a\xffb\xe2\x82b"[..]][..],
+            3,
+            5,
+        ),
+        ("chunk split before the ASCII", &[b"a\xe2\x82", b"bc"], 1, 4),
+        ("control after", &[b"\xe2\x82\r"], 0, 0),
+        ("escape after", &[b"\xe2\x82\x1b[C"], 0, 2),
+        ("surrogate encoding", &[b"\xed\xa0\x80"], 2, 3),
+    ] {
+        let mut p = Parser::new();
+        let mut g = Grid::new(1, 16);
+        for chunk in chunks {
+            drive(&mut p, &mut g, chunk);
+        }
+        assert_eq!(g.cursor().col, col, "{case}");
+        assert_eq!(
+            g.cell(0, replacement_at).unwrap().grapheme,
+            Grapheme::Char('\u{FFFD}'),
+            "{case}"
+        );
+    }
+}
+
+#[test]
+fn invalid_code_points_are_discarded() {
+    for (case, text) in [
+        ("noncharacter in U+FDD0..U+FDEF", "a\u{FDD0}b"),
+        ("plane-end noncharacter", "a\u{1FFFE}b"),
+        ("BMP-end noncharacter", "a\u{FFFF}b"),
+        ("C1 control", "a\u{85}b"),
+    ] {
+        let g = drive_new(1, 8, text.as_bytes());
+        assert_eq!(
+            g.cell(0, 1).unwrap().grapheme,
+            Grapheme::Ascii(b'b'),
+            "{case}"
+        );
+        assert_eq!(g.cursor().col, 2, "{case}");
+    }
+}
+
+#[test]
+fn a_zero_width_mark_with_no_previous_cell_is_discarded() {
+    let g = drive_new(1, 8, "\u{301}x".as_bytes());
+    assert_eq!(g.cell(0, 0).unwrap().grapheme, Grapheme::Ascii(b'x'));
+    assert_eq!(g.cursor().col, 1);
 }
