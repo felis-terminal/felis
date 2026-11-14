@@ -238,6 +238,27 @@ impl UpgradeRefusal {
     }
 }
 
+impl crate::messages::NamedKey {
+    #[must_use]
+    pub const fn since_minor(self) -> u16 {
+        match crate::convert::named_key_enum_to_wire(self) {
+            Ok(wire) => wire.since_minor(),
+            Err(_) => 0,
+        }
+    }
+}
+
+impl crate::messages::KeyEvent {
+    /// What sending this event costs: the named key it carries.
+    #[must_use]
+    pub const fn requires(&self) -> Requires {
+        match self.key {
+            crate::messages::Key::Named(named) => Requires::new(named.since_minor(), "NamedKey"),
+            _ => Requires::BASE,
+        }
+    }
+}
+
 impl SendRefusal {
     #[must_use]
     pub const fn since_minor(self) -> u16 {
@@ -289,7 +310,16 @@ impl MinorGated for SessionToClientMsg {
 
 impl MinorGated for OpsToDaemonMsg {
     fn requires(&self) -> Requires {
-        arm_requires(self)
+        let arm = arm_requires(self);
+        match self {
+            Self::Send { steps, .. } | Self::SendAndWait { steps, .. } => {
+                steps.iter().fold(arm, |acc, step| match step {
+                    crate::messages::SendStep::Key(event) => acc.max(event.requires()),
+                    _ => acc,
+                })
+            }
+            _ => arm,
+        }
     }
 }
 
@@ -358,8 +388,17 @@ impl MinorGated for ImageMsg {
     }
 }
 
+impl MinorGated for crate::messages::InputMsg {
+    fn requires(&self) -> Requires {
+        let arm = arm_requires(self);
+        match self {
+            Self::Key(event) => arm.max(event.requires()),
+            _ => arm,
+        }
+    }
+}
+
 gated_by_arm!(
-    crate::messages::InputMsg,
     crate::messages::NotifyToClientMsg,
     crate::messages::RegionToClientMsg,
     crate::messages::SearchToClientMsg,
@@ -559,6 +598,39 @@ mod tests {
         assert_eq!(
             rows(Some(7)).requires(),
             Requires::new(3, "RegionRows.session")
+        );
+    }
+
+    /// A key the base schema has no name for costs minor 5, typed in a
+    /// window or sent as an ops step; one it names costs nothing.
+    #[test]
+    fn a_key_event_costs_the_minor_of_its_named_key() {
+        use crate::messages::{
+            InputMsg, Key, KeyEvent, KeyEventKind, KeyLocation, KeyMods, NamedKey, SendStep,
+        };
+
+        let event = |named| KeyEvent {
+            key: Key::Named(named),
+            text: None,
+            mods: KeyMods::empty(),
+            kind: KeyEventKind::Press,
+            location: KeyLocation::Standard,
+            unshifted: None,
+            base_layout: None,
+        };
+        let send = |named| OpsToDaemonMsg::Send {
+            id_prefix: "cafe".into(),
+            steps: vec![SendStep::Raw(b"x".to_vec()), SendStep::Key(event(named))],
+        };
+        assert_eq!(InputMsg::Key(event(NamedKey::Enter)).requires().minor, 0);
+        assert_eq!(send(NamedKey::Enter).requires().minor, 3);
+        assert_eq!(
+            InputMsg::Key(event(NamedKey::Menu)).requires(),
+            Requires::new(5, "NamedKey")
+        );
+        assert_eq!(
+            send(NamedKey::Shift).requires(),
+            Requires::new(5, "NamedKey")
         );
     }
 
@@ -764,6 +836,7 @@ mod tests {
         "UpgradeRefusal",
         "SendRefusal",
         "ConnectionMode",
+        "NamedKey",
     ];
 
     /// A value the schema dates past the base schema reaches an older

@@ -45,6 +45,12 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   physical key (Russian Ctrl+С is `CSI 1089::99;5u`). Legacy Ctrl+Shift on a symbol the ctrl table has no row for is
   `CSI u` (`CSI 51;6u`), and legacy Ctrl or Alt on another layout's key sends the US key's bytes, so Russian Ctrl+С is
   `0x03`.
+- **Keyboard**: Menu, Print Screen, Pause, the media and volume keys and the keypad's middle key with Num Lock off reach
+  programs: under the Kitty flags in their Kitty forms (Menu is `CSI 57363u`), and in legacy mode as `CSI u`, with Menu
+  as `CSI 29~` and keypad 5 as `CSI E`. F13–F35 are sent in legacy mode too, as `CSI 57376u` and on. Under disambiguate,
+  keypad keys that type no text take their own codes (keypad End is `CSI 57424u`, keypad Enter `CSI 57414u`), and
+  report-all escapes every keypad key and reports the modifier and lock keys, a modifier key by side with its press
+  setting its own bit (left Control is `CSI 57442;5u`).
 
 ## [0.5.1] - 2026-11-15
 

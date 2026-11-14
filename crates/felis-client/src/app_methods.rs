@@ -773,7 +773,7 @@ impl App {
         if self.pending_confirm.is_none() {
             return false;
         }
-        if *key == PressedKey::Modifier {
+        if matches!(key, PressedKey::Modifier(_)) {
             return true;
         }
         let Some(pending) = self.pending_confirm.take() else {
@@ -1583,7 +1583,12 @@ impl App {
     /// keyboard modes it owns. Viewport snapping matches
     /// [`Self::ferry_key_bytes`] for the events
     /// [`crate::input::snaps_to_live`] admits.
-    pub(crate) fn ferry_key(&self, event: felis_protocol::messages::KeyEvent) {
+    pub(crate) fn ferry_key(&self, mut event: felis_protocol::messages::KeyEvent) {
+        // A daemon predating the key's name would refuse the frame; to
+        // it the key is one with no encoding of its own, as it was.
+        if event.requires().minor > self.effective_minor {
+            event.key = felis_protocol::messages::Key::Other;
+        }
         // Composed text past the per-key cap is an IME commit wearing a
         // keystroke's clothes; admission would refuse it, so it takes
         // the path a commit already takes.

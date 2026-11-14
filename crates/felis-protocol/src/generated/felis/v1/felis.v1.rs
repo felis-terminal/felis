@@ -3838,7 +3838,8 @@ impl PromptJump {
     }
 }
 /// A named key felis bridges, F-keys excepted: an F-key is KeyId.function,
-/// which carries its index.
+/// which carries its index. A modifier key's side is its KeyLocation,
+/// and BEGIN is the keypad's middle key with Num Lock off.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum NamedKey {
@@ -3858,6 +3859,33 @@ pub enum NamedKey {
     ArrowDown = 13,
     ArrowLeft = 14,
     ArrowRight = 15,
+    CapsLock = 16,
+    ScrollLock = 17,
+    NumLock = 18,
+    PrintScreen = 19,
+    Pause = 20,
+    Menu = 21,
+    Begin = 22,
+    MediaPlay = 23,
+    MediaPause = 24,
+    MediaPlayPause = 25,
+    MediaStop = 26,
+    MediaFastForward = 27,
+    MediaRewind = 28,
+    MediaTrackNext = 29,
+    MediaTrackPrevious = 30,
+    MediaRecord = 31,
+    VolumeDown = 32,
+    VolumeUp = 33,
+    VolumeMute = 34,
+    Shift = 35,
+    Control = 36,
+    Alt = 37,
+    Super = 38,
+    Hyper = 39,
+    Meta = 40,
+    IsoLevel3Shift = 41,
+    IsoLevel5Shift = 42,
 }
 impl NamedKey {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -3882,6 +3910,33 @@ impl NamedKey {
             Self::ArrowDown => "NAMED_KEY_ARROW_DOWN",
             Self::ArrowLeft => "NAMED_KEY_ARROW_LEFT",
             Self::ArrowRight => "NAMED_KEY_ARROW_RIGHT",
+            Self::CapsLock => "NAMED_KEY_CAPS_LOCK",
+            Self::ScrollLock => "NAMED_KEY_SCROLL_LOCK",
+            Self::NumLock => "NAMED_KEY_NUM_LOCK",
+            Self::PrintScreen => "NAMED_KEY_PRINT_SCREEN",
+            Self::Pause => "NAMED_KEY_PAUSE",
+            Self::Menu => "NAMED_KEY_MENU",
+            Self::Begin => "NAMED_KEY_BEGIN",
+            Self::MediaPlay => "NAMED_KEY_MEDIA_PLAY",
+            Self::MediaPause => "NAMED_KEY_MEDIA_PAUSE",
+            Self::MediaPlayPause => "NAMED_KEY_MEDIA_PLAY_PAUSE",
+            Self::MediaStop => "NAMED_KEY_MEDIA_STOP",
+            Self::MediaFastForward => "NAMED_KEY_MEDIA_FAST_FORWARD",
+            Self::MediaRewind => "NAMED_KEY_MEDIA_REWIND",
+            Self::MediaTrackNext => "NAMED_KEY_MEDIA_TRACK_NEXT",
+            Self::MediaTrackPrevious => "NAMED_KEY_MEDIA_TRACK_PREVIOUS",
+            Self::MediaRecord => "NAMED_KEY_MEDIA_RECORD",
+            Self::VolumeDown => "NAMED_KEY_VOLUME_DOWN",
+            Self::VolumeUp => "NAMED_KEY_VOLUME_UP",
+            Self::VolumeMute => "NAMED_KEY_VOLUME_MUTE",
+            Self::Shift => "NAMED_KEY_SHIFT",
+            Self::Control => "NAMED_KEY_CONTROL",
+            Self::Alt => "NAMED_KEY_ALT",
+            Self::Super => "NAMED_KEY_SUPER",
+            Self::Hyper => "NAMED_KEY_HYPER",
+            Self::Meta => "NAMED_KEY_META",
+            Self::IsoLevel3Shift => "NAMED_KEY_ISO_LEVEL3_SHIFT",
+            Self::IsoLevel5Shift => "NAMED_KEY_ISO_LEVEL5_SHIFT",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -3903,12 +3958,40 @@ impl NamedKey {
             "NAMED_KEY_ARROW_DOWN" => Some(Self::ArrowDown),
             "NAMED_KEY_ARROW_LEFT" => Some(Self::ArrowLeft),
             "NAMED_KEY_ARROW_RIGHT" => Some(Self::ArrowRight),
+            "NAMED_KEY_CAPS_LOCK" => Some(Self::CapsLock),
+            "NAMED_KEY_SCROLL_LOCK" => Some(Self::ScrollLock),
+            "NAMED_KEY_NUM_LOCK" => Some(Self::NumLock),
+            "NAMED_KEY_PRINT_SCREEN" => Some(Self::PrintScreen),
+            "NAMED_KEY_PAUSE" => Some(Self::Pause),
+            "NAMED_KEY_MENU" => Some(Self::Menu),
+            "NAMED_KEY_BEGIN" => Some(Self::Begin),
+            "NAMED_KEY_MEDIA_PLAY" => Some(Self::MediaPlay),
+            "NAMED_KEY_MEDIA_PAUSE" => Some(Self::MediaPause),
+            "NAMED_KEY_MEDIA_PLAY_PAUSE" => Some(Self::MediaPlayPause),
+            "NAMED_KEY_MEDIA_STOP" => Some(Self::MediaStop),
+            "NAMED_KEY_MEDIA_FAST_FORWARD" => Some(Self::MediaFastForward),
+            "NAMED_KEY_MEDIA_REWIND" => Some(Self::MediaRewind),
+            "NAMED_KEY_MEDIA_TRACK_NEXT" => Some(Self::MediaTrackNext),
+            "NAMED_KEY_MEDIA_TRACK_PREVIOUS" => Some(Self::MediaTrackPrevious),
+            "NAMED_KEY_MEDIA_RECORD" => Some(Self::MediaRecord),
+            "NAMED_KEY_VOLUME_DOWN" => Some(Self::VolumeDown),
+            "NAMED_KEY_VOLUME_UP" => Some(Self::VolumeUp),
+            "NAMED_KEY_VOLUME_MUTE" => Some(Self::VolumeMute),
+            "NAMED_KEY_SHIFT" => Some(Self::Shift),
+            "NAMED_KEY_CONTROL" => Some(Self::Control),
+            "NAMED_KEY_ALT" => Some(Self::Alt),
+            "NAMED_KEY_SUPER" => Some(Self::Super),
+            "NAMED_KEY_HYPER" => Some(Self::Hyper),
+            "NAMED_KEY_META" => Some(Self::Meta),
+            "NAMED_KEY_ISO_LEVEL3_SHIFT" => Some(Self::IsoLevel3Shift),
+            "NAMED_KEY_ISO_LEVEL5_SHIFT" => Some(Self::IsoLevel5Shift),
             _ => None,
         }
     }
 }
-/// Where on the keyboard the key sits. Only NUMPAD changes the encoding
-/// (DECKPAM).
+/// Where on the keyboard the key sits. NUMPAD selects the keypad
+/// encodings (DECKPAM, the Kitty keypad codes); LEFT and RIGHT name a
+/// modifier key's side.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum KeyLocation {

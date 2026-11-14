@@ -1234,6 +1234,33 @@ pub const ADDITIONS: &[(&str, u16)] = &[
     ("NamedKey::ARROW_DOWN", 0),
     ("NamedKey::ARROW_LEFT", 0),
     ("NamedKey::ARROW_RIGHT", 0),
+    ("NamedKey::CAPS_LOCK", 5),
+    ("NamedKey::SCROLL_LOCK", 5),
+    ("NamedKey::NUM_LOCK", 5),
+    ("NamedKey::PRINT_SCREEN", 5),
+    ("NamedKey::PAUSE", 5),
+    ("NamedKey::MENU", 5),
+    ("NamedKey::BEGIN", 5),
+    ("NamedKey::MEDIA_PLAY", 5),
+    ("NamedKey::MEDIA_PAUSE", 5),
+    ("NamedKey::MEDIA_PLAY_PAUSE", 5),
+    ("NamedKey::MEDIA_STOP", 5),
+    ("NamedKey::MEDIA_FAST_FORWARD", 5),
+    ("NamedKey::MEDIA_REWIND", 5),
+    ("NamedKey::MEDIA_TRACK_NEXT", 5),
+    ("NamedKey::MEDIA_TRACK_PREVIOUS", 5),
+    ("NamedKey::MEDIA_RECORD", 5),
+    ("NamedKey::VOLUME_DOWN", 5),
+    ("NamedKey::VOLUME_UP", 5),
+    ("NamedKey::VOLUME_MUTE", 5),
+    ("NamedKey::SHIFT", 5),
+    ("NamedKey::CONTROL", 5),
+    ("NamedKey::ALT", 5),
+    ("NamedKey::SUPER", 5),
+    ("NamedKey::HYPER", 5),
+    ("NamedKey::META", 5),
+    ("NamedKey::ISO_LEVEL3_SHIFT", 5),
+    ("NamedKey::ISO_LEVEL5_SHIFT", 5),
     ("KeyLocation::STANDARD", 0),
     ("KeyLocation::LEFT", 0),
     ("KeyLocation::RIGHT", 0),
@@ -1278,7 +1305,7 @@ pub const ADDITIONS: &[(&str, u16)] = &[
     ("SessionField::ATTACHMENTS", 0),
 ];
 #[cfg(test)]
-pub(crate) const ANNOTATED_ENUMS: &[&str] = &["UpgradeRefusal", "SendRefusal"];
+pub(crate) const ANNOTATED_ENUMS: &[&str] = &["NamedKey", "UpgradeRefusal", "SendRefusal"];
 
 impl v1::ConnectionMode {
     /// The protocol minor that defined this value.
@@ -1496,6 +1523,33 @@ impl v1::NamedKey {
             | Self::ArrowDown
             | Self::ArrowLeft
             | Self::ArrowRight => 0,
+            Self::CapsLock
+            | Self::ScrollLock
+            | Self::NumLock
+            | Self::PrintScreen
+            | Self::Pause
+            | Self::Menu
+            | Self::Begin
+            | Self::MediaPlay
+            | Self::MediaPause
+            | Self::MediaPlayPause
+            | Self::MediaStop
+            | Self::MediaFastForward
+            | Self::MediaRewind
+            | Self::MediaTrackNext
+            | Self::MediaTrackPrevious
+            | Self::MediaRecord
+            | Self::VolumeDown
+            | Self::VolumeUp
+            | Self::VolumeMute
+            | Self::Shift
+            | Self::Control
+            | Self::Alt
+            | Self::Super
+            | Self::Hyper
+            | Self::Meta
+            | Self::IsoLevel3Shift
+            | Self::IsoLevel5Shift => 5,
         }
     }
 }

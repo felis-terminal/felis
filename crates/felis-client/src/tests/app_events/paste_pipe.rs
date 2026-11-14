@@ -38,6 +38,7 @@ fn press(key: PressedKey, text: Option<&str>, mods: Modifiers) -> KeyPress {
 fn a_bare_modifier_keeps_the_scrollback_view_and_a_typed_key_leaves_it() {
     let runtime = runtime();
     let mut harness = app_on(&runtime, absent_daemon("home"), 0xa);
+    harness.app.effective_minor = felis_protocol::preface::PROTOCOL_MINOR;
     let live = harness.app.conn_gen;
     harness.app.on_app_event(AppEvent::GridFrame {
         msg: GridMsg::ViewportState {
@@ -50,7 +51,11 @@ fn a_bare_modifier_keeps_the_scrollback_view_and_a_typed_key_leaves_it() {
     assert!(!harness.app.viewport_live());
     harness.sent();
 
-    let cmd = press(PressedKey::Modifier, None, Modifiers::SUPER);
+    let cmd = press(
+        PressedKey::Modifier(felis_client_core::NamedKey::Super),
+        None,
+        Modifiers::SUPER,
+    );
     harness.app.on_window_input(WindowInput::Key(cmd.clone()));
     assert_eq!(
         harness.sent(),
@@ -75,6 +80,24 @@ fn a_bare_modifier_keeps_the_scrollback_view_and_a_typed_key_leaves_it() {
     );
 }
 
+/// A daemon that predates a key's name would refuse the frame, so the
+/// key reaches it as one with no encoding of its own.
+#[test]
+fn a_key_an_older_daemon_cannot_name_goes_out_as_other() {
+    let runtime = runtime();
+    let mut harness = app_on(&runtime, absent_daemon("home"), 0xa);
+    harness.app.effective_minor = 4;
+    let menu = press(
+        PressedKey::Named(felis_client_core::NamedKey::Menu),
+        None,
+        Modifiers::empty(),
+    );
+    harness.app.on_window_input(WindowInput::Key(menu.clone()));
+    let mut expected = menu.to_wire();
+    expected.key = felis_protocol::messages::Key::Other;
+    assert_eq!(harness.sent(), vec![input_frame(&InputMsg::Key(expected))]);
+}
+
 /// Pins the confirmation bar's key contract (docs/explanation/input.md
 /// "Confirmation bar"): Shift on the way to `Y` leaves the question
 /// open, and `Y` sends the paste it held.
@@ -91,7 +114,11 @@ fn a_held_paste_waits_through_a_bare_modifier_and_goes_out_on_yes() {
         "nothing goes out before the answer"
     );
 
-    let shift = press(PressedKey::Modifier, None, Modifiers::SHIFT);
+    let shift = press(
+        PressedKey::Modifier(felis_client_core::NamedKey::Shift),
+        None,
+        Modifiers::SHIFT,
+    );
     harness.app.on_window_input(WindowInput::Key(shift));
     assert!(harness.app.pending_confirm.is_some());
     assert!(harness.sent().is_empty(), "the modifier is not forwarded");

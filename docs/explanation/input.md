@@ -64,6 +64,11 @@ Shift, and every legacy program reads them as C0 bytes, so a shifted character t
 kitty and xterm. Only a shifted character the table has no row for, which Ctrl would send unchanged and so lose the
 Ctrl, becomes `CSI u`.
 
+Functional keys with no legacy encoding (F13 and up, Print Screen, the media keys) are sent in legacy mode as their
+Kitty `CSI u` forms rather than dropped. The spec allows either; sending them is what kitty does, it lets a program bind
+such a key without opting into the protocol, and a private-use code cannot be mistaken for another key's legacy
+sequence. Modifier and lock keys stay silent outside report-all, as the spec reserves them for it.
+
 Literal bytes keep their own message. `InputMsg::KeyBytes` carries what a caller means byte for byte:
 `sessions send --raw`, the `send_string` action, and a committed IME string. A paste has its own arm, because the daemon
 frames it under `?2004`, and a file drop's path takes that arm too: the path is inserted text, and the bracketed-paste

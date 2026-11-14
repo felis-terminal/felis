@@ -7,8 +7,7 @@ use felis_client_core::{FKey, Modifiers, NamedKey};
 use winit::keyboard::{KeyCode, ModifiersState, NamedKey as WinitNamedKey, PhysicalKey};
 
 /// `None` for keys neither bridge recognizes. F1–F35 is the full band
-/// winit reports; adding media keys is an arm here plus
-/// `felis_client_core::keymap::NamedKey`.
+/// winit reports.
 pub(crate) const fn named(named: WinitNamedKey) -> Option<NamedKey> {
     Some(match named {
         WinitNamedKey::Enter => NamedKey::Enter,
@@ -61,6 +60,30 @@ pub(crate) const fn named(named: WinitNamedKey) -> Option<NamedKey> {
         WinitNamedKey::F33 => NamedKey::F(FKey::lit(33)),
         WinitNamedKey::F34 => NamedKey::F(FKey::lit(34)),
         WinitNamedKey::F35 => NamedKey::F(FKey::lit(35)),
+        WinitNamedKey::CapsLock => NamedKey::CapsLock,
+        WinitNamedKey::ScrollLock => NamedKey::ScrollLock,
+        WinitNamedKey::NumLock => NamedKey::NumLock,
+        WinitNamedKey::PrintScreen => NamedKey::PrintScreen,
+        WinitNamedKey::Pause => NamedKey::Pause,
+        WinitNamedKey::ContextMenu => NamedKey::Menu,
+        WinitNamedKey::MediaPlay => NamedKey::MediaPlay,
+        WinitNamedKey::MediaPause => NamedKey::MediaPause,
+        WinitNamedKey::MediaPlayPause => NamedKey::MediaPlayPause,
+        WinitNamedKey::MediaStop => NamedKey::MediaStop,
+        WinitNamedKey::MediaFastForward => NamedKey::MediaFastForward,
+        WinitNamedKey::MediaRewind => NamedKey::MediaRewind,
+        WinitNamedKey::MediaTrackNext => NamedKey::MediaTrackNext,
+        WinitNamedKey::MediaTrackPrevious => NamedKey::MediaTrackPrevious,
+        WinitNamedKey::MediaRecord => NamedKey::MediaRecord,
+        WinitNamedKey::AudioVolumeDown => NamedKey::VolumeDown,
+        WinitNamedKey::AudioVolumeUp => NamedKey::VolumeUp,
+        WinitNamedKey::AudioVolumeMute => NamedKey::VolumeMute,
+        WinitNamedKey::Shift => NamedKey::Shift,
+        WinitNamedKey::Control => NamedKey::Control,
+        WinitNamedKey::Alt => NamedKey::Alt,
+        WinitNamedKey::Super => NamedKey::Super,
+        WinitNamedKey::Hyper => NamedKey::Hyper,
+        WinitNamedKey::Meta => NamedKey::Meta,
         _ => return None,
     })
 }
@@ -188,8 +211,7 @@ mod tests {
 
     #[test]
     fn named_returns_none_outside_the_shared_subset() {
-        // Bare modifiers and media keys aren't in either bridge's set.
-        assert_eq!(named(WinitNamedKey::Shift), None);
+        assert_eq!(named(WinitNamedKey::BrowserBack), None);
     }
 
     #[test]

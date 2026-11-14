@@ -60,11 +60,24 @@ pub(crate) fn encode(
         KeyEventKind::Repeat if kitty_event_types => EVENT_REPEAT,
         KeyEventKind::Press | KeyEventKind::Repeat => EVENT_PRESS,
     };
-    if (kitty_csi_u_on || kitty_event_types)
-        && let Key::Named(named) = key
-        && let Some((number, final_byte)) = kitty_functional(*named)
+    // Kitty spec "Report all keys as escape codes": only that flag
+    // reports the modifier keys.
+    if let Key::Named(named) = key
+        && let Some((number, own_bit)) = modifier_key(*named, key_location)
     {
-        return Some(csi_functional(number, final_byte, mods, event));
+        if !kitty_all_as_escapes {
+            return None;
+        }
+        // Kitty spec "Modifiers": the press sets the key's own bit. The
+        // release keeps the bits the front-end reports, which still
+        // carry it while the other side's key is held.
+        let own_bit = if is_press { own_bit } else { 0 };
+        return Some(csi_functional(
+            number,
+            b'u',
+            mod_bits(mods) | own_bit,
+            event,
+        ));
     }
     // Associated text and alternate keycodes ride on presses only.
     let kitty_text = if is_press && kitty_kbd_flags.contains(KittyKbdFlags::REPORT_ASSOCIATED_TEXT)
@@ -73,6 +86,28 @@ pub(crate) fn encode(
     } else {
         None
     };
+    // Kitty spec "Disambiguate escape codes": a keypad key that types no
+    // text, or is held with a modifier that would escape its text, takes
+    // its own code; report-all escapes every keypad key.
+    if kitty_csi_u_on && let Some(number) = keypad_code(key, key_location) {
+        let types_text = matches!(key, Key::Character(_))
+            && !(mods.control_key() || mods.alt_key() || mods.super_key());
+        if kitty_all_as_escapes || !types_text {
+            return Some(kitty_kbd_csi_u(
+                number,
+                AlternateKeys::default(),
+                mods,
+                event,
+                kitty_text,
+            ));
+        }
+    }
+    if (kitty_csi_u_on || kitty_event_types)
+        && let Key::Named(named) = key
+        && let Some((number, final_byte)) = kitty_functional(*named)
+    {
+        return Some(csi_functional(number, final_byte, mod_bits(mods), event));
+    }
     let report_alternates =
         is_press && kitty_kbd_flags.contains(KittyKbdFlags::REPORT_ALTERNATE_KEYS);
     let kitty_alt = |keycode| {
@@ -265,7 +300,9 @@ fn win32_virtual_key(key: &Key) -> u16 {
             NamedKey::ArrowRight => 0x27,
             // Windows has no VK beyond F24.
             NamedKey::F(fk) if fk.get() <= 24 => 0x6F + u16::from(fk.get()),
-            NamedKey::F(_) => 0,
+            // Each record's `Cs` already carries the modifier state, and
+            // ConPTY has no use for a lock or media key of its own.
+            _ => 0,
         },
         Key::Character(s) => {
             let mut chars = s.chars();
@@ -621,15 +658,94 @@ fn kitty_functional(named: NamedKey) -> Option<(u32, u8)> {
             12 => (24, b'~'),
             n => (57363 + u32::from(n), b'u'),
         },
+        NamedKey::Begin => (1, b'E'),
+        NamedKey::PrintScreen => (57361, b'u'),
+        NamedKey::Pause => (57362, b'u'),
+        NamedKey::Menu => (57363, b'u'),
+        NamedKey::MediaPlay => (57428, b'u'),
+        NamedKey::MediaPause => (57429, b'u'),
+        NamedKey::MediaPlayPause => (57430, b'u'),
+        NamedKey::MediaStop => (57432, b'u'),
+        NamedKey::MediaFastForward => (57433, b'u'),
+        NamedKey::MediaRewind => (57434, b'u'),
+        NamedKey::MediaTrackNext => (57435, b'u'),
+        NamedKey::MediaTrackPrevious => (57436, b'u'),
+        NamedKey::MediaRecord => (57437, b'u'),
+        NamedKey::VolumeDown => (57438, b'u'),
+        NamedKey::VolumeUp => (57439, b'u'),
+        NamedKey::VolumeMute => (57440, b'u'),
         _ => return None,
+    })
+}
+
+/// A modifier or lock key's code in the Kitty spec's "Functional key
+/// definitions", and the modifier bit its own press sets. A lock key
+/// sets none: whether its press turns the lock on is not known here.
+const fn modifier_key(named: NamedKey, location: KeyLocation) -> Option<(u32, u32)> {
+    let side = if matches!(location, KeyLocation::Right) {
+        6
+    } else {
+        0
+    };
+    Some(match named {
+        NamedKey::Shift => (57441 + side, 1),
+        NamedKey::Control => (57442 + side, 4),
+        NamedKey::Alt => (57443 + side, 2),
+        NamedKey::Super => (57444 + side, 8),
+        NamedKey::Hyper => (57445 + side, 16),
+        NamedKey::Meta => (57446 + side, 32),
+        NamedKey::IsoLevel3Shift => (57453, 0),
+        NamedKey::IsoLevel5Shift => (57454, 0),
+        NamedKey::CapsLock => (57358, 0),
+        NamedKey::ScrollLock => (57359, 0),
+        NamedKey::NumLock => (57360, 0),
+        _ => return None,
+    })
+}
+
+/// A keypad key's own code in the Kitty spec's "Functional key
+/// definitions": the digit and operator keys as they type with Num Lock
+/// on, and the navigation keys they are with it off. The keypad's middle
+/// key with Num Lock off is [`NamedKey::Begin`], which has a functional
+/// form of its own.
+fn keypad_code(key: &Key, location: KeyLocation) -> Option<u32> {
+    if location != KeyLocation::Numpad {
+        return None;
+    }
+    Some(match key {
+        Key::Character(s) => match single_char(s)? {
+            c @ '0'..='9' => 57399 + (u32::from(c) - u32::from('0')),
+            '.' => 57409,
+            '/' => 57410,
+            '*' => 57411,
+            '-' => 57412,
+            '+' => 57413,
+            '=' => 57415,
+            ',' => 57416,
+            _ => return None,
+        },
+        Key::Named(named) => match named {
+            NamedKey::Enter => 57414,
+            NamedKey::ArrowLeft => 57417,
+            NamedKey::ArrowRight => 57418,
+            NamedKey::ArrowUp => 57419,
+            NamedKey::ArrowDown => 57420,
+            NamedKey::PageUp => 57421,
+            NamedKey::PageDown => 57422,
+            NamedKey::Home => 57423,
+            NamedKey::End => 57424,
+            NamedKey::Insert => 57425,
+            NamedKey::Delete => 57426,
+            _ => return None,
+        },
+        Key::Other => return None,
     })
 }
 
 /// `CSI number ; 1+modifiers[:event] final`, dropping the parameters a
 /// press without modifiers does not need, and the number too when it is
 /// the default `1`.
-fn csi_functional(number: u32, final_byte: u8, mods: Modifiers, event_type: u8) -> Vec<u8> {
-    let bits = mod_bits(mods);
+fn csi_functional(number: u32, final_byte: u8, bits: u32, event_type: u8) -> Vec<u8> {
     let params = bits != 0 || event_type != EVENT_PRESS;
     let mut out = Vec::with_capacity(12);
     out.extend_from_slice(b"\x1b[");
@@ -665,6 +781,7 @@ fn legacy_ss3_final(named: NamedKey, application_cursor: bool) -> Option<u8> {
         | NamedKey::ArrowLeft
         | NamedKey::End
         | NamedKey::Home
+        | NamedKey::Begin
             if application_cursor =>
         {
             kitty_functional(named).map(|(_, final_byte)| final_byte)
@@ -679,12 +796,19 @@ fn encode_named(named: NamedKey, mods: Modifiers, application_cursor: bool) -> O
     {
         return Some(vec![0x1b, b'O', final_byte]);
     }
-    // Legacy mode leaves F13 and above unsent: the Kitty spec lets a
-    // terminal ignore functional keys that have no legacy encoding.
-    if let Some((number, final_byte)) = kitty_functional(named)
-        && final_byte != b'u'
-    {
-        return Some(csi_functional(number, final_byte, mods, EVENT_PRESS));
+    // Kitty spec "Legacy functional keys": Menu is xterm's F16, and a key
+    // with no legacy encoding is sent as `CSI u`, as kitty does.
+    let functional = match named {
+        NamedKey::Menu => Some((29, b'~')),
+        named => kitty_functional(named),
+    };
+    if let Some((number, final_byte)) = functional {
+        return Some(csi_functional(
+            number,
+            final_byte,
+            mod_bits(mods),
+            EVENT_PRESS,
+        ));
     }
     let alt_prefix = mods.alt_key();
     // `CSI Z` is its own escape, not `\t` with a meta prefix.

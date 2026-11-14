@@ -61,9 +61,9 @@ pub(crate) struct KeyPress {
 pub(crate) enum PressedKey {
     Named(NamedKey),
     Character(String),
-    /// Shift, Control, Alt, Alt Gr, Super, Meta or Caps Lock alone, which
-    /// an open confirmation bar lets through on the way to `Y`.
-    Modifier,
+    /// A modifier key or Caps Lock alone, which an open confirmation bar
+    /// lets through on the way to `Y`.
+    Modifier(NamedKey),
     /// Dead keys, media keys and every named key felis does not bind.
     Other,
 }
@@ -79,9 +79,9 @@ impl KeyPress {
     pub(crate) fn to_wire(&self) -> KeyEvent {
         KeyEvent {
             key: match &self.key {
-                PressedKey::Named(named) => Key::Named(*named),
+                PressedKey::Named(named) | PressedKey::Modifier(named) => Key::Named(*named),
                 PressedKey::Character(s) => Key::Character(s.clone()),
-                PressedKey::Modifier | PressedKey::Other => Key::Other,
+                PressedKey::Other => Key::Other,
             },
             text: self.text.clone(),
             mods: self.mods,
