@@ -17,8 +17,8 @@ keys, and alternate / shift-printed forms.
 Legacy (xterm) mode is the default: it applies whenever no Kitty keyboard flag is active, which is the state of a fresh
 session until a program pushes flags. It encodes:
 
-- xterm-style for arrow / function keys,
-- modifier-encoded with CSI `;n` parameters,
+- xterm-style for arrow / function keys, modifier-encoded with CSI `;n` parameters, except that F3 with a modifier is
+  `CSI 13 ; n ~`, since `CSI 1 ; n R` reads as a cursor position report; F13 and above send nothing,
 - backspace as DEL (`0x7F`), and Ctrl+Backspace as BS (`0x08`),
 - Ctrl with a key whose produced character (Shift already applied) is one of those below as its C0 byte:
 
@@ -29,20 +29,26 @@ session until a program pushes flags. It encodes:
   | `[`, `3`         | `0x1B`        |
   | `\`, `4`         | `0x1C`        |
   | `]`, `5`         | `0x1D`        |
-  | `^`, `6`         | `0x1E`        |
+  | `^`, `6`, `~`    | `0x1E`        |
   | `_`, `/`, `7`    | `0x1F`        |
   | `?`, `8`         | `0x7F`        |
 
   Ctrl with any other character sends that character's text,
 
 - Alt as an `ESC` prefix: on a key producing a single ASCII character, `ESC` and that character with its case kept (with
-  Ctrl, `ESC` and the C0 byte above, or the character's text alone when the table has no row for it); on Enter, Tab,
-  Backspace, Escape and Space, `ESC` and the byte the key sends without Alt. Non-ASCII text goes out without the prefix,
-  Shift+Tab stays `CSI Z`, and Super held with Alt drops the prefix.
+  Ctrl, `ESC` and the C0 byte above, or `ESC` and the character itself when the table has no row for it); on Enter, Tab,
+  Backspace, Escape and Space, `ESC` and the bytes the key sends without Alt, so Shift+Alt+Tab is `ESC CSI Z`. Non-ASCII
+  text goes out without the prefix,
+- the modifier combinations these rules have no bytes for as `CSI keycode ; 1+modifiers u`, as in
+  [Kitty key events](#kitty-key-events): Super with any key producing a single character or with Enter, Tab, Backspace,
+  Escape and Space; Ctrl, Alt and Shift together on those five keys; and Ctrl+Shift on a letter, whose C0 byte would
+  hide the Shift. Shift on a symbol is already in the character the key produces, so Ctrl+Shift+3 is Ctrl with `#` and
+  sends `#`.
 
-The mode is driven by the running program, not by config. felis mirrors the flags on a per-session stack (depth in
-[Limits](#limits)). The active flag set is the top of the stack, and the empty stack of a fresh session resolves to no
-flags, which is what makes legacy the starting mode.
+The mode is driven by the running program, not by config. felis mirrors the flags on a stack per screen (depth in
+[Limits](#limits)): the main and alternate screens each keep their own, and every sequence below acts on the stack of
+the screen that is active. The active flag set is the top of that stack, and an empty stack resolves to no flags, which
+is what makes legacy the starting mode of a fresh session and of a first switch to the alternate screen.
 
 | Sequence          | Effect                                                                                                 |
 | ----------------- | ------------------------------------------------------------------------------------------------------ |
@@ -60,23 +66,37 @@ With bit 1 (disambiguate) or bit 8 (report all keys as escapes) active, a key th
 `CSI keycode[:alternate] ; 1+modifiers[:event] [; text] u`:
 
 - `keycode`: the legacy byte of the named keys that have one (Enter `13`, Tab `9`, Backspace `127`, Escape `27`, Space
-  `32`) or, for a key that produces a single ASCII character, that character's code lowercased. Arrows, function keys,
-  and the editing cluster keep their legacy `CSI` / `SS3` forms with the same `1+modifiers` parameter; felis emits no
-  Private Use Area functional-key codes.
+  `32`) or, for a key that produces a single character, that character's code lowercased: Ctrl+С on a Russian layout is
+  `1089`. Shift on a symbol stays in the code: Ctrl+Shift+3 on a US layout is `35`.
 - `alternate`: the shifted ASCII letter, present only for presses while bit 4 (alternate keys) is active.
 - `modifiers`: shift `1`, alt `2`, ctrl `4`, super `8`; the hyper, meta, caps-lock, and num-lock bits are never set. The
   parameter and everything after it are omitted when no modifier is held, the event is a press, and no text follows.
 - `event`: `2` for an auto-repeat, `3` for a release, omitted for a press. Both are sent only while bit 2 (event types)
-  is active; without it a repeat is reported as a press, and a release is not reported at all. Every other encoding
-  (legacy, `modifyOtherKeys`, DECKPAM) has no event field, so a repeat is a press there too. win32-input-mode reports
-  both edges through `Kd` and always sets `Rc` to `1`, since each repeat arrives as its own event.
+  is active; without it a repeat is reported as a press, and a release is not reported at all. A key that is not sent as
+  an escape sequence (typed text, and Enter, Tab and Backspace without modifiers) reports no release, and its repeat is
+  its bytes again. Every other encoding (legacy, `modifyOtherKeys`, DECKPAM) has no event field, so a repeat is a press
+  there too. win32-input-mode reports both edges through `Kd` and always sets `Rc` to `1`, since each repeat arrives as
+  its own event.
 - `text`: the codepoints of the OS-composed text, colon-separated, present only for presses while bit 16 (associated
-  text) is active.
+  text) is active, and left out when the text contains a control code.
 
-Bit 1 escapes Enter, Tab, Backspace, Space, and any key producing a single ASCII character when Ctrl, Alt, or Super is
-held, Ctrl+C included, and Escape even unmodified; an unmodified key keeps its legacy bytes. Bit 8 escapes every key.
+Bit 1 escapes Enter, Tab, Backspace, Space, and any key producing a single character when Ctrl, Alt, or Super is held,
+Ctrl+C included, and Escape even unmodified; an unmodified key keeps its legacy bytes. Bit 8 escapes every key.
 Shift+Enter, Shift+Backspace, and Shift+Space are escaped under bit 1 although shift alone would not require it,
 matching Kitty; Shift+Tab stays `CSI Z`.
+
+With bit 1, bit 2, or bit 8 active, arrows, Home, End, the editing cluster, and function keys take the functional forms
+of the Kitty spec, never `SS3` and whatever DECCKM says:
+
+| Key                                | Form                                     |
+| ---------------------------------- | ---------------------------------------- |
+| Up, Down, Right, Left, End, Home   | `CSI 1 ; m {A B C D F H}`                |
+| F1, F2, F4                         | `CSI 1 ; m {P Q S}`                      |
+| Insert, Delete, Page Up, Page Down | `CSI {2 3 5 6} ; m ~`                    |
+| F3, F5–F12                         | `CSI {13 15 17 18 19 20 21 23 24} ; m ~` |
+| F13–F35                            | `CSI {57376–57398} ; m u`                |
+
+`m` is `1+modifiers[:event]`; an unmodified press drops it, and with it the `1` before a letter final.
 
 ### xterm `modifyOtherKeys`
 
@@ -89,7 +109,7 @@ A key the level escapes is sent as `CSI keycode ; 1+modifiers u`, the Kitty key 
 - Level 1 escapes a key producing a single ASCII character when Super is held, or Ctrl with a character other than an
   ASCII letter, `@ [ \ ] ^ _` and Space, so Ctrl+2 and Ctrl+/ are escaped while Ctrl+C still sends `0x03`. Escape aside,
   a key held with Alt, and Enter, Tab, Backspace and Space under any modifier, keep their [legacy](#keyboard-encoding)
-  bytes.
+  encoding, which sends their combinations with Super as `CSI u` all the same.
 - Level 2 escapes every key held with Ctrl, Alt, or Super, and Shift+Enter, Shift+Backspace and Shift+Space besides;
   Shift+Tab stays `CSI Z`.
 - Escape held with Ctrl, Alt, or Super reports keycode 27 at either level; a bare key is never escaped, and arrows,
@@ -162,7 +182,7 @@ With `macos_option_as_alt = true`, Option is Alt for every key and the layout's 
 
 ## Limits
 
-- Kitty keyboard flag stack: 32 entries; a push against a full stack evicts the bottom entry.
+- Kitty keyboard flag stack: 32 entries per screen; a push against a full stack evicts the bottom entry.
 - A structured key event carries at most 32 UTF-8 bytes of character and 32 of composed text; a frame past either cap is
   refused at admission. Longer text is a paste, not a keystroke.
 
