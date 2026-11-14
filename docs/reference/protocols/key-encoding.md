@@ -94,7 +94,8 @@ With bit 1 (disambiguate) or bit 8 (report all keys as escapes) active, a key th
   there too. win32-input-mode reports both edges through `Kd` and always sets `Rc` to `1`, since each repeat arrives as
   its own event.
 - `text`: the codepoints of the OS-composed text, colon-separated, present only for presses while bit 16 (associated
-  text) is active, and left out when the text contains a control code.
+  text) is active, and left out when the text contains a control code or Ctrl turns the key into a control byte (the
+  "Legacy ctrl mapping" table: Ctrl+a, Ctrl+[, Ctrl+2, Ctrl+Space).
 
 Bit 1 escapes Enter, Tab, Backspace, Space, and any key producing a single character when Ctrl, Alt, or Super is held,
 Ctrl+C included, and Escape even unmodified; an unmodified key keeps its legacy bytes. Bit 8 escapes every key, and

@@ -82,7 +82,7 @@ pub(crate) fn encode(
     // Associated text and alternate keycodes ride on presses only.
     let kitty_text = if is_press && kitty_kbd_flags.contains(KittyKbdFlags::REPORT_ASSOCIATED_TEXT)
     {
-        text.filter(|t| !t.chars().any(char::is_control))
+        text.filter(|t| !t.chars().any(char::is_control) && !ctrl_makes_control(t, mods))
     } else {
         None
     };
@@ -857,6 +857,16 @@ fn ctrl_byte(s: &str) -> Option<u8> {
         '_' => Some(0x1f),
         _ => None,
     }
+}
+
+/// Kitty spec "Report associated text": the text is what the key types,
+/// and with Ctrl held an ASCII key types its legacy control byte, which
+/// the text must not carry, whatever text the front-end attached.
+fn ctrl_makes_control(text: &str, mods: Modifiers) -> bool {
+    mods.control_key()
+        && single_ascii(text)
+            .filter(|c| *c == b' ' || c.is_ascii_graphic())
+            .is_some_and(|c| legacy_ctrl_byte(c).is_ascii_control())
 }
 
 /// The Kitty spec's "Legacy ctrl mapping of ASCII keys": a key the table

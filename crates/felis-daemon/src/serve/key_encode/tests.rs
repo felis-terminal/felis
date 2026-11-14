@@ -1055,13 +1055,6 @@ fn release_of_text_path_key_is_dropped() {
 }
 
 #[test]
-fn ctrl_letter_with_associated_text_appends_codepoint() {
-    let flags = KittyKbdFlags::DISAMBIGUATE | KittyKbdFlags::REPORT_ASSOCIATED_TEXT;
-    let bytes = encode_no_app_cursor(&lit("a"), Some("a"), Modifiers::CONTROL, true, flags);
-    assert_eq!(bytes, Some(b"\x1b[97;5;97u".to_vec()));
-}
-
-#[test]
 fn esc_press_with_associated_text_off_omits_codepoints() {
     let bytes = encode_no_app_cursor(
         &Key::Named(NamedKey::Escape),
@@ -1155,6 +1148,32 @@ fn bit3_with_associated_text_appends_codepoints() {
     let flags = KittyKbdFlags::REPORT_ALL_AS_ESCAPES | KittyKbdFlags::REPORT_ASSOCIATED_TEXT;
     let bytes = encode_no_app_cursor(&lit("a"), Some("a"), Modifiers::empty(), true, flags);
     assert_eq!(bytes, Some(b"\x1b[97;1;97u".to_vec()));
+}
+
+#[test]
+fn associated_text_is_omitted_when_ctrl_makes_the_key_a_control_byte() {
+    let flags = KittyKbdFlags::REPORT_ALL_AS_ESCAPES | KittyKbdFlags::REPORT_ASSOCIATED_TEXT;
+    for (key, keycode) in [
+        ("a", "97"),
+        ("[", "91"),
+        ("2", "50"),
+        ("/", "47"),
+        (" ", "32"),
+    ] {
+        let bytes = encode_no_app_cursor(&lit(key), Some(key), Modifiers::CONTROL, true, flags);
+        assert_eq!(
+            bytes,
+            Some(format!("\x1b[{keycode};5u").into_bytes()),
+            "Ctrl+{key}"
+        );
+    }
+}
+
+#[test]
+fn associated_text_is_kept_for_a_ctrl_key_with_no_control_byte() {
+    let flags = KittyKbdFlags::REPORT_ALL_AS_ESCAPES | KittyKbdFlags::REPORT_ASSOCIATED_TEXT;
+    let bytes = encode_no_app_cursor(&lit("1"), Some("1"), Modifiers::CONTROL, true, flags);
+    assert_eq!(bytes, Some(b"\x1b[49;5;49u".to_vec()));
 }
 
 #[test]
