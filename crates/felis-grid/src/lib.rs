@@ -571,6 +571,9 @@ struct KittyKbd {
     /// Pushes past [`KITTY_KBD_STACK_LIMIT`] evict the bottom entry per
     /// the spec.
     stack: Vec<KittyKbdFlags>,
+    /// The other screen's stack, swapped with [`Self::stack`] on
+    /// alt-screen enter / leave: the Kitty spec keeps one per screen.
+    inactive_stack: Vec<KittyKbdFlags>,
     /// Active flags as last reported via `take_kitty_kbd_dirty`.
     last_emitted: KittyKbdFlags,
     dirty: bool,
@@ -1302,6 +1305,14 @@ impl Grid {
         }
     }
 
+    fn kitty_kbd_swap_screens(&mut self) {
+        std::mem::swap(
+            &mut self.kitty_kbd.stack,
+            &mut self.kitty_kbd.inactive_stack,
+        );
+        self.kitty_kbd_after_mutation();
+    }
+
     fn kitty_kbd_push(&mut self, raw: u16) {
         let flags = kitty_kbd_known_flags(raw);
         if self.kitty_kbd.stack.len() == KITTY_KBD_STACK_LIMIT {
@@ -1940,6 +1951,7 @@ impl Grid {
         });
         self.screen.refresh_has_sized_cells();
         std::mem::swap(&mut self.saved_cursor, &mut self.inactive_saved_cursor);
+        self.kitty_kbd_swap_screens();
         if let Some((alt_cursor, alt_pen)) = new_cursor_pen {
             self.screen.cursor = alt_cursor;
             self.pen = alt_pen;
@@ -2013,6 +2025,7 @@ impl Grid {
         self.pen = saved.pen;
         self.resync_pen_style();
         std::mem::swap(&mut self.saved_cursor, &mut self.inactive_saved_cursor);
+        self.kitty_kbd_swap_screens();
         let remap = self.reflow_restored_primary(target_rows, target_cols);
         self.screen.damage.mark_all();
         self.pty_effects

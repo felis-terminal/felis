@@ -132,7 +132,8 @@ impl Grid {
             "conformance level",
         )?;
         check(
-            self.kitty_kbd.stack.len() <= KITTY_KBD_STACK_LIMIT,
+            self.kitty_kbd.stack.len() <= KITTY_KBD_STACK_LIMIT
+                && self.kitty_kbd.inactive_stack.len() <= KITTY_KBD_STACK_LIMIT,
             "keyboard flag stack",
         )?;
         check(self.title_stack.len() <= TITLE_STACK_LIMIT, "title stack")?;

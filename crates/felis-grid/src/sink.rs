@@ -648,6 +648,7 @@ impl Sink for Grid {
                 let graphics_tracker = std::mem::take(&mut self.graphics_tracker);
                 let pty_effects = std::mem::take(&mut self.pty_effects);
                 let anchor_generation = self.viewport_anchor().generation;
+                let kitty_kbd_emitted = self.kitty_kbd.last_emitted;
                 *self = Self::new(rows, cols);
                 // A fresh grid restarts its counters; an anchor taken
                 // before the reset must not match one taken after it.
@@ -667,6 +668,8 @@ impl Sink for Grid {
                 self.capture_command_output = capture_command_output;
                 self.graphics_tracker = graphics_tracker;
                 self.pty_effects = pty_effects;
+                self.kitty_kbd.last_emitted = kitty_kbd_emitted;
+                self.kitty_kbd_after_mutation();
                 // The stashed primary placements go first, so the clear
                 // frees the images only they held.
                 self.pty_effects.push(PtyEffect::HardReset);
