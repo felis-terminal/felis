@@ -135,3 +135,11 @@ fn osc_22_query_answers_support_and_the_special_names() {
         ]
     );
 }
+
+#[test]
+fn osc_22_equals_prefix_sets_the_shape() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(1, 4);
+    drive(&mut p, &mut g, b"\x1b]22;=crosshair\x07");
+    assert_eq!(g.pointer_shape(), Some("crosshair"));
+}

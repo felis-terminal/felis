@@ -432,9 +432,10 @@ impl Grid {
                 }
             }
             Some(b'?') => self.respond_pointer_shape_query(&raw[1..]),
-            _ => {
+            first => {
+                let names = if first == Some(&b'=') { &raw[1..] } else { raw };
                 // An all-invalid spec keeps the current shape.
-                if let Some(shape) = Self::valid_pointer_shapes(raw).next() {
+                if let Some(shape) = Self::valid_pointer_shapes(names).next() {
                     self.set_pointer_shape(Some(shape.to_owned()));
                 }
             }
