@@ -143,3 +143,15 @@ fn osc_22_equals_prefix_sets_the_shape() {
     drive(&mut p, &mut g, b"\x1b]22;=crosshair\x07");
     assert_eq!(g.pointer_shape(), Some("crosshair"));
 }
+
+#[test]
+fn osc_22_current_reports_the_drawn_arrow_for_an_unknown_name() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(1, 4);
+    drive(
+        &mut p,
+        &mut g,
+        b"\x1b]22;no-such-shape\x07\x1b]22;?__current__\x1b\\",
+    );
+    assert_eq!(responses(&mut g), vec![b"\x1b]22;default\x1b\\".to_vec()]);
+}

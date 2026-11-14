@@ -466,7 +466,11 @@ impl Grid {
                 out.push(b',');
             }
             let answer = match name {
-                b"__current__" => self.pointer_shape().unwrap_or("0"),
+                b"__current__" => match self.pointer_shape() {
+                    None => "0",
+                    Some(shape) if crate::POINTER_SHAPE_NAMES.contains(&shape) => shape,
+                    Some(_) => "default",
+                },
                 b"__default__" | b"__grabbed__" => "default",
                 _ if crate::POINTER_SHAPE_NAMES
                     .iter()

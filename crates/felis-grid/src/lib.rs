@@ -592,8 +592,6 @@ pub(crate) enum SyncOutput {
     },
 }
 
-/// Implements [`Sink`] so the VT parser can drive it directly.
-#[allow(clippy::struct_excessive_bools)]
 /// The `OSC 22` shape names a window draws: kitty's list and the other CSS
 /// `cursor` keywords winit has an icon for.
 pub const POINTER_SHAPE_NAMES: &[&str] = &[
@@ -633,6 +631,8 @@ pub const POINTER_SHAPE_NAMES: &[&str] = &[
     "zoom-out",
 ];
 
+/// Implements [`Sink`] so the VT parser can drive it directly.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, PartialEq, Eq)]
 #[cfg_attr(
     feature = "state-dump",
