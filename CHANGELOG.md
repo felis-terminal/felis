@@ -10,6 +10,13 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-15
+
+Scripts can follow sessions with `felis sessions events` and map them to OS windows, windows can be named for
+window-manager rules, Kitty animation edits travel as changed rectangles, and text keeps its designed weight on every
+platform. A 0.4 daemon left running answers `felis sessions events` with `unsupported`: run `felis daemon upgrade` after
+installing.
+
 ### Added
 
 - **Keymap**: a `pipe` binding takes `source = "osc_52"`, the last `OSC 52` clipboard write a program sent to the
@@ -631,8 +638,9 @@ commands in place of `felis frontend <name>`.
 
 Initial release.
 
-[unreleased]: https://github.com/felis-terminal/felis/compare/v0.4.0...HEAD
-[0.4.0]: https://github.com/felis-terminal/felis/compare/v0.3.1...v0.4.0
+[unreleased]: https://github.com/felis-terminal/felis/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/felis-terminal/felis/compare/v0.4.1...v0.5.0
+[0.4.1]: https://github.com/felis-terminal/felis/compare/v0.3.1...v0.4.1
 [0.3.1]: https://github.com/felis-terminal/felis/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/felis-terminal/felis/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/felis-terminal/felis/compare/v0.1.4...v0.2.0
