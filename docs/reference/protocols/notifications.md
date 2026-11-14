@@ -72,13 +72,13 @@ OSC 99 ; i=<id> : p=? ; ST
 felis answers on the query-response channel with:
 
 ```
-OSC 99 ; i=<id> : p=? ; p=title,body : u=0,1,2 ST
+OSC 99 ; i=<id> : p=? ; p=title,body : u=0,1,2 : o=always ST
 ```
 
 Both blocks are protocol notation: `OSC` is `ESC ]`, `ST` is `ESC \`, and the spaces separate tokens rather than
 reaching the wire. `<id>` echoes the query's `i=`, or `0` when the query carried none; a query whose `i=` has a byte
-outside `[a-zA-Z0-9_+.-]` gets no reply. The reply advertises `title` and `body` payload types and urgency levels 0–2,
-and omits action buttons (`a`) and close reports (`c`).
+outside `[a-zA-Z0-9_+.-]` gets no reply. The reply advertises `title` and `body` payload types, urgency levels 0–2, and
+the `always` occasion the spec requires of every terminal, and omits action buttons (`a`) and close reports (`c`).
 
 ## Conformance scope
 

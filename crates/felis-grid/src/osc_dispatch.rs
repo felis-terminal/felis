@@ -413,8 +413,9 @@ impl Grid {
     }
 
     /// OSC 22, the kitty pointer-shape extension, including its stack
-    /// forms (`>` pushes, `<` pops). Ships the first well-formed keyword:
-    /// the client maps an unknown keyword to the default arrow.
+    /// forms (`>` pushes, `<` pops) and its `?` query. A set ships the
+    /// first well-formed keyword: the client maps an unknown keyword to the
+    /// default arrow.
     pub(crate) fn dispatch_osc_22(&mut self, name: Option<&[u8]>) {
         let raw = match name {
             None | Some(b"") => {
@@ -426,30 +427,58 @@ impl Grid {
         match raw.first() {
             Some(b'<') => self.pop_pointer_shape(),
             Some(b'>') => {
-                // A push with no valid shape leaves the stack alone.
-                if let Some(shape) = Self::first_valid_pointer_shape(&raw[1..]) {
-                    self.push_pointer_shape(Some(shape));
+                for shape in Self::valid_pointer_shapes(&raw[1..]) {
+                    self.push_pointer_shape(Some(shape.to_owned()));
                 }
             }
+            Some(b'?') => self.respond_pointer_shape_query(&raw[1..]),
             _ => {
                 // An all-invalid spec keeps the current shape.
-                if let Some(shape) = Self::first_valid_pointer_shape(raw) {
-                    self.set_pointer_shape(Some(shape));
+                if let Some(shape) = Self::valid_pointer_shapes(raw).next() {
+                    self.set_pointer_shape(Some(shape.to_owned()));
                 }
             }
         }
     }
 
-    fn first_valid_pointer_shape(spec: &[u8]) -> Option<String> {
-        spec.split(|b| *b == b',').find_map(|entry| {
+    fn valid_pointer_shapes(spec: &[u8]) -> impl Iterator<Item = &str> {
+        spec.split(|b| *b == b',').filter_map(|entry| {
             let valid = (1..=POINTER_SHAPE_MAX_LEN).contains(&entry.len())
-                && entry.iter().all(|b| b.is_ascii_lowercase() || *b == b'-');
+                && entry
+                    .iter()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_-".contains(b));
             if valid {
-                core::str::from_utf8(entry).ok().map(str::to_owned)
+                core::str::from_utf8(entry).ok()
             } else {
                 None
             }
         })
+    }
+
+    /// Answers each comma-separated name in order: `1` or `0` for whether a
+    /// window draws that shape, and for the special names the shape itself,
+    /// `0` standing for an empty stack.
+    fn respond_pointer_shape_query(&mut self, names: &[u8]) {
+        let mut out = b"\x1b]22;".to_vec();
+        for (i, name) in names.split(|b| *b == b',').enumerate() {
+            if i > 0 {
+                out.push(b',');
+            }
+            let answer = match name {
+                b"__current__" => self.pointer_shape().unwrap_or("0"),
+                b"__default__" | b"__grabbed__" => "default",
+                _ if crate::POINTER_SHAPE_NAMES
+                    .iter()
+                    .any(|n| n.as_bytes() == name) =>
+                {
+                    "1"
+                }
+                _ => "0",
+            };
+            out.extend_from_slice(answer.as_bytes());
+        }
+        out.extend_from_slice(b"\x1b\\");
+        self.enqueue_response(out);
     }
 
     /// OSC 99, kitty desktop notifications
@@ -580,7 +609,7 @@ impl Grid {
         let mut out = Vec::with_capacity(48);
         out.extend_from_slice(b"\x1b]99;i=");
         out.extend_from_slice(id.as_bytes());
-        out.extend_from_slice(b":p=?;p=title,body:u=0,1,2\x1b\\");
+        out.extend_from_slice(b":p=?;p=title,body:u=0,1,2:o=always\x1b\\");
         self.enqueue_response(out);
     }
 }

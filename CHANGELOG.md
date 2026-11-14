@@ -10,6 +10,12 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ## [Unreleased]
 
+### Fixed
+
+- **Protocols**: `OSC 22 ; ?` pointer-shape queries are answered, `OSC 22 ; >` pushes every listed shape, and the main
+  and alternate screens keep separate pointer-shape stacks, as the kitty pointer-shapes spec requires.
+- **Protocols**: the `OSC 99` capability reply advertises the `always` occasion (`o=always`).
+
 ## [0.5.1] - 2026-11-15
 
 The v0.5.0 tag failed its release gate and was never published; 0.5.1 is the 0.5 release.

@@ -137,7 +137,8 @@ impl Grid {
         )?;
         check(self.title_stack.len() <= TITLE_STACK_LIMIT, "title stack")?;
         check(
-            self.pointer_shape_stack.len() <= Self::POINTER_SHAPE_STACK_CAP,
+            self.pointer_shape_stack.len() <= Self::POINTER_SHAPE_STACK_CAP
+                && self.inactive_pointer_shape_stack.len() <= Self::POINTER_SHAPE_STACK_CAP,
             "pointer shape stack",
         )?;
         check(self.pending_bidi.check_restored(), "pending bidi controls")?;
