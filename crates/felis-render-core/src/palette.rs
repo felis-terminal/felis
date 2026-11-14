@@ -301,17 +301,18 @@ impl ThemeState {
     }
 }
 
-/// felis paints the background straight-alpha (the bg pass runs with
-/// blending off), so a `PostMultiplied` surface takes the theme as is.
-/// Only `bg` is touched: fg, cursor, and explicit cell backgrounds are
-/// alpha 1.0, for which premultiply is identity.
+/// A `PostMultiplied` surface takes the theme as is (the bg pass runs
+/// with blending off). Only `bg` is touched: everything else is alpha
+/// 1.0. The product is taken on the sRGB encoding the compositor blends
+/// in (`docs/explanation/rendering/pipeline.md` "`window.opacity` is
+/// background opacity").
 #[must_use]
 fn premultiplied_bg(mut theme: Theme, premultiply: bool) -> Theme {
     if premultiply {
         let a = theme.bg[3];
-        theme.bg[0] *= a;
-        theme.bg[1] *= a;
-        theme.bg[2] *= a;
+        for c in &mut theme.bg[..3] {
+            *c = srgb_to_linear(linear_to_srgb(*c) * a);
+        }
     }
     theme
 }
@@ -1101,7 +1102,7 @@ mod tests {
         );
         assert_eq!(
             ThemeState::new(&theme, true).clear_rgba(),
-            [0.125, 0.25, 0.375, 0.5]
+            premultiplied_bg(theme, true).bg
         );
     }
 
@@ -1121,13 +1122,59 @@ mod tests {
     }
 
     #[test]
-    fn premultiplied_bg_scales_rgb_by_alpha_only_when_asked() {
+    fn premultiplied_bg_leaves_the_theme_alone_when_the_surface_is_straight() {
         let theme = Theme {
             bg: [0.4, 0.6, 0.8, 0.5],
             ..Theme::default()
         };
         assert_eq!(premultiplied_bg(theme, false).bg, [0.4, 0.6, 0.8, 0.5]);
-        assert_eq!(premultiplied_bg(theme, true).bg, [0.2, 0.3, 0.4, 0.5]);
+    }
+
+    /// `#faf4ed` at 0.8 must store `0.8 × 250, 244, 237`, or the window
+    /// composites about 25 levels lighter than its configured color.
+    #[test]
+    fn premultiplied_bg_stores_the_scaled_srgb_bytes_of_a_light_theme() {
+        let theme = Theme {
+            bg: srgb_to_linear_rgba([0xfa, 0xf4, 0xed], 0.8),
+            ..Theme::default()
+        };
+        let bg = premultiplied_bg(theme, true).bg;
+        let stored = [bg[0], bg[1], bg[2]].map(linear_to_srgb_byte);
+        assert_eq!(stored, [200, 195, 190]);
+        assert_eq!(bg[3], 0.8);
+    }
+
+    #[test]
+    fn premultiplied_bg_is_black_when_transparent_and_the_color_when_opaque() {
+        let rgb = [0.0, 0.5, 1.0];
+        let with_alpha = |a| Theme {
+            bg: [rgb[0], rgb[1], rgb[2], a],
+            ..Theme::default()
+        };
+        assert_eq!(premultiplied_bg(with_alpha(0.0), true).bg, [0.0; 4]);
+        assert!(approx(
+            premultiplied_bg(with_alpha(1.0), true).bg,
+            [rgb[0], rgb[1], rgb[2], 1.0],
+        ));
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn premultiplied_bg_scales_the_srgb_encoding_by_alpha(
+            rgb in proptest::array::uniform3(0.0f32..=1.0),
+            a in 0.0f32..=1.0,
+        ) {
+            let theme = Theme { bg: [rgb[0], rgb[1], rgb[2], a], ..Theme::default() };
+            let bg = premultiplied_bg(theme, true).bg;
+            for (stored, straight) in bg[..3].iter().zip(rgb) {
+                let want = linear_to_srgb(straight) * a;
+                proptest::prop_assert!(
+                    (linear_to_srgb(*stored) - want).abs() < 1e-5,
+                    "{stored} encodes to {} instead of {want}", linear_to_srgb(*stored),
+                );
+            }
+            proptest::prop_assert_eq!(bg[3], a);
+        }
     }
 
     fn translucent_state() -> ThemeState {

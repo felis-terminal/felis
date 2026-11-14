@@ -17,6 +17,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - **Protocols**: the `OSC 99` capability reply advertises the `always` occasion (`o=always`).
 - **Text sizing**: text written into a lower row of a taller `OSC 66` character moves past the character on that row, as
   the Kitty text sizing protocol specifies, instead of erasing the character. Writing into its top row still erases it.
+- **Rendering**: on macOS and Wayland, a translucent window (`window.opacity` below `1.0`) shows its background at the
+  configured color and opacity instead of lighter: a light theme at `0.8` drew about 25 levels too light.
 
 ## [0.5.1] - 2026-11-15
 
