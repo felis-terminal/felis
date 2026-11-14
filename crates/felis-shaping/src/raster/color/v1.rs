@@ -7,9 +7,7 @@
 use skrifa::{
     GlyphId as FontGlyphId,
     font::glyph::{
-        color::{
-            Brush, ColorGlyph, ColorGlyphVersion, ColorStop, CompositeMode, Extend, PaintSink,
-        },
+        color::{Brush, ColorGlyph, ColorStop, ColorVersion, CompositeMode, Extend, PaintSink},
         outline::{DrawMemory, DrawOptions},
     },
     raw::types::{BoundingBox, Matrix},
@@ -37,7 +35,7 @@ pub(super) fn render(
     let face = &font.face;
     let color_glyph = face
         .color_glyphs()
-        .get_with_version(FontGlyphId::new(glyph), ColorGlyphVersion::ColrV1)?;
+        .get_with_version(FontGlyphId::new(glyph), ColorVersion::V1)?;
     let scale = px / f32::from(face.units_per_em().max(1));
     let base = Matrix::from_elements([scale, 0.0, 0.0, scale, 0.0, 0.0]);
     let Some([left, top, right, bottom]) = canvas_box(&color_glyph, base)? else {
@@ -878,7 +876,7 @@ fn to4(pixel: &[u8]) -> [u8; 4] {
 #[cfg(test)]
 #[cfg(not(windows))]
 mod tests {
-    use skrifa::{Tag, font::glyph::color::ColorGlyphVersion, raw::types::Matrix};
+    use skrifa::{Tag, font::glyph::color::ColorVersion, raw::types::Matrix};
 
     use crate::{
         FontStack, FontStyle, GlyphBitmap, GlyphPixels, ShapeCache, Shaper, StyleFaces,
@@ -990,7 +988,7 @@ mod tests {
             if font
                 .face
                 .color_glyphs()
-                .get_with_version(skrifa::GlyphId::new(glyph), ColorGlyphVersion::ColrV1)
+                .get_with_version(skrifa::GlyphId::new(glyph), ColorVersion::V1)
                 .is_none()
             {
                 continue;
@@ -1073,7 +1071,7 @@ mod tests {
             .color_glyphs()
             .get_with_version(
                 skrifa::GlyphId::new(glyph_named(&font, "clip_box_center")),
-                ColorGlyphVersion::ColrV1,
+                ColorVersion::V1,
             )
             .expect("a version 1 glyph");
         let base = Matrix::from_elements([0.05, 0.0, 0.0, 0.05, 0.0, 0.0]);

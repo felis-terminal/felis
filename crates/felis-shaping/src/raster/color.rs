@@ -4,7 +4,7 @@
 
 use skrifa::{
     GlyphId as FontGlyphId,
-    font::glyph::color::{Brush, ColorGlyphVersion, CompositeMode, PaintSink},
+    font::glyph::color::{Brush, ColorVersion, CompositeMode, PaintSink},
     raw::types::{BoundingBox, Matrix},
 };
 
@@ -89,8 +89,7 @@ fn render_v0(
     px: f32,
 ) -> Option<GlyphBitmap> {
     let colors = font.face.color_glyphs();
-    let color_glyph =
-        colors.get_with_version(FontGlyphId::new(glyph), ColorGlyphVersion::ColrV0)?;
+    let color_glyph = colors.get_with_version(FontGlyphId::new(glyph), ColorVersion::V0)?;
     let mut layers = Layers::default();
     color_glyph.paint(&mut layers).ok()?;
     if layers.unsupported {
