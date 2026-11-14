@@ -928,6 +928,8 @@ pub(crate) mod tests {
                 mods: KeyMods::empty(),
                 kind: KeyEventKind::Press,
                 location: KeyLocation::Standard,
+                unshifted: None,
+                base_layout: None,
             }),
             SendStep::Mouse(MouseEvent {
                 button: Some(MouseButton::Left),

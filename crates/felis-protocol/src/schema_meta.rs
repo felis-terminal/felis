@@ -1145,6 +1145,8 @@ pub const ADDITIONS: &[(&str, u16)] = &[
     ("Attachment.carrier", 3),
     ("Attachment.ssh_env", 3),
     ("Attachment.client_pid", 4),
+    ("InputKeyEvent.unshifted", 5),
+    ("InputKeyEvent.base_layout", 5),
     ("InputViewport.anchor", 2),
     ("GridViewportState.anchor", 2),
     ("ImageHeader.region", 4),

@@ -90,6 +90,8 @@ fn key_enter() -> KeyEventJson {
         mods: KeyMods::CTRL | KeyMods::SHIFT,
         kind: KeyEventKind::Press,
         location: KeyLocation::Standard,
+        unshifted: None,
+        base_layout: None,
     }
     .into()
 }

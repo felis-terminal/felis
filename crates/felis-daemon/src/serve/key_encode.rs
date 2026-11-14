@@ -9,6 +9,14 @@ use felis_protocol::messages::{Key, KeyEventKind, KeyLocation, KeyMods as Modifi
 pub(crate) use felis_protocol::kitty_keyboard::KittyKbdFlags;
 pub(crate) use felis_protocol::messages::ModifyOtherKeys;
 
+/// What the front-end reported of a [`Key::Character`] beyond the key
+/// itself (Kitty spec "Key codes").
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Alternates {
+    pub(crate) unshifted: Option<char>,
+    pub(crate) base_layout: Option<char>,
+}
+
 const EVENT_PRESS: u8 = 1;
 const EVENT_REPEAT: u8 = 2;
 const EVENT_RELEASE: u8 = 3;
@@ -27,6 +35,7 @@ pub(crate) fn encode(
     application_keypad: bool,
     win32_input_mode: bool,
     key_location: KeyLocation,
+    alternates: Alternates,
 ) -> Option<Vec<u8>> {
     let is_press = !matches!(kind, KeyEventKind::Release);
     // win32-input-mode (`?9001`) supersedes every VT / Kitty encoding:
@@ -64,20 +73,32 @@ pub(crate) fn encode(
     } else {
         None
     };
-    let kitty_alt = if is_press && kitty_kbd_flags.contains(KittyKbdFlags::REPORT_ALTERNATE_KEYS) {
-        kitty_alt_keycode(key, mods)
-    } else {
-        None
+    let report_alternates =
+        is_press && kitty_kbd_flags.contains(KittyKbdFlags::REPORT_ALTERNATE_KEYS);
+    let kitty_alt = |keycode| {
+        if report_alternates {
+            kitty_alternate_keys(key, mods, alternates, keycode)
+        } else {
+            AlternateKeys::default()
+        }
     };
-    if kitty_csi_u_on && let Some(keycode) = kitty_encoded_keycode(key, mods, kitty_all_as_escapes)
+    let unshifted = alternates.unshifted;
+    if kitty_csi_u_on
+        && let Some(keycode) = kitty_encoded_keycode(key, mods, unshifted, kitty_all_as_escapes)
     {
-        return Some(kitty_kbd_csi_u(keycode, kitty_alt, mods, event, kitty_text));
+        return Some(kitty_kbd_csi_u(
+            keycode,
+            kitty_alt(keycode),
+            mods,
+            event,
+            kitty_text,
+        ));
     }
     // Keys sent as legacy bytes have no event field to carry a release
     // or a repeat (Kitty spec "Event types").
     if !is_press {
-        return legacy_csi_u_keycode(key, mods)
-            .map(|keycode| kitty_kbd_csi_u(keycode, None, mods, event, None));
+        return legacy_csi_u_keycode(key, mods, unshifted)
+            .map(|keycode| kitty_kbd_csi_u(keycode, AlternateKeys::default(), mods, event, None));
     }
     // xterm modifyOtherKeys (REQ-506), superseded by any Kitty flag.
     // Unlike the Kitty path it never escapes a bare key, so plain Escape
@@ -87,7 +108,13 @@ pub(crate) fn encode(
         && let Some(keycode) =
             modify_other_keys_keycode(key, mods, modify_other_keys == ModifyOtherKeys::Level2)
     {
-        return Some(kitty_kbd_csi_u(keycode, None, mods, EVENT_PRESS, None));
+        return Some(kitty_kbd_csi_u(
+            keycode,
+            AlternateKeys::default(),
+            mods,
+            EVENT_PRESS,
+            None,
+        ));
     }
     // DECKPAM: unmodified numpad keys emit the SS3 finals terminfo's
     // application-keypad caps expect. Not under Kitty flags, which
@@ -103,8 +130,14 @@ pub(crate) fn encode(
     {
         return Some(vec![0x1b, b'O', final_byte]);
     }
-    if let Some(keycode) = legacy_csi_u_keycode(key, mods) {
-        return Some(kitty_kbd_csi_u(keycode, kitty_alt, mods, event, None));
+    if let Some(keycode) = legacy_csi_u_keycode(key, mods, unshifted) {
+        return Some(kitty_kbd_csi_u(
+            keycode,
+            kitty_alt(keycode),
+            mods,
+            event,
+            None,
+        ));
     }
     if let Key::Named(named) = key
         && let Some(bytes) = encode_named(*named, mods, application_cursor)
@@ -115,19 +148,28 @@ pub(crate) fn encode(
     // fabricating a meta or control form.
     if (mods.control_key() || mods.alt_key())
         && let Key::Character(s) = key
-        && let Some(c) = single_ascii(s).filter(u8::is_ascii_graphic)
     {
-        return Some(legacy_text_key(c, mods));
+        if let Some(c) = single_ascii(s).filter(u8::is_ascii_graphic) {
+            return Some(legacy_text_key(c, mods));
+        }
+        // Another layout's key reaches the program as the PC-101 key it
+        // sits on, so Ctrl+С on a Russian layout is still Ctrl+C.
+        if !mods.shift_key()
+            && let Some(base) = alternates.base_layout.filter(|&b| is_legacy_text_key(b))
+        {
+            return Some(legacy_text_key(base as u8, mods));
+        }
     }
     text.filter(|s| !s.is_empty())
         .map(|s| s.as_bytes().to_vec())
 }
 
 /// A modifier combination the legacy tables have no bytes for, sent as
-/// `CSI u` (Kitty spec "Legacy key event encoding"). A text key already
-/// carries Shift in its logical character, so Shift counts only with
-/// Ctrl on a letter, where the C0 byte would hide it.
-fn legacy_csi_u_keycode(key: &Key, mods: Modifiers) -> Option<u32> {
+/// `CSI u` (Kitty spec "Legacy key event encoding"). Shift counts only
+/// with Ctrl, where the C0 byte would hide it: on a letter, and on a
+/// shifted symbol the ctrl table has no row for
+/// (`docs/explanation/input.md` "Encoding").
+fn legacy_csi_u_keycode(key: &Key, mods: Modifiers, unshifted: Option<char>) -> Option<u32> {
     match key {
         Key::Named(named) => {
             let keycode = match named {
@@ -137,12 +179,19 @@ fn legacy_csi_u_keycode(key: &Key, mods: Modifiers) -> Option<u32> {
             let all_three = mods.control_key() && mods.alt_key() && mods.shift_key();
             (mods.super_key() || all_three).then_some(keycode)
         }
-        Key::Character(s) if mods.super_key() => character_keycode(s),
+        Key::Character(s) if mods.super_key() => text_keycode(s, unshifted),
         Key::Character(s) => {
-            let c = single_ascii(s).filter(u8::is_ascii_graphic)?;
-            let shift_unconsumed =
-                mods.shift_key() && mods.control_key() && c.is_ascii_alphabetic();
-            shift_unconsumed.then_some(u32::from(c.to_ascii_lowercase()))
+            if !(mods.shift_key() && mods.control_key()) {
+                return None;
+            }
+            let shifted = single_char(s)?;
+            if shifted.is_ascii_alphabetic() {
+                return Some(u32::from(shifted.to_ascii_lowercase()));
+            }
+            if shifted.is_ascii() && legacy_ctrl_byte(shifted as u8) != shifted as u8 {
+                return None;
+            }
+            unshifted.filter(|&u| is_legacy_text_key(u)).map(u32::from)
         }
         Key::Other => None,
     }
@@ -280,6 +329,21 @@ const fn legacy_kitty_keycode(named: NamedKey) -> Option<u32> {
     }
 }
 
+fn single_char(s: &str) -> Option<char> {
+    let mut chars = s.chars();
+    let c = chars.next()?;
+    chars.next().is_none().then_some(c)
+}
+
+/// The unshifted keys the Kitty spec's "Legacy text keys" algorithm
+/// covers.
+const fn is_legacy_text_key(c: char) -> bool {
+    matches!(
+        c,
+        'a'..='z' | '0'..='9' | '`' | '-' | '=' | '[' | ']' | '\\' | ';' | '\'' | ',' | '.' | '/'
+    )
+}
+
 fn single_ascii(s: &str) -> Option<u8> {
     let mut chars = s.chars();
     let c = chars.next()?;
@@ -328,9 +392,17 @@ fn application_keypad_ss3(key: &Key) -> Option<u8> {
     }
 }
 
+/// The alternate-key sub-fields after the key code (Kitty spec "Key
+/// codes"): the shifted key, then the base layout key.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct AlternateKeys {
+    shifted: Option<u32>,
+    base_layout: Option<u32>,
+}
+
 fn kitty_kbd_csi_u(
     keycode: u32,
-    alt: Option<u32>,
+    alt: AlternateKeys,
     mods: Modifiers,
     event_type: u8,
     text: Option<&str>,
@@ -342,9 +414,15 @@ fn kitty_kbd_csi_u(
     let mut out = Vec::with_capacity(16);
     out.extend_from_slice(b"\x1b[");
     out.extend_from_slice(keycode.to_string().as_bytes());
-    if let Some(a) = alt {
+    if alt.shifted.is_some() || alt.base_layout.is_some() {
         out.push(b':');
-        out.extend_from_slice(a.to_string().as_bytes());
+        if let Some(shifted) = alt.shifted {
+            out.extend_from_slice(shifted.to_string().as_bytes());
+        }
+        if let Some(base) = alt.base_layout {
+            out.push(b':');
+            out.extend_from_slice(base.to_string().as_bytes());
+        }
     }
     // The text param is positional after `;mod[:event]`, so the mod
     // slot must exist whenever text follows.
@@ -371,24 +449,47 @@ fn kitty_kbd_csi_u(
     out
 }
 
-/// ASCII letters only: a shifted symbol is layout-dependent (shift-1 is
-/// `!` on US, `+` on DE) and needs winit's physical-key surface.
-fn kitty_alt_keycode(key: &Key, mods: Modifiers) -> Option<u32> {
-    if !mods.shift_key() {
-        return None;
+/// The shifted key is the key's own character while Shift is held and
+/// that differs from the unshifted key; without the unshifted key, a
+/// shifted symbol cannot be told from an unshifted one (Shift+1 is `!`
+/// on US, `+` on DE), so only an ASCII letter reports one. The base
+/// layout key is left out where it is the key code itself.
+fn kitty_alternate_keys(
+    key: &Key,
+    mods: Modifiers,
+    alternates: Alternates,
+    keycode: u32,
+) -> AlternateKeys {
+    let Key::Character(s) = key else {
+        return AlternateKeys::default();
+    };
+    let shifted =
+        single_char(s)
+            .filter(|_| mods.shift_key())
+            .and_then(|c| match alternates.unshifted {
+                Some(u) => (c != u).then_some(u32::from(c)),
+                None => c
+                    .is_ascii_alphabetic()
+                    .then(|| u32::from(c.to_ascii_uppercase())),
+            });
+    let base_layout = alternates
+        .base_layout
+        .map(u32::from)
+        .filter(|&base| base != keycode);
+    AlternateKeys {
+        shifted,
+        base_layout,
     }
-    let Key::Character(s) = key else { return None };
-    let mut chars = s.chars();
-    let c = chars.next()?;
-    if chars.next().is_some() || !c.is_ascii_alphabetic() {
-        return None;
-    }
-    Some(u32::from(c.to_ascii_uppercase()))
 }
 
 /// `force_all` (bit 3, all-as-escapes) drops bit 0's requirement that a
 /// modifier be held.
-fn kitty_encoded_keycode(key: &Key, mods: Modifiers, force_all: bool) -> Option<u32> {
+fn kitty_encoded_keycode(
+    key: &Key,
+    mods: Modifiers,
+    unshifted: Option<char>,
+    force_all: bool,
+) -> Option<u32> {
     if matches!(key, Key::Named(NamedKey::Escape)) {
         return Some(27);
     }
@@ -409,7 +510,14 @@ fn kitty_encoded_keycode(key: &Key, mods: Modifiers, force_all: bool) -> Option<
         return None;
     }
     let Key::Character(s) = key else { return None };
-    character_keycode(s)
+    text_keycode(s, unshifted)
+}
+
+/// The Kitty key code of a single-character key: the unshifted key where
+/// the front-end reported it, else the character lowercased.
+fn text_keycode(s: &str, unshifted: Option<char>) -> Option<u32> {
+    let lowered = character_keycode(s)?;
+    Some(unshifted.map_or(lowered, u32::from))
 }
 
 /// A single-character key's code, lowercased where that stays one

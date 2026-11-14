@@ -41,6 +41,8 @@ async fn a_key_encodes_against_a_mode_the_subscriber_has_not_been_told_about() {
             mods: felis_protocol::messages::KeyMods::empty(),
             kind: KeyEventKind::Press,
             location: felis_protocol::messages::KeyLocation::Standard,
+            unshifted: None,
+            base_layout: None,
         }),
     );
     assert!(end.is_none(), "Key is a continuing input");
@@ -78,7 +80,7 @@ async fn a_key_encodes_against_a_mode_the_subscriber_has_not_been_told_about() {
 /// press otherwise.
 #[test]
 fn a_repeat_reports_kitty_event_type_two_only_while_event_types_are_on() {
-    use crate::serve::key_encode::{KittyKbdFlags, encode};
+    use crate::serve::key_encode::{Alternates, KittyKbdFlags, encode};
     use felis_protocol::messages::{Key, KeyLocation, KeyMods, ModifyOtherKeys};
 
     let at = |flags: KittyKbdFlags, kind: KeyEventKind| {
@@ -93,6 +95,7 @@ fn a_repeat_reports_kitty_event_type_two_only_while_event_types_are_on() {
             false,
             false,
             KeyLocation::Standard,
+            Alternates::default(),
         )
     };
     let with_events = KittyKbdFlags::DISAMBIGUATE | KittyKbdFlags::REPORT_EVENT_TYPES;
@@ -216,6 +219,8 @@ async fn an_unreported_key_release_does_not_transfer_ownership() {
             mods: felis_protocol::messages::KeyMods::empty(),
             kind: KeyEventKind::Release,
             location: felis_protocol::messages::KeyLocation::Standard,
+            unshifted: None,
+            base_layout: None,
         }),
     );
     assert_eq!(

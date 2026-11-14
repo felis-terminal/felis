@@ -37,13 +37,17 @@ session until a program pushes flags. It encodes:
 
 - Alt as an `ESC` prefix: on a key producing a single ASCII character, `ESC` and that character with its case kept (with
   Ctrl, `ESC` and the C0 byte above, or `ESC` and the character itself when the table has no row for it); on Enter, Tab,
-  Backspace, Escape and Space, `ESC` and the bytes the key sends without Alt, so Shift+Alt+Tab is `ESC CSI Z`. Non-ASCII
-  text goes out without the prefix,
+  Backspace, Escape and Space, `ESC` and the bytes the key sends without Alt, so Shift+Alt+Tab is `ESC CSI Z`,
+- Ctrl, Alt, or both, without Shift, on a key of another layout that produces a non-ASCII character as the key the same
+  physical key types on the PC-101 US layout, when the front-end reports it: Ctrl+С on a Russian layout is `0x03`, as
+  Ctrl+C is. Other non-ASCII text goes out as typed, without the `ESC` prefix,
 - the modifier combinations these rules have no bytes for as `CSI keycode ; 1+modifiers u`, as in
   [Kitty key events](#kitty-key-events): Super with any key producing a single character or with Enter, Tab, Backspace,
-  Escape and Space; Ctrl, Alt and Shift together on those five keys; and Ctrl+Shift on a letter, whose C0 byte would
-  hide the Shift. Shift on a symbol is already in the character the key produces, so Ctrl+Shift+3 is Ctrl with `#` and
-  sends `#`.
+  Escape and Space; Ctrl, Alt and Shift together on those five keys; Ctrl+Shift on a letter, whose C0 byte would hide
+  the Shift; and Ctrl+Shift on a symbol whose shifted character the table above has no row for, named by its unshifted
+  key, so Ctrl+Shift+3 on a US layout is `CSI 51 ; 6 u`. A shifted character the table has a row for keeps its C0 byte:
+  Ctrl+Shift+- is Ctrl with `_` and sends `0x1F`. Without the unshifted key from the front-end, Ctrl+Shift+3 is Ctrl
+  with `#` and sends `#`.
 
 The mode is driven by the running program, not by config. felis mirrors the flags on a stack per screen (depth in
 [Limits](#limits)): the main and alternate screens each keep their own, and every sequence below acts on the stack of
@@ -63,12 +67,17 @@ above `3` is ignored.
 ### Kitty key events
 
 With bit 1 (disambiguate) or bit 8 (report all keys as escapes) active, a key that needs escaping is sent as
-`CSI keycode[:alternate] ; 1+modifiers[:event] [; text] u`:
+`CSI keycode[:shifted[:base]] ; 1+modifiers[:event] [; text] u`:
 
 - `keycode`: the legacy byte of the named keys that have one (Enter `13`, Tab `9`, Backspace `127`, Escape `27`, Space
-  `32`) or, for a key that produces a single character, that character's code lowercased: Ctrl+С on a Russian layout is
-  `1089`. Shift on a symbol stays in the code: Ctrl+Shift+3 on a US layout is `35`.
-- `alternate`: the shifted ASCII letter, present only for presses while bit 4 (alternate keys) is active.
+  `32`) or, for a key that produces a single character, its unshifted key: Ctrl+Shift+3 on a US layout is `51`, and
+  Ctrl+С on a Russian layout is `1089`. Where the front-end does not report the unshifted key, it is the character's
+  code lowercased, so Shift on a symbol stays in the code (`35`).
+- `shifted` and `base`, the alternate keys, present only for presses while bit 4 (alternate keys) is active. `shifted`
+  is the character the key produces while Shift is held, when that differs from `keycode` (Ctrl+Shift+3 is `51:35`);
+  without the unshifted key it is reported for an ASCII letter only. `base` is what the same physical key types on the
+  PC-101 US layout, when the front-end reports it and it differs from `keycode`, after an empty `shifted` when there is
+  none: Ctrl+С on a Russian layout is `1089::99`, Ctrl+Shift+С `1089:1057:99`.
 - `modifiers`: shift `1`, alt `2`, ctrl `4`, super `8`; the hyper, meta, caps-lock, and num-lock bits are never set. The
   parameter and everything after it are omitted when no modifier is held, the event is a press, and no text follows.
 - `event`: `2` for an auto-repeat, `3` for a release, omitted for a press. Both are sent only while bit 2 (event types)
@@ -188,11 +197,11 @@ With `macos_option_as_alt = true`, Option is Alt for every key and the layout's 
 
 ### Report size
 
-An encoded key report is at most `MAX_KEY_REPORT_BYTES` = 280 bytes, which the daemon reserves against the session input
+An encoded key report is at most `MAX_KEY_REPORT_BYTES` = 288 bytes, which the daemon reserves against the session input
 budget before it encodes, because the running program can flip keyboard modes between admission and the write.
 
-The bound is the widest form the encoder can produce, which is the Kitty CSI u report carrying both an alternate keycode
-and associated text. A keycode is a Unicode scalar or a Kitty functional code, so at most 7 decimal digits; `ESC [`, the
-two keycodes and their `:`, the `;` and two-digit modifier field, the `:` and one-digit event type, the `;` opening the
-text field, and the final `u` come to 24 bytes. Each text codepoint costs at most 7 digits plus one `:`, and a codepoint
-occupies at least one UTF-8 byte, so the 32-byte text cap admits at most 32 of them: 24 + 8 x 32.
+The bound is the widest form the encoder can produce, which is the Kitty CSI u report carrying both alternate keys and
+associated text. A keycode is a Unicode scalar or a Kitty functional code, so at most 7 decimal digits; `ESC [`, the
+three keycodes and their two `:`, the `;` and two-digit modifier field, the `:` and one-digit event type, the `;`
+opening the text field, and the final `u` come to 32 bytes. Each text codepoint costs at most 7 digits plus one `:`, and
+a codepoint occupies at least one UTF-8 byte, so the 32-byte text cap admits at most 32 of them: 32 + 8 x 32.

@@ -110,6 +110,15 @@ json_dto! {
         pub mods: u8,
         pub kind: KeyEventKindJson,
         pub location: KeyLocationJson,
+        /// A `character` key's key with no modifier applied
+        /// (`felis.proto` `InputKeyEvent.unshifted`); absent when unknown.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub unshifted: Option<char>,
+        /// What the physical key types on the PC-101 US layout
+        /// (`felis.proto` `InputKeyEvent.base_layout`), which a browser
+        /// view can derive from `KeyboardEvent.code`; absent when unknown.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub base_layout: Option<char>,
     }
 
     #[non_exhaustive]
@@ -237,6 +246,8 @@ impl From<KeyEvent> for KeyEventJson {
             mods: event.mods.bits(),
             kind: event.kind.into(),
             location: event.location.into(),
+            unshifted: event.unshifted,
+            base_layout: event.base_layout,
         }
     }
 }
@@ -252,6 +263,8 @@ impl TryFrom<KeyEventJson> for KeyEvent {
                 .ok_or_else(|| DtoError::field("mods", "a reserved key modifier bit is set"))?,
             kind: event.kind.into(),
             location: event.location.into(),
+            unshifted: event.unshifted,
+            base_layout: event.base_layout,
         })
     }
 }
@@ -380,7 +393,33 @@ mod tests {
             mods,
             kind: KeyEventKindJson::Press,
             location: KeyLocationJson::Standard,
+            unshifted: None,
+            base_layout: None,
         }
+    }
+
+    #[test]
+    fn a_key_event_reads_its_alternate_keys_as_optional() {
+        let without: KeyEventJson = serde_json::from_value(serde_json::json!({
+            "key": { "key": "character", "text": "#" },
+            "text": "#", "mods": 3, "kind": "press", "location": "standard",
+        }))
+        .unwrap();
+        let without = KeyEvent::try_from(without).unwrap();
+        assert_eq!((without.unshifted, without.base_layout), (None, None));
+
+        let with = KeyEvent {
+            unshifted: Some('3'),
+            base_layout: Some('3'),
+            ..without
+        };
+        let json = serde_json::to_value(KeyEventJson::from(with.clone())).unwrap();
+        assert_eq!(
+            (&json["unshifted"], &json["base_layout"]),
+            (&"3".into(), &"3".into())
+        );
+        let back: KeyEventJson = serde_json::from_value(json).unwrap();
+        assert_eq!(KeyEvent::try_from(back).unwrap(), with);
     }
 
     fn mouse_event(mods: u8) -> MouseEventJson {

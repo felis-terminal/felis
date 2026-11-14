@@ -389,6 +389,8 @@ pub(super) fn chord_key_event(
         // A chord names no side of the keyboard, and DECKPAM is the only
         // encoding a location changes.
         location: KeyLocation::Standard,
+        unshifted: None,
+        base_layout: None,
     }
 }
 

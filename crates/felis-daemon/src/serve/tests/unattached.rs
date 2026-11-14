@@ -171,6 +171,8 @@ fn key(named: NamedKey) -> SendStep {
         mods: felis_protocol::messages::KeyMods::empty(),
         kind: KeyEventKind::Press,
         location: KeyLocation::Standard,
+        unshifted: None,
+        base_layout: None,
     })
 }
 

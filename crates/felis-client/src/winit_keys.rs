@@ -4,7 +4,7 @@
 //! recognize.
 
 use felis_client_core::{FKey, Modifiers, NamedKey};
-use winit::keyboard::{ModifiersState, NamedKey as WinitNamedKey};
+use winit::keyboard::{KeyCode, ModifiersState, NamedKey as WinitNamedKey, PhysicalKey};
 
 /// `None` for keys neither bridge recognizes. F1–F35 is the full band
 /// winit reports; adding media keys is an arm here plus
@@ -61,6 +61,64 @@ pub(crate) const fn named(named: WinitNamedKey) -> Option<NamedKey> {
         WinitNamedKey::F33 => NamedKey::F(FKey::lit(33)),
         WinitNamedKey::F34 => NamedKey::F(FKey::lit(34)),
         WinitNamedKey::F35 => NamedKey::F(FKey::lit(35)),
+        _ => return None,
+    })
+}
+
+/// What the physical key types unmodified on the PC-101 US layout: the
+/// Kitty keyboard protocol's base layout key.
+pub(crate) const fn base_layout(physical: PhysicalKey) -> Option<char> {
+    let PhysicalKey::Code(code) = physical else {
+        return None;
+    };
+    Some(match code {
+        KeyCode::Backquote => '`',
+        KeyCode::Digit1 => '1',
+        KeyCode::Digit2 => '2',
+        KeyCode::Digit3 => '3',
+        KeyCode::Digit4 => '4',
+        KeyCode::Digit5 => '5',
+        KeyCode::Digit6 => '6',
+        KeyCode::Digit7 => '7',
+        KeyCode::Digit8 => '8',
+        KeyCode::Digit9 => '9',
+        KeyCode::Digit0 => '0',
+        KeyCode::Minus => '-',
+        KeyCode::Equal => '=',
+        KeyCode::KeyQ => 'q',
+        KeyCode::KeyW => 'w',
+        KeyCode::KeyE => 'e',
+        KeyCode::KeyR => 'r',
+        KeyCode::KeyT => 't',
+        KeyCode::KeyY => 'y',
+        KeyCode::KeyU => 'u',
+        KeyCode::KeyI => 'i',
+        KeyCode::KeyO => 'o',
+        KeyCode::KeyP => 'p',
+        KeyCode::BracketLeft => '[',
+        KeyCode::BracketRight => ']',
+        KeyCode::Backslash => '\\',
+        KeyCode::KeyA => 'a',
+        KeyCode::KeyS => 's',
+        KeyCode::KeyD => 'd',
+        KeyCode::KeyF => 'f',
+        KeyCode::KeyG => 'g',
+        KeyCode::KeyH => 'h',
+        KeyCode::KeyJ => 'j',
+        KeyCode::KeyK => 'k',
+        KeyCode::KeyL => 'l',
+        KeyCode::Semicolon => ';',
+        KeyCode::Quote => '\'',
+        KeyCode::KeyZ => 'z',
+        KeyCode::KeyX => 'x',
+        KeyCode::KeyC => 'c',
+        KeyCode::KeyV => 'v',
+        KeyCode::KeyB => 'b',
+        KeyCode::KeyN => 'n',
+        KeyCode::KeyM => 'm',
+        KeyCode::Comma => ',',
+        KeyCode::Period => '.',
+        KeyCode::Slash => '/',
         _ => return None,
     })
 }
@@ -132,6 +190,18 @@ mod tests {
     fn named_returns_none_outside_the_shared_subset() {
         // Bare modifiers and media keys aren't in either bridge's set.
         assert_eq!(named(WinitNamedKey::Shift), None);
+    }
+
+    #[test]
+    fn base_layout_names_the_us_key_of_the_physical_key() {
+        assert_eq!(base_layout(PhysicalKey::Code(KeyCode::KeyC)), Some('c'));
+        assert_eq!(base_layout(PhysicalKey::Code(KeyCode::Digit3)), Some('3'));
+        assert_eq!(
+            base_layout(PhysicalKey::Code(KeyCode::BracketLeft)),
+            Some('[')
+        );
+        assert_eq!(base_layout(PhysicalKey::Code(KeyCode::Numpad3)), None);
+        assert_eq!(base_layout(PhysicalKey::Code(KeyCode::Enter)), None);
     }
 
     #[test]

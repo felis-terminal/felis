@@ -40,6 +40,11 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   `CSI` forms whatever the cursor-key mode, F13–F35 send their Kitty codes, and function and cursor keys report repeats
   and releases (`CSI 15;1:3~`). Associated text carries no control codes (Enter is `CSI 13u`), and Ctrl with a non-ASCII
   key such as Russian Ctrl+С is a key event (`CSI 1089;5u`) rather than the typed letter.
+- **Keyboard**: a Kitty key event names a shifted symbol by its unshifted key (Ctrl+Shift+3 is `CSI 51;6u`, not
+  `CSI 35;6u`), and with alternate keys it reports the shifted key and, on another layout, the US-layout key of the same
+  physical key (Russian Ctrl+С is `CSI 1089::99;5u`). Legacy Ctrl+Shift on a symbol the ctrl table has no row for is
+  `CSI u` (`CSI 51;6u`), and legacy Ctrl or Alt on another layout's key sends the US key's bytes, so Russian Ctrl+С is
+  `0x03`.
 
 ## [0.5.1] - 2026-11-15
 

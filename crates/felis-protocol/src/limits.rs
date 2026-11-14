@@ -40,11 +40,11 @@ pub const MAX_KEY_CHARACTER_BYTES: usize = 32;
 /// text of one keystroke.
 pub const MAX_KEY_TEXT_BYTES: usize = MAX_KEY_CHARACTER_BYTES;
 
-/// What a key report costs besides its text: `ESC [`, two 7-digit
+/// What a key report costs besides its text: `ESC [`, three 7-digit
 /// keycodes, a 2-digit modifier field, a 1-digit event type, their
 /// separators and the final `u`
 /// (`docs/reference/protocols/key-encoding.md` "Report size").
-const KEY_REPORT_FIXED_BYTES: usize = 2 + 7 + 1 + 7 + 1 + 2 + 1 + 1 + 1 + 1;
+const KEY_REPORT_FIXED_BYTES: usize = 2 + 7 + 1 + 7 + 1 + 7 + 1 + 2 + 1 + 1 + 1 + 1;
 
 /// Maximum bytes an encoded key report reaches in any keyboard mode,
 /// reserved whole per `InputMsg::Key` because the child can flip modes
