@@ -22,8 +22,8 @@ use skrifa::raw::types::NameId;
 use tracing::debug;
 
 use super::{
-    FaceProvider, FaceSource, MONOSPACE_FALLBACK_FAMILIES, ResolvedFace, SystemFallback,
-    ascii_is_fixed_pitch, closest_style, fallback_language,
+    FaceProvider, FaceSource, MONOSPACE_FALLBACK_FAMILIES, REGULAR_WEIGHT, ResolvedFace,
+    SystemFallback, ascii_is_fixed_pitch, closest_style, fallback_language,
 };
 use crate::{
     FaceStyle, FontBytes, FontStyle, InstalledFamily, ShapingError, WGHT, has_italic_token,
@@ -234,22 +234,28 @@ impl FaceProvider for CoreText {
         self.face(id).map(|face| face.family)
     }
 
-    fn system_fallback(&self, primary: usize) -> Option<Box<dyn SystemFallback>> {
-        let primary = self.face(primary)?.post_script;
-        Some(Box::new(Fallback::new(primary)))
+    fn system_fallback(&self, primary: Option<usize>) -> Option<Box<dyn SystemFallback>> {
+        let (base, base_is_primary) = match primary {
+            Some(id) => (id, true),
+            None => (self.default_monospace(REGULAR_WEIGHT).ok()?.0, false),
+        };
+        let base = self.face(base)?.post_script;
+        Some(Box::new(Fallback::new(base, base_is_primary)))
     }
 }
 
-/// `CTFontCreateForStringWithLanguage` against the primary, in the
+/// `CTFontCreateForStringWithLanguage` against `base`, in the
 /// language `fallback_language` picks from the user's list.
 struct Fallback {
-    primary: String,
+    base: String,
+    /// The base already missed, so its own answer is no answer.
+    base_is_primary: bool,
     language: Option<String>,
     files: Mutex<HashMap<PathBuf, Vec<FileFace>>>,
 }
 
 impl Fallback {
-    fn new(primary: String) -> Self {
+    fn new(base: String, base_is_primary: bool) -> Self {
         let language = CFLocale::preferred_languages().and_then(|languages| {
             // SAFETY: CoreFoundation documents the array as holding
             // language identifiers.
@@ -261,7 +267,8 @@ impl Fallback {
             fallback_language(&languages).map(str::to_owned)
         });
         let fallback = Self {
-            primary,
+            base,
+            base_is_primary,
             language,
             files: Mutex::default(),
         };
@@ -282,7 +289,7 @@ impl SystemFallback for Fallback {
         query: &str,
         style: FontStyle,
     ) -> Result<Option<ResolvedFace>, ShapingError> {
-        let name = CFString::from_str(&self.primary);
+        let name = CFString::from_str(&self.base);
         // SAFETY: a null matrix asks for the identity transform.
         let mut base = unsafe { CTFont::with_name(&name, 0.0, ptr::null()) };
         let mut traits = CTFontSymbolicTraits::empty();
@@ -319,7 +326,9 @@ impl SystemFallback for Fallback {
             );
             return Ok(None);
         };
-        if described.post_script == LAST_RESORT || described.post_script == base_name {
+        if described.post_script == LAST_RESORT
+            || (self.base_is_primary && described.post_script == base_name)
+        {
             return Ok(None);
         }
         let mut files = self.files.lock().unwrap_or_else(PoisonError::into_inner);
@@ -567,7 +576,8 @@ mod tests {
     fn the_language_picks_the_face_that_draws_han() {
         let answer = |language: &str| {
             let fallback = Fallback {
-                primary: "Menlo".to_owned(),
+                base: "Menlo".to_owned(),
+                base_is_primary: true,
                 language: Some(language.to_owned()),
                 files: Mutex::default(),
             };
@@ -596,5 +606,42 @@ mod tests {
             crate::metadata::attributes(font.bytes.as_ref().as_ref(), font.index).weight
         };
         assert!(weight(bold) > weight(FontStyle::REGULAR));
+    }
+
+    #[test]
+    fn a_primary_from_the_files_draws_what_it_lacks_from_the_host() {
+        let mut files = crate::provider::files::FileSet::default();
+        files
+            .add_file(crate::test_font_dir().join("opentype/MonaspaceArgon-Regular.otf"))
+            .expect("the pinned file reads");
+        let db = crate::provider::files_first::FilesFirst {
+            files,
+            system: CoreText::system(),
+        };
+        let stack = FontStack::auto_discover_in(
+            &db,
+            Some("Monaspace Argon"),
+            &[],
+            &[],
+            &StyleFaces::default(),
+        )
+        .expect("the file family loads");
+        for c in ['\u{0915}', '\u{6F22}'] {
+            assert!(!stack.primary().has_glyph(c));
+            let index = stack.resolve_styled_index(c, FontStyle::REGULAR);
+            assert_ne!(index, 0, "{c}");
+            assert!(stack.font_at(index, FontStyle::REGULAR).has_glyph(c), "{c}");
+        }
+    }
+
+    #[test]
+    fn a_base_that_is_not_the_primary_answers_for_what_it_covers() {
+        let fallback = Fallback::new("Menlo".to_owned(), false);
+        let face = fallback
+            .face_for("A", FontStyle::REGULAR)
+            .expect("the lookup runs")
+            .expect("Menlo answers for its own Latin");
+        let font = crate::Font::load_resolved(face).expect("the answer loads");
+        assert!(font.display_name().starts_with("Menlo"));
     }
 }

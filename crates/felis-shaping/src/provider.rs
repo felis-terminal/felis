@@ -15,6 +15,7 @@ pub(crate) mod coretext;
 #[cfg(windows)]
 pub(crate) mod directwrite;
 pub(crate) mod files;
+pub(crate) mod files_first;
 #[cfg(any(target_os = "linux", all(test, unix)))]
 pub(crate) mod fontconfig;
 
@@ -65,8 +66,10 @@ pub(crate) trait FaceProvider {
 
     /// The host's per-character fallback for a stack whose regular primary
     /// is `primary`, asked for what no ordered face covers; `None` makes
-    /// the stack discover fallbacks by family.
-    fn system_fallback(&self, _primary: Self::Id) -> Option<Box<dyn SystemFallback>> {
+    /// the stack discover fallbacks by family. A `primary` of `None` is no
+    /// host face, so the host is asked next to its default monospace face,
+    /// which may then answer.
+    fn system_fallback(&self, _primary: Option<Self::Id>) -> Option<Box<dyn SystemFallback>> {
         None
     }
 }
@@ -87,10 +90,6 @@ pub(crate) trait SystemFallback: Send + Sync {
 
 #[derive(Clone, Copy)]
 pub(crate) enum LoadedAs {
-    #[cfg_attr(
-        not(any(target_os = "linux", all(test, not(windows)))),
-        expect(dead_code, reason = "only the Linux fontconfig provider reads it")
-    )]
     Color(bool),
     /// The loader cannot parse it, so it must not take coverage from a
     /// face ranked after it.

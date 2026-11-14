@@ -46,6 +46,7 @@ struct WarmFonts {
 #[derive(Clone, PartialEq)]
 struct FontInputs {
     files: Vec<std::path::PathBuf>,
+    files_mode: crate::FontFilesMode,
     family: Option<String>,
     features: Vec<String>,
     fallbacks: Vec<FaceSpec>,
@@ -60,6 +61,7 @@ impl FontInputs {
     fn of(cfg: &RendererConfig) -> Self {
         Self {
             files: cfg.font_files.clone(),
+            files_mode: cfg.font_files_mode,
             family: cfg.font_family.clone(),
             features: cfg.font_features.clone(),
             fallbacks: cfg.font_fallbacks.clone(),
@@ -74,6 +76,7 @@ impl FontInputs {
     fn discover(&self) -> Result<FontStack, ShapingError> {
         crate::discover_fonts(
             &self.files,
+            self.files_mode,
             self.family.as_deref(),
             &self.features,
             &self.fallbacks,
@@ -236,6 +239,18 @@ mod tests {
             ..font_config()
         };
         assert!(warmup.take_fonts(&pinned).is_none());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn warm_font_stack_is_discarded_when_the_font_files_mode_changed() {
+        let started = font_config();
+        let mut warmup = fonts_only(&started);
+        let layered = RendererConfig {
+            font_files_mode: crate::FontFilesMode::BeforeSystem,
+            ..font_config()
+        };
+        assert!(warmup.take_fonts(&layered).is_none());
     }
 
     #[cfg(not(windows))]

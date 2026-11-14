@@ -95,6 +95,10 @@ impl FileSet {
         self.hinting = Some(hinting);
     }
 
+    pub(crate) fn is_fixed_pitch(&self, id: usize) -> bool {
+        self.faces.get(id).is_some_and(|face| face.monospace)
+    }
+
     /// The style and fixed pitch the set recorded for `id`.
     #[cfg(all(test, not(windows)))]
     pub(crate) fn traits_of(&self, id: usize) -> Option<(FaceStyle, bool)> {

@@ -47,7 +47,7 @@ use presentation::is_emoji_presentation;
 pub use provider::MONOSPACE_FALLBACK_FAMILIES;
 use provider::{
     BOLD_WEIGHT, FaceHinting, FaceProvider, FaceSource, LoadedAs, REGULAR_WEIGHT, ResolvedFace,
-    SystemFallback, files::FileSet,
+    SystemFallback, files::FileSet, files_first::FilesFirst,
 };
 
 #[derive(Debug, Error)]
@@ -1361,19 +1361,33 @@ impl FontStack {
         explicit_fallbacks: &[FaceSpec],
         styles: &StyleFaces<'_>,
     ) -> Result<Self, ShapingError> {
-        let mut set = FileSet::default();
-        for path in files {
-            let err = |detail: String| ShapingError::FontPath {
-                path: path.clone(),
-                detail,
-            };
-            let bytes = std::fs::read(path).map_err(|e| err(e.to_string()))?;
-            if !set.add(bytes) {
-                return Err(err("no font face in the file".to_owned()));
-            }
-        }
         Self::auto_discover_in(
-            &set,
+            &read_file_set(files)?,
+            primary_family,
+            primary_features,
+            explicit_fallbacks,
+            styles,
+        )
+    }
+
+    /// [`Self::auto_discover`] with the faces in `files` searched before
+    /// the system's: a family the files carry resolves there, every style
+    /// included, and any other family and every code point the named
+    /// faces miss go to the system's fonts. Read into memory as in
+    /// [`Self::discover_in_files`].
+    pub fn discover_files_first(
+        files: &[std::path::PathBuf],
+        primary_family: Option<&str>,
+        primary_features: &[String],
+        explicit_fallbacks: &[FaceSpec],
+        styles: &StyleFaces<'_>,
+    ) -> Result<Self, ShapingError> {
+        let layered = FilesFirst {
+            files: read_file_set(files)?,
+            system: system_provider()?,
+        };
+        Self::auto_discover_in(
+            &layered,
             primary_family,
             primary_features,
             explicit_fallbacks,
@@ -1461,7 +1475,7 @@ impl FontStack {
         }
         if let Some(cascaded) = append_cascade(&stack, db, requested, primary_features, &declared) {
             stack = cascaded;
-        } else if let Some(system) = db.system_fallback(regular_id) {
+        } else if let Some(system) = db.system_fallback(Some(regular_id)) {
             // CoreText draws a BMP private-use scalar, where the Nerd
             // glyphs live, from whichever face maps it (STIX Two Math, or
             // LastResort) rather than a Nerd font.
@@ -1877,6 +1891,21 @@ fn undeclared_views<P: FaceProvider>(
         return None;
     }
     fallback_views_of(db, id, family, UNSET_WEIGHTS).ok()
+}
+
+fn read_file_set(files: &[std::path::PathBuf]) -> Result<FileSet, ShapingError> {
+    let mut set = FileSet::default();
+    for path in files {
+        let err = |detail: String| ShapingError::FontPath {
+            path: path.clone(),
+            detail,
+        };
+        let bytes = std::fs::read(path).map_err(|e| err(e.to_string()))?;
+        if !set.add(bytes) {
+            return Err(err("no font face in the file".to_owned()));
+        }
+    }
+    Ok(set)
 }
 
 /// Pixel-space cell metrics at a given font size. `glyph_box` is the
