@@ -7,7 +7,7 @@
 use std::{io::Write as _, path::PathBuf};
 
 use felis_shaping::{GlyphPixels, rasterize_face_glyphs_unhinted};
-use skrifa::font::glyph::color::ColorGlyphVersion;
+use skrifa::font::glyph::color::ColorVersion;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
@@ -24,7 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for &glyph in &glyphs {
         let clip = face
             .color_glyphs()
-            .get_with_version(skrifa::GlyphId::new(glyph), ColorGlyphVersion::ColrV1)
+            .get_with_version(skrifa::GlyphId::new(glyph), ColorVersion::V1)
             .and_then(|g| g.clip_box());
         if let Some(b) = clip {
             let [x0, y0, x1, y1] = [b.x_min, b.y_min, b.x_max, b.y_max].map(|v| v * scale);

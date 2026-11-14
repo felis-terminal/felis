@@ -402,7 +402,7 @@ fn paint_glyphs(font: &Font) -> Vec<GlyphId> {
             paints
                 .get_with_version(
                     skrifa::GlyphId::new(glyph),
-                    skrifa::font::glyph::color::ColorGlyphVersion::ColrV1,
+                    skrifa::font::glyph::color::ColorVersion::V1,
                 )
                 .is_some()
         })
