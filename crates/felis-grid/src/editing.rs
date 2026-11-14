@@ -369,14 +369,17 @@ impl Grid {
                 }
             }
         }
+        if self.screen.has_sized_cells()
+            && self.span_holds_lower_block_row(self.screen.cursor.col, u16::from(width.max(1)))
+        {
+            self.fit_sized_block(1, u16::from(width.max(1)));
+        }
         // IRM runs before the wide-partner eviction so the eviction
         // only has to clean up partners the shift orphaned at the row
         // edges.
         if self.insert_mode {
             self.insert_mode_shift(self.screen.cursor.row, usize::from(width));
         }
-        // Erase any foreign sized run before printing: Kitty text-sizing spec
-        // requires erasing the entire character if any of its cells are modified.
         // Runs before `evict_wide_partner` so the latter sees post-clear cells.
         if self.screen.has_sized_cells() {
             self.clear_foreign_sized_run(self.screen.cursor.row, self.screen.cursor.col);

@@ -57,6 +57,11 @@ draws over its whole footprint, so a clipped block draws over cells the grid doe
 overwrites its lower rows. Discarding the whole run when it is wider than the screen was rejected too: REQ-406 names a
 character, and a run of characters that each fit is what producers write for a wide heading.
 
+Plain text meets a taller character's lower rows the same way, following the spec's "Wrapping and overwriting behavior":
+a write that reaches a lower row moves past the character on that row, whatever DECAWM says, while a write into its top
+row erases it. Erasing on any write was rejected: text that wraps beside a tall heading would wipe the heading out line
+by line, and the spec keeps the skip for exactly that case, wrapping in the presence of characters taller than one line.
+
 felis departs from kitty in two places. kitty treats a run with an explicit `w` as one block holding the whole text;
 felis gives each cluster its own `w · s` block, because one block holding several clusters needs a primary that the
 renderer shapes as a run. And kitty has no left/right margins: felis uses the edges a printed character uses, so sized

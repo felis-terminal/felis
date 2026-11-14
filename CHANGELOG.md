@@ -15,6 +15,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 - **Protocols**: `OSC 22 ; ?` pointer-shape queries are answered, `OSC 22 ; >` pushes every listed shape, and the main
   and alternate screens keep separate pointer-shape stacks, as the kitty pointer-shapes spec requires.
 - **Protocols**: the `OSC 99` capability reply advertises the `always` occasion (`o=always`).
+- **Text sizing**: text written into a lower row of a taller `OSC 66` character moves past the character on that row, as
+  the Kitty text sizing protocol specifies, instead of erasing the character. Writing into its top row still erases it.
 
 ## [0.5.1] - 2026-11-15
 

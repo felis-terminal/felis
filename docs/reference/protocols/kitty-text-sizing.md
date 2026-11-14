@@ -48,7 +48,7 @@ cluster's own width) and `s` rows tall. An explicit `w` sizes each cluster, not 
   not past it, otherwise the last column. With autowrap on, a character that does not fit before the right edge wraps to
   the next line, as printed text does, and so does one that would land on the lower rows of a taller character. With
   autowrap off, or when the character is wider than the margins, it is placed against the right edge, and erases what it
-  lands on.
+  lands on; a lower row of a taller character there still sends it to the next line.
 - A character taller than the rows left in the scroll region scrolls the region up by the difference (into scrollback
   when the region starts at the top of the primary screen). Below the scroll region the cursor moves up instead.
 - In insert mode the block's width is inserted on every row the block covers.
@@ -63,7 +63,10 @@ cluster's own width) and `s` rows tall. An explicit `w` sizes each cluster, not 
 Each character of a run owns its own block of cells; the rules below apply per character, so editing one character of
 `OSC 66 ; s=2 ; AB ST` leaves the other intact.
 
-- Writing into any cell of a character's block erases the whole block, including rows the write does not reach.
+- Writing into a cell of a block's top row erases the whole block, including rows the write does not reach.
+- Writing into a cell of a block's lower row moves the cursor past the block on that row first, whether or not autowrap
+  is on. With no room left before the right edge, the write goes to the start of the next line, scrolling the region as
+  a wrap does.
 - An erase that reaches any cell of a block (EL, ED, ECH, DECERA, and the selective DECSEL, DECSED, DECSERA) erases the
   whole block, unless that erase skips the block's cells as protected, in which case the block stays whole.
 - A cell move that would split a block taller than one row between its rows erases the block first: inserting or

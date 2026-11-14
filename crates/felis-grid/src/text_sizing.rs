@@ -189,8 +189,8 @@ impl Grid {
         }
     }
 
-    /// Kitty spec: any write into a multi-cell character erases the
-    /// whole character (the caller does the subsequent write).
+    /// A write into a block's top row erases the whole character; a
+    /// write never reaches its lower rows, which the cursor skips.
     fn clear_sized_run_at(&mut self, r: u16, c: u16) {
         if let Some(block) = self.sized_block_at(r, c) {
             self.clear_sized_block(block);
@@ -261,8 +261,9 @@ impl Grid {
 
     /// Moves the cursor to the block's primary: scroll or step up until
     /// `scale` rows fit, then take the first span on the row that holds
-    /// no lower row of another block, wrapping under DECAWM.
-    fn fit_sized_block(&mut self, scale: u16, block_w: u16) {
+    /// no lower row of another block, wrapping under DECAWM, and without
+    /// it only when the span against the right edge is blocked too.
+    pub(crate) fn fit_sized_block(&mut self, scale: u16, block_w: u16) {
         let wrap_allowed = self.autowrap && block_w <= self.sized_wrap_band();
         let mut stalled = false;
         let mut wraps: u32 = 0;
@@ -281,7 +282,11 @@ impl Grid {
                 self.screen.cursor.col = col;
                 return;
             }
-            if !wrap_ok || !self.sized_wrap(&mut stalled) {
+            let edge = (right + 1).saturating_sub(block_w);
+            let edge_blocked = block_w <= self.sized_wrap_band()
+                && wraps <= u32::from(self.screen.rows)
+                && self.free_sized_span(edge, block_w, right).is_none();
+            if !(wrap_ok || edge_blocked) || !self.sized_wrap(&mut stalled) {
                 break;
             }
             wraps += 1;
@@ -353,6 +358,12 @@ impl Grid {
             }
         }
         None
+    }
+
+    pub(crate) fn span_holds_lower_block_row(&self, col: u16, width: u16) -> bool {
+        let row = self.screen.cursor.row;
+        (col..col.saturating_add(width).min(self.screen.cols))
+            .any(|c| self.holds_lower_block_row(row, c))
     }
 
     fn holds_lower_block_row(&self, row: u16, col: u16) -> bool {
