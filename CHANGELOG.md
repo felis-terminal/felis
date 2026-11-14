@@ -10,7 +10,9 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ## [Unreleased]
 
-## [0.5.0] - 2026-11-15
+## [0.5.1] - 2026-11-15
+
+The v0.5.0 tag failed its release gate and was never published; 0.5.1 is the 0.5 release.
 
 Scripts can follow sessions with `felis sessions events` and map them to OS windows, windows can be named for
 window-manager rules, Kitty animation edits travel as changed rectangles, and text keeps its designed weight on every
@@ -638,8 +640,8 @@ commands in place of `felis frontend <name>`.
 
 Initial release.
 
-[unreleased]: https://github.com/felis-terminal/felis/compare/v0.5.0...HEAD
-[0.5.0]: https://github.com/felis-terminal/felis/compare/v0.4.1...v0.5.0
+[unreleased]: https://github.com/felis-terminal/felis/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/felis-terminal/felis/compare/v0.4.1...v0.5.1
 [0.4.1]: https://github.com/felis-terminal/felis/compare/v0.3.1...v0.4.1
 [0.3.1]: https://github.com/felis-terminal/felis/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/felis-terminal/felis/compare/v0.2.0...v0.3.0
