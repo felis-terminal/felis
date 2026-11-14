@@ -10,10 +10,10 @@ use felis_daemon::{SessionPool, serve::DaemonCaps, serve::default_session_factor
 #[cfg(unix)]
 use tempfile::TempDir;
 
-#[cfg(all(unix, feature = "daemon-tests"))]
-use crate::test_support::{daemon_running, daemon_with_pool};
 #[cfg(unix)]
-use crate::test_support::{private_dir, serve_bound};
+use crate::test_support::private_dir;
+#[cfg(all(unix, feature = "daemon-tests"))]
+use crate::test_support::{daemon_running, daemon_with_pool, serve_bound};
 #[cfg(unix)]
 use tokio::sync::Mutex;
 

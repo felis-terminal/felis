@@ -266,7 +266,9 @@ mod tests {
     use felis_protocol::preface::{DaemonPreface, PROTOCOL_MAJOR};
     use felis_transport::{Endpoint, local::Listener, preface::write_daemon_preface};
 
-    use crate::test_support::{private_dir, serve_bound};
+    use crate::test_support::private_dir;
+    #[cfg(feature = "daemon-tests")]
+    use crate::test_support::serve_bound;
 
     #[test]
     fn the_forked_daemon_is_not_handed_the_launchers_readiness_endpoint() {

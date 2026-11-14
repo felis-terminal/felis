@@ -3,6 +3,7 @@
 //! The ceilings are structural, far from today's figures; the table this
 //! prints (`just bench-mem`) carries the figures themselves.
 
+#![cfg(feature = "daemon-tests")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 #[path = "../benches/support/reattach.rs"]
