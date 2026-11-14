@@ -299,6 +299,7 @@ proptest! {
                     quiet: 2,
                     anonymous: false,
                     serial: 0,
+                    parent: None,
                 });
                 prop_assert!(replaced.is_none());
             }

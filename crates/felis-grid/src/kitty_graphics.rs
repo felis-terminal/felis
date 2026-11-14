@@ -91,11 +91,10 @@ pub fn control_u32(controls: &[(u8, Vec<u8>)], key: u8) -> Option<u32> {
     number(control(controls, key))
 }
 
-/// Whether kitty moves the cursor past the placement a completed command
-/// makes (`graphics.c` `handle_put_command`): `a=T` and `a=p` do unless
-/// `C=1` asks not to or `U=1` makes the placement virtual. The grid stops
-/// its parse on exactly these commands and the dispatcher moves the
-/// cursor on exactly these, so text after the image lands beside it.
+/// Whether kitty's `handle_put_command` moves the cursor: `a=T` and
+/// `a=p` do, without `C=1`, `U=1` or a non-zero `P=`. The grid stops its
+/// parse and the dispatcher moves the cursor on exactly these, so text
+/// after the image lands beside it.
 #[must_use]
 pub fn moves_cursor(controls: &[(u8, Vec<u8>)]) -> bool {
     StopKeys::read(controls).moves_cursor()
@@ -128,6 +127,7 @@ pub struct StopKeys<'a> {
     e: Option<&'a [u8]>,
     c: Option<&'a [u8]>,
     u: Option<&'a [u8]>,
+    parent: Option<&'a [u8]>,
 }
 
 impl<'a> StopKeys<'a> {
@@ -145,6 +145,7 @@ impl<'a> StopKeys<'a> {
                 b'e' => &mut keys.e,
                 b'C' => &mut keys.c,
                 b'U' => &mut keys.u,
+                b'P' => &mut keys.parent,
                 _ => continue,
             };
             *slot = Some(value);
@@ -158,6 +159,7 @@ impl<'a> StopKeys<'a> {
         matches!(self.a, Some(b"T" | b"p"))
             && number(self.c) != Some(1)
             && number(self.u) != Some(1)
+            && number(self.parent).is_none_or(|p| p == 0)
     }
 
     /// [`offloads_decode`].
@@ -243,6 +245,12 @@ pub enum ErrorCode {
     /// `EBADF`: a file or shared-memory object that cannot be opened or
     /// read.
     IoError,
+    /// `ENOPARENT`: a relative placement's parent does not exist.
+    NoParent,
+    /// `ECYCLE`: a relative placement's parent chain would lead back to it.
+    Cycle,
+    /// `ETOODEEP`: a chain of relative placements past the depth limit.
+    TooDeep,
 }
 
 impl ErrorCode {
@@ -255,6 +263,9 @@ impl ErrorCode {
             Self::NoData => "ENODATA",
             Self::BadImage => "EBADPNG",
             Self::IoError => "EBADF",
+            Self::NoParent => "ENOPARENT",
+            Self::Cycle => "ECYCLE",
+            Self::TooDeep => "ETOODEEP",
         }
     }
 }
@@ -630,6 +641,8 @@ mod tests {
             (b"Ga=T,C=01", false),
             (b"Ga=p,U=01", false),
             (b"Ga=T,C=1,C=0", true),
+            (b"Ga=p,P=1,C=0", false),
+            (b"Ga=T,P=0", true),
             (b"Ga=t", false),
             (b"G", false),
         ] {

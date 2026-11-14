@@ -85,6 +85,7 @@ Image data is retained until:
 - The producer transmits again under the same ID: the new data replaces it, and its placements are deleted as in kitty.
   The image draws nothing from the start of the new transmission until it completes.
 - It was sent without `i=` or `I=` and has no placement left after a delete or a scroll; nothing could place it again.
+- Its last placement was a relative placement that left with its parent ([Relative placements](#relative-placements)).
 - A screen clear leaves it without a placement (see below).
 - A later transmission needs room under the session byte cap and evicts it, placements included (see [Limits](#limits)).
 - The session is destroyed.
@@ -154,7 +155,8 @@ include `a=t/T/p/q`, `a=d` (basic and extended deletion), and `a=a/f/c` animatio
   row, one column right of it. A column past the right edge wraps to column 0 one row further down; a row past the
   bottom margin scrolls the scrolling region up by the overshoot. The cursor then stays inside the region if origin mode
   (DECOM) is set and the box's last row was inside it, and inside the screen otherwise. A zero-sized box moves nothing.
-  Text written after the placement, even in the same write, prints at the moved cursor.
+  Text written after the placement, even in the same write, prints at the moved cursor. A relative placement never moves
+  the cursor, whatever `C=` says.
 - `q`: Quiet mode (suppress response acknowledgments).
 - `i`, `I`, `p`: Image and placement identifiers. A put with a non-zero `p=` replaces the image's placement under that
   id; a put without one, or with `p=0`, adds a placement of its own, as kitty does, and no `p=` addresses it afterwards.
@@ -182,6 +184,32 @@ the recorded extents to preserve placeholders across reattachments. An omitted `
 draws, with its own cell size. A virtual placement goes with `d=i`/`I`, `d=n`/`N` (only the one `p=` names, when given)
 and `d=r`/`R`, when its image is transmitted again or freed, and with the rest of the screen's placements across a
 screen switch (`?1049h`/`?1049l`); the other deletes and the screen clears leave it, as in kitty.
+
+## Relative placements
+
+A put with a non-zero `P=` makes a relative placement, positioned off the parent placement `Q=` names in image `P=`;
+`Q=0` or no `Q=` takes that image's oldest placement, direct or virtual. Its top-left cell is the parent's top-left cell
+moved `H=` columns right and `V=` rows down (negative values move left and up), and it moves whenever its parent does: a
+put under the parent's `p=`, a scroll, a reflow. A column left of the screen's first column pins to the first. The put
+is answered:
+
+- `ENOPARENT` when image `P=` does not exist, has no placement, or has none under a non-zero `Q=`;
+- `EINVAL` when the put names its own placement as the parent, or carries `U=1`: a virtual placement cannot be relative;
+- `ECYCLE` when the parent hangs, through any number of links, off the placement being put;
+- `ETOODEEP` when the chain from the placement up would pass 8 links.
+
+A refused `a=p` leaves the placement it named as it was; a refused `a=T` has still stored its image.
+
+A virtual placement may be a parent. Its top-left cell is the least row and, apart, the least column among the
+placeholder cells on the live screen that show it, so the relative placement follows the text the cells are written
+into, and draws only while at least one such cell is on the live screen.
+
+A relative placement lives as long as its parent: whatever removes the parent (a delete, a scroll past the retained
+history, the placement cap, a new transmission of the parent's image) removes the placements hanging off it, down the
+whole chain, and deletes each of their images that no placement is left showing, whichever `d=` case the delete used. A
+put under the parent's `p=` keeps the parent; a new placement after the parent left is not it. A screen clear (`ED 2`,
+`RIS`) also takes every relative placement that hangs off a virtual one. The delete selectors and the screen clear match
+a relative placement at the cells it draws on; one that draws nothing matches no cell.
 
 ## Animation
 
@@ -295,14 +323,17 @@ nowhere to address the reply, and the reply would reach the shell as text. A que
 carries `i=`, and its reply echoes `i=` alone. A command with an unknown `a=` is dropped. Among answered commands,
 [`q=`](#response-suppression-q) decides.
 
-| Code      | Cause                                                                         |
-| --------- | ----------------------------------------------------------------------------- |
-| `ENOENT`  | The command names an image or frame that does not exist                       |
-| `EINVAL`  | A control value felis cannot use, or base64 or zlib data that does not decode |
-| `ENODATA` | Decoded pixel data shorter than `s=`×`v=` requires                            |
-| `EBADPNG` | `f=100` data that does not decode as PNG                                      |
-| `EBADF`   | Any failure of a `t=f`, `t=t` or `t=s` source past the request's own checks   |
-| `ENOTSUP` | A limit, an unsupported medium, or a feature felis does not implement         |
+| Code        | Cause                                                                         |
+| ----------- | ----------------------------------------------------------------------------- |
+| `ENOENT`    | The command names an image or frame that does not exist                       |
+| `EINVAL`    | A control value felis cannot use, or base64 or zlib data that does not decode |
+| `ENODATA`   | Decoded pixel data shorter than `s=`×`v=` requires                            |
+| `EBADPNG`   | `f=100` data that does not decode as PNG                                      |
+| `EBADF`     | Any failure of a `t=f`, `t=t` or `t=s` source past the request's own checks   |
+| `ENOTSUP`   | A limit, an unsupported medium, or a feature felis does not implement         |
+| `ENOPARENT` | A relative placement's parent does not exist                                  |
+| `ECYCLE`    | A relative placement whose parent chain would lead back to it                 |
+| `ETOODEEP`  | A chain of relative placements past 8 links                                   |
 
 ### Querying
 
@@ -316,12 +347,11 @@ identically across all supported targets.
 An `a=q` carrying `e=<action>` checks keys instead of loading data: the reply is `OK` and echoes, after `i=`, `e=` and
 then each non-default key of the query that felis honors for that action, with its value, in kitty's order. A key
 missing from the reply is not supported with that value; a reply without `e=` means the action is unknown. felis leaves
-out `f=8`/`f=16`, `N=`, a placement's `X=`/`Y=`, the relative placement keys (`P=`, `Q=`, `H=`, `V=`), and a value the
-action cannot hold or never reads: a cell coordinate or count past 65535, `s=`/`v=` with PNG data, and `S=`/`O=` without
-a file medium. On Windows it reports `t=d` alone. The [limits](#limits) are not checked: a reply naming a key does not
-promise that a load using it fits, which a plain `a=q` tests. A feature query reads no payload and leaves an open
-chunked transfer alone. It is answered only with `i=` and without `q=`; an `e=` that is not one letter drops the
-command. `e=` on any other action is ignored.
+out `f=8`/`f=16`, `N=`, a placement's `X=`/`Y=`, and a value the action cannot hold or never reads: a cell coordinate or
+count past 65535, `s=`/`v=` with PNG data, and `S=`/`O=` without a file medium. On Windows it reports `t=d` alone. The
+[limits](#limits) are not checked: a reply naming a key does not promise that a load using it fits, which a plain `a=q`
+tests. A feature query reads no payload and leaves an open chunked transfer alone. It is answered only with `i=` and
+without `q=`; an `e=` that is not one letter drops the command. `e=` on any other action is ignored.
 
 ### Response suppression (`q=`)
 

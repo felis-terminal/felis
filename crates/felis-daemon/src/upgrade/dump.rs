@@ -482,6 +482,7 @@ mod tests {
             quiet: 0,
             anonymous: false,
             serial: 0,
+            parent: None,
         });
         state.saved_screens.primary = Some(crate::graphics::SavedImages {
             images: state.images.clone(),
@@ -632,6 +633,7 @@ mod tests {
             quiet: 0,
             anonymous: false,
             serial: 0,
+            parent: None,
         };
         let placeholder = VirtualPlacement {
             image_id: ImageId(1),

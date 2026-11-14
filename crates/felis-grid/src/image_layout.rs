@@ -464,7 +464,7 @@ fn draw_for_placement(
 /// The producer's `c=`/`r=` when sent (presenterm), else the natural
 /// `ceil(image_px / cell_px)`: yazi omits them and paints exactly that
 /// screen, and a zero extent would skip every tile.
-fn placeholder_grid_extent(
+pub(crate) fn placeholder_grid_extent(
     vp_cols: u16,
     vp_rows: u16,
     img_w: u32,

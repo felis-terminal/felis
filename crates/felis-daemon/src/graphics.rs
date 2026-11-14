@@ -11,7 +11,7 @@ use std::num::NonZeroU32;
 use bytes::Bytes;
 use felis_grid::images::{
     AnyPlacement, CellPos, Displaced, Evicted, Extent, Frame, FrameError, ImageEntry, ImageId,
-    InsertError, Placement, PlacementId, VirtualPlacement,
+    InsertError, Parent, ParentError, Placement, PlacementId, VirtualOrigins, VirtualPlacement,
 };
 use felis_grid::kitty_graphics::{
     self, CompleteCommand, ErrorCode, Outcome, Reassembler, ResponseRefs, Status,
@@ -551,13 +551,21 @@ pub fn dispatch_apc_body(
 }
 
 fn finish_in_place(ctx: &mut ApcCtx<'_>, prepared: Prepared) -> Option<Vec<u8>> {
-    match prepared {
+    let reply = match prepared {
         Prepared::Done(reply) => reply,
         Prepared::Decode(prepared) => {
             let (job, plan) = prepared.into_job();
             commit_decoded(ctx, &plan, job.run())
         }
-    }
+    };
+    settle_relatives(
+        ctx.grid,
+        ctx.images,
+        ctx.placements,
+        ctx.events,
+        (ctx.cell_pixel_w, ctx.cell_pixel_h),
+    );
+    reply
 }
 
 /// Everything a body's dispatch does before its decode. The decode may
@@ -747,6 +755,15 @@ pub fn dispatch_apc_bodies(
 pub fn dispatch_apc(session: &mut Session, grid: &mut felis_grid::Grid, apc: &ApcBody) -> Prepared {
     let started = std::time::Instant::now();
     let events_before = session.image_events.len();
+    // The text parsed with this body may have moved a placeholder cell
+    // that a cell-selecting delete matches a relative placement by.
+    settle_relatives(
+        grid,
+        &mut session.images,
+        &mut session.placements,
+        &mut session.image_events,
+        (session.cell_pixel_w, session.cell_pixel_h),
+    );
     let (mut ctx, reassembler) = session_ctx(session, grid, (apc.cursor_row, apc.cursor_col));
     let prepared = if apc.stops_parse {
         begin_apc_body(&mut ctx, reassembler, &apc.body, Some(started))
@@ -754,6 +771,13 @@ pub fn dispatch_apc(session: &mut Session, grid: &mut felis_grid::Grid, apc: &Ap
         Prepared::Done(dispatch_apc_body(&mut ctx, reassembler, &apc.body))
     };
     if matches!(prepared, Prepared::Done(_)) {
+        settle_relatives(
+            grid,
+            &mut session.images,
+            &mut session.placements,
+            &mut session.image_events,
+            (session.cell_pixel_w, session.cell_pixel_h),
+        );
         log_dispatch(session, started, 1, apc.body.len(), events_before);
     }
     prepared
@@ -772,6 +796,13 @@ pub fn commit_offloaded(
         Some(decoded) => commit_decoded(&mut ctx, plan, decoded),
         None => commit_failed_decode(plan),
     };
+    settle_relatives(
+        grid,
+        &mut session.images,
+        &mut session.placements,
+        &mut session.image_events,
+        (session.cell_pixel_w, session.cell_pixel_h),
+    );
     if let Some(started) = plan.started {
         log_dispatch(session, started, 1, plan.bytes_in, events_before);
     }
@@ -894,7 +925,12 @@ pub fn apply_screen_switch(
     for id in images.iter_ids() {
         events.push(ImageEvent::Transmit(id));
     }
-    events.extend(placements.iter().map(placement_event));
+    events.extend(
+        placements
+            .iter()
+            .filter(|p| p.is_shown())
+            .map(placement_event),
+    );
     events.extend(placements.iter_virtual().map(virtual_event));
     match switch {
         // A leftover save means a missed `LeftAlternate` drain;
@@ -946,7 +982,11 @@ pub fn rescale_placements(
     events: &mut Vec<ImageEvent>,
     cell_px: (u16, u16),
 ) {
-    placements.rescale(images, cell_px, |p| events.push(placement_event(p)));
+    placements.rescale(images, cell_px, |p| {
+        if p.is_shown() {
+            events.push(placement_event(p));
+        }
+    });
     for screen in [saved.primary.as_mut(), saved.alternate.as_mut()]
         .into_iter()
         .flatten()
@@ -998,7 +1038,12 @@ pub fn apply_reflow_remap(
         return;
     }
     let evicted = placements.remap_rows(|row| remap.remap_row(row));
-    events.extend(placements.iter().map(placement_event));
+    events.extend(
+        placements
+            .iter()
+            .filter(|p| p.is_shown() && p.parent.is_none())
+            .map(placement_event),
+    );
     for p in evicted {
         images.release(p.image_id);
         events.push(ImageEvent::PlacementRemoved {
@@ -1441,6 +1486,45 @@ pub fn clear_images(
     free_unreferenced(images, placements, events);
 }
 
+/// Moves each relative placement onto its parent, and removes the ones
+/// whose parent is gone with their image once nothing shows it, which
+/// may orphan more (`docs/reference/protocols/kitty-graphics.md`
+/// "Relative placements").
+pub fn settle_relatives(
+    grid: &felis_grid::Grid,
+    images: &mut felis_grid::images::ImageStore,
+    placements: &mut felis_grid::images::Placements,
+    events: &mut Vec<ImageEvent>,
+    cell_px: (u16, u16),
+) {
+    while placements.has_relatives() {
+        let origins = if placements.needs_virtual_origins() {
+            placements.virtual_origins(grid.screen(), images, cell_px)
+        } else {
+            VirtualOrigins::new()
+        };
+        let settled = placements.settle_relatives(&origins);
+        events.extend(settled.shown.iter().map(placement_event));
+        for p in settled.hidden.iter().chain(&settled.removed) {
+            events.push(ImageEvent::PlacementRemoved {
+                image_id: p.image_id,
+                placement_id: p.placement_id,
+            });
+        }
+        if settled.removed.is_empty() {
+            return;
+        }
+        for p in &settled.removed {
+            images.release(p.image_id);
+        }
+        for p in settled.removed {
+            if !placements.references(p.image_id) {
+                free_image(images, placements, events, p.image_id);
+            }
+        }
+    }
+}
+
 fn free_unreferenced(
     images: &mut felis_grid::images::ImageStore,
     placements: &mut felis_grid::images::Placements,
@@ -1533,6 +1617,9 @@ fn handle_display_existing(
     cell_pixel_h: u16,
     anchor_cursor: (u16, u16),
 ) -> ActionOutcome {
+    if let Some(outcome) = virtual_with_parent(complete) {
+        return outcome;
+    }
     let id = match resolve_image_id(complete, refs, images) {
         Ok(id) => id,
         Err(outcome) => return outcome,
@@ -1559,6 +1646,27 @@ fn handle_display_existing(
     )
 }
 
+/// Moves the anonymous placement under `id` to a fresh id.
+fn move_anonymous_off(
+    placements: &mut felis_grid::images::Placements,
+    events: &mut Vec<ImageEvent>,
+    image_id: ImageId,
+    id: PlacementId,
+) {
+    let Some(moved) = placements.rekey_anonymous(image_id, id) else {
+        return;
+    };
+    events.push(ImageEvent::PlacementRemoved {
+        image_id,
+        placement_id: Some(id),
+    });
+    match &moved {
+        AnyPlacement::Anchored(p) if p.is_shown() => events.push(placement_event(p)),
+        AnyPlacement::Anchored(_) => {}
+        AnyPlacement::Virtual(v) => events.push(virtual_event(v)),
+    }
+}
+
 /// kitty keys an image's placements, direct and virtual, by one `p=`:
 /// before a put takes `id`, the anonymous placement felis gave it moves
 /// to a fresh id, and a producer's placement of the other kind holding
@@ -1572,16 +1680,7 @@ fn claim_placement_id(
     id: PlacementId,
     virtual_put: bool,
 ) -> Option<u64> {
-    if let Some(moved) = placements.rekey_anonymous(image_id, id) {
-        events.push(ImageEvent::PlacementRemoved {
-            image_id,
-            placement_id: Some(id),
-        });
-        events.push(match &moved {
-            AnyPlacement::Anchored(p) => placement_event(p),
-            AnyPlacement::Virtual(v) => virtual_event(v),
-        });
-    }
+    move_anonymous_off(placements, events, image_id, id);
     if virtual_put {
         let removed = placements.remove(image_id, Some(id))?;
         images.release(removed.image_id);
@@ -1609,6 +1708,9 @@ fn upsert_virtual_placement(
     complete: &CompleteCommand,
     refs: &mut ResponseRefs,
 ) -> ActionOutcome {
+    if let Some(outcome) = virtual_with_parent(complete) {
+        return outcome;
+    }
     let cols = control_u16(complete, b'c').unwrap_or(0);
     let rows = control_u16(complete, b'r').unwrap_or(0);
     let z_index = control_i32(complete, b'z').unwrap_or(0);
@@ -1638,6 +1740,70 @@ fn upsert_virtual_placement(
     events.push(virtual_event(&placement));
     refs.image_id = Some(id.0);
     ActionOutcome::Ok
+}
+
+/// A virtual placement cannot be relative; kitty refuses it before
+/// looking the image up.
+fn virtual_with_parent(complete: &CompleteCommand) -> Option<ActionOutcome> {
+    (control_u32(complete, b'U') == Some(1) && parent_image(complete).is_some()).then_some(
+        ActionOutcome::error(
+            ErrorCode::InvalidValue,
+            "a virtual placement cannot be relative",
+        ),
+    )
+}
+
+fn parent_image(complete: &CompleteCommand) -> Option<ImageId> {
+    control_u32(complete, b'P').filter(|&p| p != 0).map(ImageId)
+}
+
+/// `P=` with its `Q=`, `H=` and `V=`, checked as kitty's
+/// `handle_put_command` checks them; `None` for a placement that is not
+/// relative.
+fn relative_parent(
+    placements: &felis_grid::images::Placements,
+    complete: &CompleteCommand,
+    key: (ImageId, Option<PlacementId>),
+) -> Result<Option<Parent>, ActionOutcome> {
+    let Some(image_id) = parent_image(complete) else {
+        return Ok(None);
+    };
+    let (placement_id, serial) = placements
+        .find_parent(image_id, control_u32(complete, b'Q').unwrap_or(0))
+        .ok_or(ActionOutcome::error(
+            ErrorCode::NoParent,
+            "parent placement not found",
+        ))?;
+    // An anonymous parent under the put's `p=` moves off it first.
+    let key = if key == (image_id, Some(placement_id)) && placements.is_anonymous(key) {
+        (image_id, None)
+    } else {
+        key
+    };
+    placements
+        .check_parent(key, (image_id, placement_id))
+        .map_err(|err| match err {
+            ParentError::Missing => {
+                ActionOutcome::error(ErrorCode::NoParent, "parent placement not found")
+            }
+            ParentError::Itself => {
+                ActionOutcome::error(ErrorCode::InvalidValue, "placement is its own parent")
+            }
+            ParentError::Cycle => {
+                ActionOutcome::error(ErrorCode::Cycle, "parent chain would form a cycle")
+            }
+            ParentError::TooDeep => {
+                ActionOutcome::error(ErrorCode::TooDeep, "parent chain too deep")
+            }
+        })?;
+    Ok(Some(Parent {
+        image_id,
+        placement_id,
+        serial,
+        cols: control_i32(complete, b'H').unwrap_or(0),
+        rows: control_i32(complete, b'V').unwrap_or(0),
+        shown: false,
+    }))
 }
 
 fn handle_delete(
@@ -2035,6 +2201,10 @@ fn upsert_placement(
         row: i32::from(cursor_row) + 1,
         col: cursor_col.saturating_add(1),
     };
+    let mut parent = match relative_parent(placements, complete, (image_id, requested)) {
+        Ok(parent) => parent,
+        Err(outcome) => return outcome,
+    };
     if !images.retain(image_id) {
         return ActionOutcome::error(
             ErrorCode::NotFound,
@@ -2045,6 +2215,12 @@ fn upsert_placement(
     let inherited = requested
         .and_then(|p| claim_placement_id(images, placements, events, image_id, p, false))
         .unwrap_or(0);
+    // The claim may have moved an anonymous parent off the put's `p=`.
+    if let Some(link) = parent.as_mut()
+        && let Some(id) = placements.id_of_serial(link.image_id, link.serial)
+    {
+        link.placement_id = id;
+    }
     let placement_id =
         Some(requested.unwrap_or_else(|| placements.allocate_anonymous_id(image_id)));
     let displaced = placements.upsert(Placement {
@@ -2059,10 +2235,18 @@ fn upsert_placement(
         quiet,
         anonymous: requested.is_none(),
         serial: inherited,
+        parent,
     });
     match displaced {
-        Some(Displaced::Replaced(_)) => {
+        Some(Displaced::Replaced(old)) => {
             images.release(image_id);
+            // A relative put is drawn once it settles.
+            if parent.is_some() && old.is_shown() {
+                events.push(ImageEvent::PlacementRemoved {
+                    image_id,
+                    placement_id,
+                });
+            }
         }
         Some(Displaced::Evicted(gone)) => drop_evicted(images, placements, events, gone),
         None => {}
@@ -2070,6 +2254,9 @@ fn upsert_placement(
     refs.image_id = Some(image_id.0);
     if let Some(p) = requested {
         refs.placement_id = Some(p.0);
+    }
+    if parent.is_some() {
+        return ActionOutcome::Ok;
     }
     events.push(ImageEvent::Placement {
         image_id,

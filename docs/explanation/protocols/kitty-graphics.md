@@ -274,6 +274,23 @@ The survivors of a region scroll are re-sent one `Placement` each, the shape the
 scrolls: a region scroll moves only some placements and changes the extent and source rectangle of a clipped one, which
 a uniform shift cannot express.
 
+## Relative placements resolve in the daemon
+
+Relative placements (`P=`) are implemented on principle 2's test: "If 'this would look better in raw Kitty' is ever true
+for the same input, felis has a bug, not a feature gap." A producer hanging images off a placeholder draws in kitty, and
+reading the placeholder cells is no heuristic under principle 4, since `U=1` already reads them as the protocol's own
+encoding.
+
+The daemon resolves each relative placement to an ordinary anchor and sends the client a plain `Placement`, re-sent
+whenever its parent moves; the client never learns that a placement is relative. Rejected: **sending the parent link and
+resolving at draw time**, as kitty resolves at layout. It needs a wire field that an older window would ignore, drawing
+the placement at a meaningless anchor, and the daemon must resolve positions anyway: the delete selectors and the screen
+clear match a placement at the cells it draws on.
+
+The cost falls on a virtual parent, whose position comes from placeholder cells. The daemon reads them from the live
+screen after each parse, where kitty reads the cells it draws; a window scrolled back to a placeholder in history shows
+the placeholder's image but not the placements hanging off it.
+
 ## Anonymous transmits
 
 A transmit may omit `i=`/`I=`; felis then allocates the id itself (the rule is in the

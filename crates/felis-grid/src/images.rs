@@ -7,8 +7,10 @@ use std::num::NonZeroU16;
 use bytes::{Bytes, BytesMut};
 
 mod entries;
+mod relative;
 mod table;
 pub(crate) use entries::Entries;
+pub use relative::{MAX_PARENT_DEPTH, Parent, ParentError, Settled, VirtualOrigins};
 use table::{ChangedImages, Keyed, Table};
 
 pub use felis_protocol::{
@@ -1041,9 +1043,24 @@ pub struct Placement {
     /// image stack by ([`Placements::upsert`]).
     #[cfg_attr(feature = "state-dump", serde(default))]
     pub serial: u64,
+    /// `Some` for a relative placement (`P=`), whose [`Self::anchor`]
+    /// [`Placements::settle_relatives`] keeps on its parent's.
+    #[cfg_attr(feature = "state-dump", serde(default))]
+    pub parent: Option<Parent>,
 }
 
 impl Placement {
+    /// Whether it draws: a relative placement whose chain ends at a
+    /// virtual placement draws only while that placement's placeholder
+    /// cells are on the screen.
+    #[must_use]
+    pub const fn is_shown(&self) -> bool {
+        match self.parent {
+            Some(parent) => parent.shown,
+            None => true,
+        }
+    }
+
     /// The `c=` / `r=` this placement was put with.
     #[must_use]
     pub const fn requested(&self) -> RequestedExtent {
@@ -1068,6 +1085,9 @@ impl Placement {
     /// scrollback matches the live rows its body still covers.
     #[must_use]
     pub const fn contains_row(&self, row_1based: u16) -> bool {
+        if !self.is_shown() {
+            return false;
+        }
         let top = self.anchor.row;
         let bottom = top.saturating_add(self.rows.cells().get() as i32 - 1);
         let row = row_1based as i32;
@@ -1076,6 +1096,9 @@ impl Placement {
 
     #[must_use]
     pub const fn contains_col(&self, col_1based: u16) -> bool {
+        if !self.is_shown() {
+            return false;
+        }
         let left = self.anchor.col;
         let right = left.saturating_add(self.cols.cells().get() - 1);
         col_1based >= left && col_1based <= right
@@ -1184,6 +1207,9 @@ pub struct Placements {
     /// from `u32::MAX`.
     anonymous_issued: u32,
     cap: usize,
+    /// `false` while no entry is relative, so settling a table without
+    /// relative placements costs nothing.
+    relatives: bool,
 }
 
 #[cfg_attr(
@@ -1232,6 +1258,7 @@ impl From<PlacementsDump> for Placements {
             }
             table.virtuals.insert(seq, v);
         }
+        table.relatives = table.entries.iter().any(|p| p.parent.is_some());
         table.next_seq = table
             .entries
             .iter_seq()
@@ -1290,6 +1317,7 @@ impl Placements {
             next_seq: 0,
             anonymous_issued: 0,
             cap,
+            relatives: false,
         }
     }
 
@@ -1353,6 +1381,7 @@ impl Placements {
     /// replaced placement's [`Placement::serial`] stays; a new one keeps
     /// a nonzero serial (a conversion's, [`Self::serial`]) or takes the next.
     pub fn upsert(&mut self, mut placement: Placement) -> Option<Displaced> {
+        self.relatives |= placement.parent.is_some();
         let key = placement.key();
         if !placement.anonymous
             && let Some(held) = self.entries.get(key).filter(|p| !p.anonymous)
@@ -1395,6 +1424,7 @@ impl Placements {
             let fresh = self.allocate_anonymous_id(image_id);
             let mut entry = self.entries.remove(key)?;
             entry.placement_id = Some(fresh);
+            self.relink(key, fresh);
             let seq = self.take_seq();
             self.entries.insert(seq, entry.clone());
             return Some(AnyPlacement::Anchored(entry));
@@ -1405,6 +1435,7 @@ impl Placements {
         let fresh = self.allocate_anonymous_id(image_id);
         let mut entry = self.virtuals.remove(key)?;
         entry.placement_id = Some(fresh);
+        self.relink(key, fresh);
         let seq = self.take_seq();
         self.virtuals.insert(seq, entry);
         Some(AnyPlacement::Virtual(entry))
@@ -1530,17 +1561,20 @@ impl Placements {
     /// Remove the placements a screen clear drops (kitty's
     /// `grman_clear`); virtual placements stay.
     pub fn clear(&mut self, scope: crate::ImageClear) -> Vec<Placement> {
+        let drawn_from_screen = self.virtually_rooted();
         self.remove_where(|p| match scope {
-            crate::ImageClear::Screen => p.anchor.row + i32::from(p.rows.cells().get()) > 1,
+            crate::ImageClear::Screen => {
+                p.anchor.row.saturating_add(i32::from(p.rows.cells().get())) > 1
+                    || drawn_from_screen.contains(&p.key())
+            }
             crate::ImageClear::All => true,
         })
     }
 
-    /// Shift every anchor up by `lines`. Anchors that leave the
-    /// `retain_rows` lines of retained history can never scroll back
-    /// into view, so those placements are removed and returned for
-    /// refcount release and `PlacementRemoved`. `retain_rows` is `0` on
-    /// the alternate screen, which has no history.
+    /// Shift every anchor up by `lines`, removing and returning the
+    /// placements whose anchor leaves the `retain_rows` lines of history
+    /// (`0` on the alternate screen). A relative placement shifts along
+    /// but leaves only with its parent.
     pub fn shift_up(&mut self, lines: u32, retain_rows: u32) -> Vec<Placement> {
         if lines == 0 || self.entries.is_empty() {
             return Vec::new();
@@ -1549,6 +1583,10 @@ impl Placements {
         let horizon = 1i32.saturating_sub(i32::try_from(retain_rows).unwrap_or(i32::MAX));
         self.entries.extract(|p| {
             let shifted = p.anchor.row.saturating_sub(lines_i32);
+            if p.parent.is_some() {
+                p.anchor.row = shifted;
+                return false;
+            }
             if shifted < horizon {
                 return true;
             }
@@ -1559,8 +1597,9 @@ impl Placements {
 
     /// Kitty's `scroll_filter_margins_func` over the band of `op`
     /// (`docs/reference/protocols/kitty-graphics.md` "Scroll regions");
-    /// `into_history` placements evict as [`Self::shift_up`]'s do.
-    /// Returns the moved survivors and the removed placements.
+    /// `into_history` placements evict as [`Self::shift_up`]'s do, and a
+    /// relative placement follows its parent instead. Returns the moved
+    /// survivors and the removed placements.
     pub fn scroll_region(
         &mut self,
         op: crate::ScrollOp,
@@ -1582,6 +1621,9 @@ impl Placements {
         };
         let horizon = 1i32.saturating_sub(i32::try_from(retain_rows).unwrap_or(i32::MAX));
         let removed = self.entries.extract(|p| {
+            if p.parent.is_some() {
+                return false;
+            }
             let first = p.anchor.row;
             let last = first.saturating_add(i32::from(p.rows.cells().get()) - 1);
             if into_history {
@@ -1635,9 +1677,12 @@ impl Placements {
 
     /// Rewrite every anchor row through `remap`, for
     /// [`crate::Grid::reflow`] (REQ-604). `None` evicts the placement;
-    /// evictions are returned as [`Self::shift_up`]'s are.
+    /// evictions are returned as [`Self::shift_up`]'s are. A relative
+    /// placement is left for [`Self::settle_relatives`] to move after
+    /// its parent.
     pub fn remap_rows(&mut self, mut remap: impl FnMut(i32) -> Option<i32>) -> Vec<Placement> {
         self.entries.extract(|p| match remap(p.anchor.row) {
+            _ if p.parent.is_some() => false,
             Some(row) => {
                 p.anchor.row = row;
                 false

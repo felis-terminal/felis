@@ -45,6 +45,10 @@ fn feature_query_echoes_the_supported_keys_per_action() {
         ),
         ("Ga=q,i=31,e=d,d=F,p=2,s=1", ",e=d,d=F,p=2"),
         (
+            "Ga=q,i=31,e=p,V=-2,H=3,Q=1,P=7,z=4",
+            ",e=p,z=4,P=7,Q=1,H=3,V=-2",
+        ),
+        (
             "Ga=q,i=31,e=T,s=1,v=1,f=24,C=7,N=6,U=2",
             ",e=T,f=24,s=1,v=1",
         ),
@@ -60,9 +64,9 @@ fn feature_query_echoes_the_supported_keys_per_action() {
 #[test]
 fn feature_query_leaves_out_what_felis_ignores() {
     assert_eq!(
-        feature_query("Ga=q,i=31,e=p,X=3,Y=4,P=7,Q=1,H=2,V=-2,U=1"),
+        feature_query("Ga=q,i=31,e=p,X=3,Y=4,U=1"),
         Some(ok_with(",e=p,U=1")),
-        "cell offsets and relative placements parse but do nothing",
+        "cell offsets parse but do nothing",
     );
     assert_eq!(
         feature_query("Ga=q,i=31,e=t,f=16,N=1,o=z"),
