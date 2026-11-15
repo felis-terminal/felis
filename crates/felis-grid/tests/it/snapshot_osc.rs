@@ -216,16 +216,14 @@ fn osc_66_clears_sizing_when_overprinted_with_default() {
 }
 
 #[test]
-fn osc_66_overprint_into_spanned_cell_clears_whole_block() {
-    // Kitty spec: "If any of the cells used by a multi-cell character
-    // are modified after creation, the entire character is erased."
+fn osc_66_print_into_a_lower_row_lands_past_the_block() {
     let g = drive(4, 8, b"\x1b]66;s=3;A\x07\r\n$");
     insta::assert_snapshot!(render_sizings(&g), @r#"
     registry: 1 entries
-    sized cells: 0
-    row 0: "        " sizings="........"
-    row 1: "$       " sizings="........"
-    row 2: "        " sizings="........"
+    sized cells: 9
+    row 0: "A       " sizings="111....."
+    row 1: "   $    " sizings="111....."
+    row 2: "        " sizings="111....."
     row 3: "        " sizings="........"
     "#);
 }

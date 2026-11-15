@@ -273,44 +273,31 @@ fn viewport_row_sized_cells_map_live_and_scrollback_band() {
     assert_eq!(g.viewport_row(1, 1).unwrap().sized_cells, vec![(2, s)]);
 }
 
-/// Kitty spec: any write into a multi-cell character erases the whole
-/// character. The struck cell is a spanned cell off the primary, so
-/// `sized_block_at` must walk both up and left.
 #[test]
-fn printing_over_a_foreign_sized_run_erases_the_whole_block() {
+fn printing_into_a_lower_row_skips_past_the_block() {
     let mut p = Parser::new();
     let mut g = Grid::new(4, 16);
-    // One 6×2 block ('A' with s=2:w=3) anchored at (0,0).
     drive(&mut p, &mut g, b"\x1b]66;s=2:w=3;A\x07");
     assert_eq!(g.sized_cell_count(), 12);
 
-    // The dispatch is over (`current_sizing_handle == None`), so the
-    // whole block is foreign.
     drive(&mut p, &mut g, b"\x1b[2;5HX");
-    assert_eq!(g.sized_cell_count(), 0, "the whole block is erased");
-    assert_eq!(g.cell_sizing_handle(0, 0), None, "primary cleared");
-    assert_eq!(g.cell(1, 4).unwrap().grapheme, Grapheme::Ascii(b'X'));
+    assert_eq!(g.sized_cell_count(), 12, "the block stays whole");
+    assert_eq!(g.cell(1, 6).unwrap().grapheme, Grapheme::Ascii(b'X'));
+    assert_eq!(g.cursor().col, 7);
 }
 
-/// `sized_block_at` must walk to the real top-left, not assume
-/// (0,0); a wrong primary leaves the block partly sized.
+/// The struck cell is the block's bottom-right spanned cell, so
+/// `sized_block_at` must walk both up and left to the real top-left.
 #[test]
-fn sized_run_not_anchored_at_origin_is_fully_located_and_erased() {
+fn erasing_a_spanned_cell_of_an_off_origin_block_erases_it_whole() {
     let mut p = Parser::new();
     let mut g = Grid::new(4, 16);
-    // A 4×2 block ('A' with s=2:w=2) at rows 1-2, cols 2-5.
     drive(&mut p, &mut g, b"\x1b[2;3H\x1b]66;s=2:w=2;A\x07");
     assert_eq!(g.sized_cell_count(), 8);
     assert!(g.cell_sizing_handle(1, 2).is_some(), "primary at (1,2)");
 
-    // Strike the block's bottom-right spanned cell.
-    drive(&mut p, &mut g, b"\x1b[3;6HX");
-    assert_eq!(
-        g.sized_cell_count(),
-        0,
-        "the whole off-origin block is erased"
-    );
-    assert_eq!(g.cell(2, 5).unwrap().grapheme, Grapheme::Ascii(b'X'));
+    drive(&mut p, &mut g, b"\x1b[3;6H\x1b[X");
+    assert_eq!(g.sized_cell_count(), 0);
 }
 
 /// `cell_sizing_handle` indexes the cell array with no inner guard, so
@@ -375,7 +362,7 @@ fn a_sized_run_wider_than_the_grid_places_each_character() {
     assert_eq!(g.cursor().col, 1);
 }
 
-/// A printed run that lands on any cell of a sized block erases the
+/// A printed run that lands on any cell of a block's top row erases the
 /// whole block, whichever print loop carries it.
 #[test]
 fn printing_a_run_over_a_sized_block_erases_it_whole() {
@@ -384,14 +371,17 @@ fn printing_a_run_over_a_sized_block_erases_it_whole() {
             "ASCII over its second column",
             &b"\x1b]66;s=2;A\x07\x1b[1;2Hxy"[..],
         ),
-        ("ASCII over its lower row", b"\x1b]66;s=2;A\x07\x1b[2;1Hxy"),
+        (
+            "ASCII over its second column of a wider block",
+            &b"\x1b]66;s=2:w=2;A\x07\x1b[1;3Hxy"[..],
+        ),
         (
             "ASCII wrapping onto its row",
             b"\x1b[2;1H\x1b]66;s=2;A\x07\x1b[1;9Hxyz",
         ),
         (
-            "CJK over its lower row",
-            "\x1b]66;s=2;A\x07\x1b[2;1H字字".as_bytes(),
+            "CJK over its top-left cell",
+            "\x1b]66;s=2;A\x07\x1b[1;1H字".as_bytes(),
         ),
     ] {
         let g = drive_new(4, 10, bytes);
@@ -400,6 +390,39 @@ fn printing_a_run_over_a_sized_block_erases_it_whole() {
             "{case}: no cell keeps the block's handle"
         );
     }
+}
+
+/// A printed run that reaches a block's lower row moves past the block
+/// on that row, whichever print loop carries it.
+#[test]
+fn printing_a_run_into_a_lower_row_lands_past_the_block() {
+    for (case, bytes, at) in [
+        (
+            "ASCII",
+            &b"\x1b]66;s=2;A\x07\x1b[2;1Hxy"[..],
+            [(1, 2, Grapheme::Ascii(b'x')), (1, 3, Grapheme::Ascii(b'y'))],
+        ),
+        (
+            "CJK",
+            "\x1b]66;s=2;A\x07\x1b[2;2H字字".as_bytes(),
+            [(1, 2, Grapheme::Char('字')), (1, 4, Grapheme::Char('字'))],
+        ),
+    ] {
+        let g = drive_new(4, 10, bytes);
+        assert_eq!(g.row_sized_cells(1).len(), 2, "{case}: the block stays");
+        for (r, c, grapheme) in at {
+            assert_eq!(g.cell(r, c).unwrap().grapheme, grapheme, "{case}");
+        }
+    }
+}
+
+/// The skip past a lower row ignores DECAWM: with no room left on the
+/// row, the write goes to the next line.
+#[test]
+fn a_lower_row_at_the_right_edge_sends_the_write_to_the_next_line_without_autowrap() {
+    let g = drive_new(4, 4, b"\x1b[1;3H\x1b]66;s=2;A\x07\x1b[?7l\x1b[2;3Hx");
+    assert_eq!(g.row_sized_cells(1).len(), 2, "the block stays");
+    assert_eq!(g.cell(2, 0).unwrap().grapheme, Grapheme::Ascii(b'x'));
 }
 
 /// After one OSC 66 run, text printed past it still lands normally.
