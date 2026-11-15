@@ -303,6 +303,17 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn every_shape_the_daemon_reports_as_supported_has_its_own_icon() {
+        for name in felis_grid::POINTER_SHAPE_NAMES {
+            assert_eq!(
+                css_cursor_to_icon(name) == CursorIcon::Default,
+                *name == "default",
+                "{name}"
+            );
+        }
+    }
+
     /// How the daemon ships a plain row: unpadded, no OSC 66 band, clear
     /// wrap bit.
     fn packed_row(cells: &[felis_grid::Cell]) -> Vec<u8> {

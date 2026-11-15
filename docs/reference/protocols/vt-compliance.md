@@ -162,10 +162,13 @@ The rectangle checksum query, DECRQCRA, shares this bounds model; its reply is s
   see [input.md](../../explanation/input.md)). A `?` **query** never reads the OS clipboard (that read is not
   implemented, REQ-802); it answers only from a daemon-local mirror holding the values the session itself most recently
   wrote. A query whose selector has a character outside xterm's `cpqs0-7` gets no reply.
-- `OSC 22`: mouse pointer shape (a CSS cursor keyword; the kitty form), including the stack: `> name` pushes and makes
-  the shape live, `<` pops back to the pushed shape (a pop on an empty stack resets to the default arrow). A
-  comma-separated fallback list takes its first well-formed keyword, not the first the window can draw, and a
-  well-formed keyword the window does not know draws the arrow.
+- `OSC 22`: mouse pointer shape (a CSS cursor keyword; the kitty form), including the stack: a set takes an optional `=`
+  prefix, `> names` pushes each well-formed name in order, the last one live, and `<` pops back to the shape below (a
+  pop on an empty stack leaves the default arrow). The main and alternate screens keep separate stacks, and RIS empties
+  both. A set with a comma-separated fallback list takes its first well-formed keyword, not the first the window can
+  draw, and a well-formed keyword the window does not know draws the arrow. A `?` query answers each name in order: `1`
+  or `0` for whether a window draws it, the shape the window draws (`0` for none) for `__current__`, and `default` for
+  `__default__` and `__grabbed__`.
 - `OSC 133`: semantic prompt markers (A / B / C / D), used by jump-to-prompt features in shells; felis stores them on
   the grid for client use. A `C` / `D` pair also delimits the output a window announces to a screen reader
   ([accessibility.md](../accessibility.md#announcements)). Marks sent on the primary screen also drive a resize: once a

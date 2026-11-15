@@ -93,3 +93,65 @@ fn ris_ships_the_pointer_shape_reset_and_empties_the_stack() {
     drive(&mut p, &mut g, b"\x1b]22;<\x07");
     assert_eq!(g.pointer_shape(), None, "the pushed shape is gone");
 }
+
+#[test]
+fn osc_22_push_adds_every_listed_shape() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(1, 4);
+    drive(&mut p, &mut g, b"\x1b]22;>wait,grab\x07");
+    assert_eq!(g.pointer_shape(), Some("grab"), "the last name is the top");
+    drive(&mut p, &mut g, b"\x1b]22;<\x07");
+    assert_eq!(g.pointer_shape(), Some("wait"));
+}
+
+#[test]
+fn osc_22_main_and_alternate_screens_keep_separate_stacks() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(2, 4);
+    drive(&mut p, &mut g, b"\x1b]22;>text\x07\x1b[?1049h");
+    assert_eq!(g.pointer_shape(), None, "the alternate stack starts empty");
+    drive(&mut p, &mut g, b"\x1b]22;>wait\x07\x1b[?1049l");
+    assert_eq!(g.pointer_shape(), Some("text"));
+    drive(&mut p, &mut g, b"\x1b[?1049h");
+    assert_eq!(g.pointer_shape(), Some("wait"));
+}
+
+#[test]
+fn osc_22_query_answers_support_and_the_special_names() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(1, 4);
+    drive(&mut p, &mut g, b"\x1b]22;?__current__\x1b\\");
+    drive(&mut p, &mut g, b"\x1b]22;>crosshair\x07");
+    drive(
+        &mut p,
+        &mut g,
+        b"\x1b]22;?pointer,no-such-name,__current__,__default__,__grabbed__\x1b\\",
+    );
+    assert_eq!(
+        responses(&mut g),
+        vec![
+            b"\x1b]22;0\x1b\\".to_vec(),
+            b"\x1b]22;1,0,crosshair,default,default\x1b\\".to_vec(),
+        ]
+    );
+}
+
+#[test]
+fn osc_22_equals_prefix_sets_the_shape() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(1, 4);
+    drive(&mut p, &mut g, b"\x1b]22;=crosshair\x07");
+    assert_eq!(g.pointer_shape(), Some("crosshair"));
+}
+
+#[test]
+fn osc_22_current_reports_the_drawn_arrow_for_an_unknown_name() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(1, 4);
+    drive(
+        &mut p,
+        &mut g,
+        b"\x1b]22;no-such-shape\x07\x1b]22;?__current__\x1b\\",
+    );
+    assert_eq!(responses(&mut g), vec![b"\x1b]22;default\x1b\\".to_vec()]);
+}

@@ -159,7 +159,7 @@ fn osc99_support_query_gets_a_truthful_reply() {
     let reply = String::from_utf8(replies[0].clone()).unwrap();
     // Advertises title/body + the three urgencies; omits actions (a)
     // and close events (c).
-    assert_eq!(reply, "\x1b]99;i=7:p=?;p=title,body:u=0,1,2\x1b\\");
+    assert_eq!(reply, "\x1b]99;i=7:p=?;p=title,body:u=0,1,2:o=always\x1b\\");
 }
 
 proptest::proptest! {
@@ -230,6 +230,6 @@ fn osc99_support_query_echoes_an_id_using_every_spec_punctuation() {
     drive(&mut p, &mut g, b"\x1b]99;i=aZ9_+.-:p=?;\x1b\\");
     assert_eq!(
         responses(&mut g),
-        vec![b"\x1b]99;i=aZ9_+.-:p=?;p=title,body:u=0,1,2\x1b\\".to_vec()]
+        vec![b"\x1b]99;i=aZ9_+.-:p=?;p=title,body:u=0,1,2:o=always\x1b\\".to_vec()]
     );
 }

@@ -592,6 +592,45 @@ pub(crate) enum SyncOutput {
     },
 }
 
+/// The `OSC 22` shape names a window draws: kitty's list and the other CSS
+/// `cursor` keywords winit has an icon for.
+pub const POINTER_SHAPE_NAMES: &[&str] = &[
+    "alias",
+    "all-scroll",
+    "cell",
+    "col-resize",
+    "context-menu",
+    "copy",
+    "crosshair",
+    "default",
+    "e-resize",
+    "ew-resize",
+    "grab",
+    "grabbing",
+    "help",
+    "move",
+    "n-resize",
+    "ne-resize",
+    "nesw-resize",
+    "no-drop",
+    "not-allowed",
+    "ns-resize",
+    "nw-resize",
+    "nwse-resize",
+    "pointer",
+    "progress",
+    "row-resize",
+    "s-resize",
+    "se-resize",
+    "sw-resize",
+    "text",
+    "vertical-text",
+    "w-resize",
+    "wait",
+    "zoom-in",
+    "zoom-out",
+];
+
 /// Implements [`Sink`] so the VT parser can drive it directly.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, PartialEq, Eq)]
@@ -705,6 +744,10 @@ pub struct Grid {
     /// Shapes saved below the current one by `OSC 22 ; > name`;
     /// `OSC 22 ; <` pops. Bounded (see [`Self::push_pointer_shape`]).
     pointer_shape_stack: Vec<Option<String>>,
+    /// The other screen's shape and stack, swapped in on every switch
+    /// between the main and alternate screens.
+    inactive_pointer_shape: Option<String>,
+    inactive_pointer_shape_stack: Vec<Option<String>>,
     pointer_shape_dirty: bool,
     /// `DECSET 2031`. The daemon writes the `CSI ? 997 ; Ps n` report to
     /// the PTY only while this is on (kitty / ghostty / contour
@@ -1113,6 +1156,8 @@ impl Grid {
             cwd_epoch: 0,
             pointer_shape: None,
             pointer_shape_stack: Vec::new(),
+            inactive_pointer_shape: None,
+            inactive_pointer_shape_stack: Vec::new(),
             pointer_shape_dirty: false,
             color_scheme_notify: false,
             in_band_resize_notify: false,
@@ -1575,11 +1620,21 @@ impl Grid {
         self.set_pointer_shape(shape);
     }
 
-    /// `OSC 22 ; <`. Popping an empty stack resets to the default arrow
-    /// (kitty's behavior).
+    /// `OSC 22 ; <`. Popping an empty stack resets to the default arrow,
+    /// which leaves the stack empty.
     pub fn pop_pointer_shape(&mut self) {
         let restored = self.pointer_shape_stack.pop().unwrap_or(None);
         self.set_pointer_shape(restored);
+    }
+
+    fn swap_pointer_shape_stacks(&mut self) {
+        std::mem::swap(
+            &mut self.pointer_shape_stack,
+            &mut self.inactive_pointer_shape_stack,
+        );
+        let shape = self.inactive_pointer_shape.take();
+        self.inactive_pointer_shape = self.pointer_shape.clone();
+        self.set_pointer_shape(shape);
     }
 
     #[allow(
@@ -1804,6 +1859,7 @@ impl Grid {
         if self.screen.saved_primary.is_some() {
             return;
         }
+        self.swap_pointer_shape_stacks();
         self.history_epoch = self.history_epoch.wrapping_add(1);
         // `SavedScreen` records `base` but no band, and its restore /
         // resize helpers reason in raw ring order, so a snapshot must
@@ -1909,6 +1965,7 @@ impl Grid {
         let Some(saved) = self.screen.saved_primary.take() else {
             return;
         };
+        self.swap_pointer_shape_stacks();
         self.history_epoch = self.history_epoch.wrapping_add(1);
         // Same contract as `enter_alternate`: no band rotation in a
         // snapshot.
