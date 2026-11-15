@@ -937,6 +937,7 @@ fn renderer_config_with(
         font_bold_italic: face_spec(&cfg.font.bold_italic),
         post_stages,
         font_files: Vec::new(),
+        font_files_mode: felis_render_wgpu::FontFilesMode::Replace,
         text_alpha_correction: !cfg!(target_os = "macos"),
     }
 }

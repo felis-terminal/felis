@@ -108,6 +108,16 @@ would not do: the styled faces and the fallback walk would then differ from what
 set has no platform to ask, so discovery walks the CJK, **symbol**, emoji, and Nerd-symbol candidate lists in that order
 and appends the first family installed in each group, except the symbol group (see below).
 
+A client that bundles its own face but leaves the rest to the system has its files searched first instead. Precedence is
+per family: a family the files carry resolves there in every style, never mixed with a same-named system family, which
+may be another version with other advances. Any other family, and every codepoint the named faces miss, goes to the
+system's fallback; when the primary is a file face, the host knows no such family and is asked as for its default
+monospace face. Of the candidate lists only the Nerd-symbol group is looked up in the files, on every platform; any
+other bundled face draws only where a family names it, because a bundled color emoji face ahead of the host's fallback
+would take text-presentation symbols from its mono symbol face. Rejected: **registering the files with the platform's
+font system**. The Linux provider builds its own fontconfig configuration, which never sees fonts an application adds to
+the process's default one, and DirectWrite's system collection ignores fonts registered privately through GDI.
+
 When `font.fallback` is set ([config.md](../../reference/config.md#font)), the host's fallback skips a face the list
 already names, and a character a listed face covers takes the first such face in declared order, ahead of the cascade's
 mono-first rule, except for an emoji-presentation character, which takes the first color face covering it anywhere in
@@ -274,7 +284,7 @@ means. One type costs the bare-string spelling and buys a rule the user learns o
 
 Font bytes are **memory-mapped, not heap-copied**. The face provider hands system faces back as file paths; felis maps
 each one, so a large face (Apple Color Emoji is ~183 MB) stays file-backed (shared, clean, reclaimable page cache)
-instead of becoming dirty heap. The one exception is a caller's pinned font files (see "Font fallback"), which are read
+instead of becoming dirty heap. The one exception is a caller's own font files (see "Font fallback"), which are read
 into memory: mapping is sound only while nothing truncates the file, which holds for a root-owned system font directory
 but not for a file the caller owns.
 

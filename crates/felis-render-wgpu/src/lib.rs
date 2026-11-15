@@ -169,16 +169,30 @@ pub struct RendererConfig {
     /// The stages resolved from `shader.post` by the caller (this crate
     /// takes no paths), in chain order. Empty keeps the single-pass path.
     pub post_stages: Vec<PostStageSource>,
-    /// Font files that replace the system's fonts for every face lookup
-    /// (primary, styles, fallbacks); empty uses the system's. Fixed at
+    /// Font files the face lookups (primary, styles, fallbacks) search as
+    /// `font_files_mode` says; empty uses the system's. Both are fixed at
     /// construction: [`Renderer::reload_font`] keeps the renderer's own.
     pub font_files: Vec<PathBuf>,
+    pub font_files_mode: FontFilesMode,
     /// Remaps glyph and decoration coverage so linear blending lands on
     /// the luminance of sRGB-space blending
     /// (`docs/explanation/rendering/pipeline.md` "Text weight under
     /// linear blending"). Honored only on an sRGB target, the one that
     /// blends in linear space.
     pub text_alpha_correction: bool,
+}
+
+/// How [`RendererConfig::font_files`] relate to the system's fonts.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum FontFilesMode {
+    /// The files alone, so the same inputs draw the same faces on every
+    /// machine.
+    #[default]
+    Replace,
+    /// A family the files carry resolves there, every style included;
+    /// any other family, and every code point the named faces miss, goes
+    /// to the system's fonts.
+    BeforeSystem,
 }
 
 impl RendererConfig {
@@ -311,6 +325,7 @@ pub struct Renderer {
     shaper: felis_shaping::Shaper,
     font_features: Vec<String>,
     font_files: Vec<PathBuf>,
+    font_files_mode: FontFilesMode,
     shape_frame: ShapeFrame,
     cells: RowCache,
     image_scratch_under_bg: Vec<ImgInstance>,
@@ -462,6 +477,7 @@ fn resolve_font_stack(
         Some(stack) => Ok(stack?),
         None => Ok(discover_fonts(
             &cfg.font_files,
+            cfg.font_files_mode,
             cfg.font_family.as_deref(),
             &cfg.font_features,
             &cfg.font_fallbacks,
@@ -475,6 +491,7 @@ fn resolve_font_stack(
 pub fn describe_fonts(cfg: &RendererConfig) -> Result<StackDescription, ShapingError> {
     discover_fonts(
         &cfg.font_files,
+        cfg.font_files_mode,
         cfg.font_family.as_deref(),
         &cfg.font_features,
         &cfg.font_fallbacks,
@@ -485,15 +502,22 @@ pub fn describe_fonts(cfg: &RendererConfig) -> Result<StackDescription, ShapingE
 
 fn discover_fonts(
     files: &[PathBuf],
+    mode: FontFilesMode,
     family: Option<&str>,
     features: &[String],
     fallbacks: &[FaceSpec],
     styles: &StyleFaces<'_>,
 ) -> Result<FontStack, ShapingError> {
     if files.is_empty() {
-        FontStack::auto_discover(family, features, fallbacks, styles)
-    } else {
-        FontStack::discover_in_files(files, family, features, fallbacks, styles)
+        return FontStack::auto_discover(family, features, fallbacks, styles);
+    }
+    match mode {
+        FontFilesMode::Replace => {
+            FontStack::discover_in_files(files, family, features, fallbacks, styles)
+        }
+        FontFilesMode::BeforeSystem => {
+            FontStack::discover_files_first(files, family, features, fallbacks, styles)
+        }
     }
 }
 
@@ -868,6 +892,7 @@ impl Renderer {
             shaper: felis_shaping::Shaper::new(),
             font_features: cfg.font_features.clone(),
             font_files: cfg.font_files.clone(),
+            font_files_mode: cfg.font_files_mode,
             shape_frame: ShapeFrame::empty(),
             cells,
             image_scratch_under_bg: Vec::new(),
@@ -1032,7 +1057,14 @@ impl Renderer {
         fallbacks: &[FaceSpec],
         styles: &StyleFaces<'_>,
     ) -> Result<CellMetrics, ShapingError> {
-        let stack = discover_fonts(&self.font_files, family, features, fallbacks, styles)?;
+        let stack = discover_fonts(
+            &self.font_files,
+            self.font_files_mode,
+            family,
+            features,
+            fallbacks,
+            styles,
+        )?;
         let font_size_physical_px = size_physical_px.unwrap_or(DEFAULT_FONT_SIZE_PHYSICAL_PX);
         self.glyphs.reload_font(stack, font_size_physical_px);
         self.font_features = features.to_vec();

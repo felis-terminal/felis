@@ -18,6 +18,8 @@ mod feature_parsing;
 #[cfg(not(windows))]
 mod features;
 #[cfg(not(windows))]
+mod files_first;
+#[cfg(not(windows))]
 mod host_faces;
 mod italic_position;
 #[cfg(not(windows))]

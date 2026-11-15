@@ -215,21 +215,27 @@ impl FaceProvider for DirectWrite {
         self.face(id).map(|face| face.family)
     }
 
-    fn system_fallback(&self, primary: usize) -> Option<Box<dyn SystemFallback>> {
-        let primary = self.face(primary)?;
+    fn system_fallback(&self, primary: Option<usize>) -> Option<Box<dyn SystemFallback>> {
+        let (base, base_is_primary) = match primary {
+            Some(id) => (id, true),
+            None => (self.default_monospace(REGULAR_WEIGHT).ok()?.0, false),
+        };
         Some(Box::new(Fallback {
             locale: fallback_locale(),
-            primary,
+            base: self.face(base)?,
+            base_is_primary,
         }))
     }
 }
 
-/// `IDWriteFontFallback::MapCharacters` with the primary's family, the
+/// `IDWriteFontFallback::MapCharacters` with `base`'s family, the
 /// cell's weight and slant, and `fallback_locale`. Its DirectWrite
 /// objects are asked for again on every miss, which the shared factory
 /// answers from its cache: they are not `Send`.
 struct Fallback {
-    primary: Face,
+    base: Face,
+    /// The base already missed, so its own answer is no answer.
+    base_is_primary: bool,
     /// NUL-terminated.
     locale: Vec<u16>,
 }
@@ -273,7 +279,7 @@ impl SystemFallback for Fallback {
                 0,
                 length,
                 &collection,
-                &HSTRING::from(self.primary.family.as_str()),
+                &HSTRING::from(self.base.family.as_str()),
                 DWRITE_FONT_WEIGHT(i32::from(weight)),
                 slant,
                 DWRITE_FONT_STRETCH_NORMAL,
@@ -312,7 +318,7 @@ impl SystemFallback for Fallback {
             );
             return Ok(None);
         };
-        if path == self.primary.path && index == self.primary.index {
+        if self.base_is_primary && path == self.base.path && index == self.base.index {
             return Ok(None);
         }
         // SAFETY: the font is live.
@@ -637,7 +643,9 @@ mod tests {
         let (id, _) = dw
             .default_monospace(REGULAR_WEIGHT)
             .expect("Windows has a fixed-pitch font");
-        let fallback = dw.system_fallback(id).expect("DirectWrite has a fallback");
+        let fallback = dw
+            .system_fallback(Some(id))
+            .expect("DirectWrite has a fallback");
         for query in ["\u{23FA}", "\u{1F600}\u{FE0F}", "\u{6F22}", "\u{0915}"] {
             let Some(face) = fallback
                 .face_for(query, FontStyle::REGULAR)
@@ -666,7 +674,8 @@ mod tests {
             .expect("Windows has a fixed-pitch font");
         let answer = |language: &str| {
             let fallback = Fallback {
-                primary: dw.face(id).expect("recorded"),
+                base: dw.face(id).expect("recorded"),
+                base_is_primary: true,
                 locale: language.encode_utf16().chain([0]).collect(),
             };
             let face = fallback
@@ -727,5 +736,51 @@ mod tests {
             assert_eq!(locale.last(), Some(&0));
             assert!(locale.len() > 1);
         }
+    }
+
+    #[test]
+    fn a_base_that_is_not_the_primary_answers_for_what_it_covers() {
+        let dw = DirectWrite::system().expect("DirectWrite loads");
+        let fallback = dw
+            .system_fallback(None)
+            .expect("the default monospace face is the base");
+        let face = fallback
+            .face_for("A", FontStyle::REGULAR)
+            .expect("the lookup runs")
+            .expect("the default monospace face answers for its own Latin");
+        let (id, _) = dw
+            .default_monospace(REGULAR_WEIGHT)
+            .expect("Windows has a fixed-pitch font");
+        let FaceSource::File(path) = face.source else {
+            panic!("a DirectWrite face is a file");
+        };
+        assert_eq!(path, dw.face(id).expect("recorded").path);
+    }
+
+    /// The default monospace face's own file stands in for a bundled one.
+    #[test]
+    fn a_primary_from_the_files_draws_what_it_lacks_from_the_host() {
+        let dw = DirectWrite::system().expect("DirectWrite loads");
+        let (id, family) = dw
+            .default_monospace(REGULAR_WEIGHT)
+            .expect("Windows has a fixed-pitch font");
+        let mut files = crate::provider::files::FileSet::default();
+        let bytes = std::fs::read(dw.face(id).expect("recorded").path).expect("the face reads");
+        assert!(files.add(bytes));
+        let db = crate::provider::files_first::FilesFirst { files, system: dw };
+        let stack = crate::FontStack::auto_discover_in(
+            &db,
+            Some(&family),
+            &[],
+            &[],
+            &crate::StyleFaces::default(),
+        )
+        .expect("the file family loads");
+        assert!(stack.describe().system_fallback.is_some());
+        let han = '\u{6F22}';
+        assert!(!stack.primary().has_glyph(han));
+        let index = stack.resolve_styled_index(han, FontStyle::REGULAR);
+        assert_ne!(index, 0);
+        assert!(stack.font_at(index, FontStyle::REGULAR).has_glyph(han));
     }
 }

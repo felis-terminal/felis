@@ -163,7 +163,7 @@ impl<P: FaceProvider> FaceProvider for Hosted<P> {
         self.files.family_of(id)
     }
 
-    fn system_fallback(&self, _primary: P::Id) -> Option<Box<dyn SystemFallback>> {
+    fn system_fallback(&self, _primary: Option<P::Id>) -> Option<Box<dyn SystemFallback>> {
         Some(Box::new(ScriptedSystem {
             answers: HashMap::new(),
             asked: self.asked.clone(),
@@ -329,4 +329,30 @@ fn a_named_instance_keeps_its_width_through_regular_and_bold_views() {
     assert_eq!(axis_coord(&bold, *b"wdth"), width);
     assert!(axis_coord(&bold, *b"wght") > axis_coord(&semiwide, *b"wght"));
     assert!(default.at_instance(10_000).is_none());
+}
+
+#[test]
+fn a_primary_from_the_files_still_asks_the_host_for_what_it_lacks() {
+    let mut system = FileSet::default();
+    system.add_dir(test_font_dir());
+    let db = FilesFirst {
+        files: read_file_set(&pinned_files(&["opentype/MonaspaceArgon-Regular.otf"]))
+            .expect("the pinned file reads"),
+        system: Hosted {
+            files: system,
+            asked: Arc::new(AtomicUsize::new(0)),
+        },
+    };
+    let stack = FontStack::auto_discover_in(
+        &db,
+        Some("Monaspace Argon"),
+        &[],
+        &[],
+        &StyleFaces::default(),
+    )
+    .expect("the file family loads");
+    assert_eq!(
+        stack.describe().system_fallback.as_deref(),
+        Some("scripted")
+    );
 }
