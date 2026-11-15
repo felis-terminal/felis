@@ -34,7 +34,7 @@ fn key_code(key: &PressedKey) -> Option<KeyCode> {
             }
             Some(KeyCode::Character(first.to_string()))
         }
-        PressedKey::Modifier | PressedKey::Other => None,
+        PressedKey::Modifier(_) | PressedKey::Other => None,
     }
 }
 
@@ -68,7 +68,10 @@ mod tests {
     /// variant unnoticed.
     fn winit_to_chord(key: &Key, mods: ModifiersState) -> Option<Chord> {
         chord_for(
-            &crate::input::pressed_key(key),
+            &crate::input::pressed_key(
+                key,
+                winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::KeyA),
+            ),
             crate::winit_keys::mods(mods),
         )
     }

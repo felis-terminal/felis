@@ -111,8 +111,9 @@ impl fmt::Display for FKey {
     }
 }
 
-/// The subset of a platform's named keys felis bridges; growing it also
-/// needs the chord parser in `felis-client-core`.
+/// The subset of a platform's named keys felis bridges. The keys after
+/// `F` are encoded but not bindable: the chord parser in
+/// `felis-client-core` names none of them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum NamedKey {
     Enter,
@@ -131,9 +132,41 @@ pub enum NamedKey {
     ArrowLeft,
     ArrowRight,
     F(FKey),
+    CapsLock,
+    ScrollLock,
+    NumLock,
+    PrintScreen,
+    Pause,
+    /// The context menu key.
+    Menu,
+    /// The keypad's middle key with Num Lock off.
+    Begin,
+    MediaPlay,
+    MediaPause,
+    MediaPlayPause,
+    MediaStop,
+    MediaFastForward,
+    MediaRewind,
+    MediaTrackNext,
+    MediaTrackPrevious,
+    MediaRecord,
+    VolumeDown,
+    VolumeUp,
+    VolumeMute,
+    /// A modifier key; its [`KeyLocation`] names the side.
+    Shift,
+    Control,
+    Alt,
+    Super,
+    Hyper,
+    Meta,
+    /// `AltGr`.
+    IsoLevel3Shift,
+    IsoLevel5Shift,
 }
 
-/// Only [`Numpad`](Self::Numpad) changes encoding (DECKPAM).
+/// [`Numpad`](Self::Numpad) selects the keypad encodings, and
+/// [`Left`](Self::Left) / [`Right`](Self::Right) a modifier key's side.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum KeyLocation {
     #[default]
@@ -461,6 +494,15 @@ pub(crate) mod tests {
                 mods: KeyMods::empty(),
                 kind: KeyEventKind::Press,
                 location: KeyLocation::Standard,
+                unshifted: None,
+                base_layout: None,
+            }),
+            InputMsg::Key(KeyEvent {
+                key: Key::Named(NamedKey::Control),
+                text: None,
+                mods: KeyMods::CTRL,
+                kind: KeyEventKind::Release,
+                location: KeyLocation::Right,
                 unshifted: None,
                 base_layout: None,
             }),

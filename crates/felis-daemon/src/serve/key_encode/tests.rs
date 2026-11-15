@@ -1055,13 +1055,6 @@ fn release_of_text_path_key_is_dropped() {
 }
 
 #[test]
-fn ctrl_letter_with_associated_text_appends_codepoint() {
-    let flags = KittyKbdFlags::DISAMBIGUATE | KittyKbdFlags::REPORT_ASSOCIATED_TEXT;
-    let bytes = encode_no_app_cursor(&lit("a"), Some("a"), Modifiers::CONTROL, true, flags);
-    assert_eq!(bytes, Some(b"\x1b[97;5;97u".to_vec()));
-}
-
-#[test]
 fn esc_press_with_associated_text_off_omits_codepoints() {
     let bytes = encode_no_app_cursor(
         &Key::Named(NamedKey::Escape),
@@ -1155,6 +1148,32 @@ fn bit3_with_associated_text_appends_codepoints() {
     let flags = KittyKbdFlags::REPORT_ALL_AS_ESCAPES | KittyKbdFlags::REPORT_ASSOCIATED_TEXT;
     let bytes = encode_no_app_cursor(&lit("a"), Some("a"), Modifiers::empty(), true, flags);
     assert_eq!(bytes, Some(b"\x1b[97;1;97u".to_vec()));
+}
+
+#[test]
+fn associated_text_is_omitted_when_ctrl_makes_the_key_a_control_byte() {
+    let flags = KittyKbdFlags::REPORT_ALL_AS_ESCAPES | KittyKbdFlags::REPORT_ASSOCIATED_TEXT;
+    for (key, keycode) in [
+        ("a", "97"),
+        ("[", "91"),
+        ("2", "50"),
+        ("/", "47"),
+        (" ", "32"),
+    ] {
+        let bytes = encode_no_app_cursor(&lit(key), Some(key), Modifiers::CONTROL, true, flags);
+        assert_eq!(
+            bytes,
+            Some(format!("\x1b[{keycode};5u").into_bytes()),
+            "Ctrl+{key}"
+        );
+    }
+}
+
+#[test]
+fn associated_text_is_kept_for_a_ctrl_key_with_no_control_byte() {
+    let flags = KittyKbdFlags::REPORT_ALL_AS_ESCAPES | KittyKbdFlags::REPORT_ASSOCIATED_TEXT;
+    let bytes = encode_no_app_cursor(&lit("1"), Some("1"), Modifiers::CONTROL, true, flags);
+    assert_eq!(bytes, Some(b"\x1b[49;5;49u".to_vec()));
 }
 
 #[test]
@@ -1587,7 +1606,7 @@ fn disambiguate_sends_functional_keys_in_csi_form_only() {
 }
 
 #[test]
-fn f13_and_above_take_their_functional_codes_under_kitty_flags_only() {
+fn f13_and_above_take_their_functional_codes_in_every_mode() {
     let under_flags = |key: &Key, mods| {
         kitty(
             key,
@@ -1606,14 +1625,8 @@ fn f13_and_above_take_their_functional_codes_under_kitty_flags_only() {
         under_flags(&f(35), Modifiers::SHIFT),
         Some(b"\x1b[57398;2u".to_vec())
     );
-    let legacy = encode_no_app_cursor(
-        &f(13),
-        None,
-        Modifiers::empty(),
-        true,
-        KittyKbdFlags::empty(),
-    );
-    assert_eq!(legacy, None);
+    let legacy = encode_no_app_cursor(&f(13), None, Modifiers::CTRL, true, KittyKbdFlags::empty());
+    assert_eq!(legacy, Some(b"\x1b[57376;5u".to_vec()));
 }
 
 #[test]
@@ -1793,6 +1806,35 @@ fn every_named_key() -> Vec<NamedKey> {
         NamedKey::ArrowRight,
     ];
     keys.extend((1..=35).map(|n| NamedKey::F(FKey::lit(n))));
+    keys.extend([
+        NamedKey::CapsLock,
+        NamedKey::ScrollLock,
+        NamedKey::NumLock,
+        NamedKey::PrintScreen,
+        NamedKey::Pause,
+        NamedKey::Menu,
+        NamedKey::Begin,
+        NamedKey::MediaPlay,
+        NamedKey::MediaPause,
+        NamedKey::MediaPlayPause,
+        NamedKey::MediaStop,
+        NamedKey::MediaFastForward,
+        NamedKey::MediaRewind,
+        NamedKey::MediaTrackNext,
+        NamedKey::MediaTrackPrevious,
+        NamedKey::MediaRecord,
+        NamedKey::VolumeDown,
+        NamedKey::VolumeUp,
+        NamedKey::VolumeMute,
+        NamedKey::Shift,
+        NamedKey::Control,
+        NamedKey::Alt,
+        NamedKey::Super,
+        NamedKey::Hyper,
+        NamedKey::Meta,
+        NamedKey::IsoLevel3Shift,
+        NamedKey::IsoLevel5Shift,
+    ]);
     keys
 }
 
@@ -1802,7 +1844,7 @@ proptest::proptest! {
     /// mode is known, so no mode may encode past it.
     #[test]
     fn no_mode_encodes_a_capped_key_past_the_reserved_report_size(
-        key_idx in 0_usize..52,
+        key_idx in 0_usize..79,
         character in capped_utf8(felis_protocol::limits::MAX_KEY_CHARACTER_BYTES),
         text in proptest::option::of(capped_utf8(
             felis_protocol::limits::MAX_KEY_TEXT_BYTES,
@@ -2596,4 +2638,305 @@ fn a_release_reports_the_unshifted_key_code_without_alternates() {
         },
     );
     assert_eq!(release, Some(b"\x1b[51;6:3u".to_vec()));
+}
+
+const REPORT_ALL: KittyKbdFlags =
+    KittyKbdFlags::DISAMBIGUATE.union(KittyKbdFlags::REPORT_ALL_AS_ESCAPES);
+const REPORT_ALL_EVENTS: KittyKbdFlags = REPORT_ALL.union(KittyKbdFlags::REPORT_EVENT_TYPES);
+
+/// `key` at `location` under `flags`, typing `text`.
+fn at(
+    key: &Key,
+    text: Option<&str>,
+    mods: Modifiers,
+    kind: KeyEventKind,
+    flags: KittyKbdFlags,
+    location: KeyLocation,
+) -> Option<Vec<u8>> {
+    super::encode(
+        key,
+        text,
+        mods,
+        kind,
+        flags,
+        ModifyOtherKeys::Off,
+        /* application_cursor = */ false,
+        /* application_keypad = */ false,
+        /* win32_input_mode = */ false,
+        location,
+        Alternates::default(),
+    )
+}
+
+fn named(n: NamedKey) -> Key {
+    Key::Named(n)
+}
+
+#[test]
+fn functional_keys_take_their_private_use_codes_under_disambiguate() {
+    for (key, expected) in [
+        (NamedKey::PrintScreen, "\x1b[57361u"),
+        (NamedKey::Pause, "\x1b[57362u"),
+        (NamedKey::Menu, "\x1b[57363u"),
+        (NamedKey::MediaPlay, "\x1b[57428u"),
+        (NamedKey::MediaPause, "\x1b[57429u"),
+        (NamedKey::MediaPlayPause, "\x1b[57430u"),
+        (NamedKey::MediaStop, "\x1b[57432u"),
+        (NamedKey::MediaFastForward, "\x1b[57433u"),
+        (NamedKey::MediaRewind, "\x1b[57434u"),
+        (NamedKey::MediaTrackNext, "\x1b[57435u"),
+        (NamedKey::MediaTrackPrevious, "\x1b[57436u"),
+        (NamedKey::MediaRecord, "\x1b[57437u"),
+        (NamedKey::VolumeDown, "\x1b[57438u"),
+        (NamedKey::VolumeUp, "\x1b[57439u"),
+        (NamedKey::VolumeMute, "\x1b[57440u"),
+        (NamedKey::Begin, "\x1b[E"),
+    ] {
+        assert_eq!(
+            at(
+                &named(key),
+                None,
+                Modifiers::empty(),
+                KeyEventKind::Press,
+                KittyKbdFlags::DISAMBIGUATE,
+                KeyLocation::Standard,
+            ),
+            Some(expected.as_bytes().to_vec()),
+            "{key:?}",
+        );
+    }
+}
+
+/// Kitty spec "Legacy functional keys": Menu is xterm's F16, and a key
+/// without a legacy encoding is sent as `CSI u`.
+#[test]
+fn legacy_mode_sends_menu_as_csi_29_tilde_and_other_functional_keys_as_csi_u() {
+    for (key, mods, expected) in [
+        (NamedKey::Menu, Modifiers::empty(), "\x1b[29~"),
+        (NamedKey::Menu, Modifiers::CTRL, "\x1b[29;5~"),
+        (NamedKey::PrintScreen, Modifiers::empty(), "\x1b[57361u"),
+        (NamedKey::VolumeMute, Modifiers::SHIFT, "\x1b[57440;2u"),
+        (NamedKey::Begin, Modifiers::empty(), "\x1b[E"),
+    ] {
+        assert_eq!(
+            encode_no_app_cursor(&named(key), None, mods, true, KittyKbdFlags::empty()),
+            Some(expected.as_bytes().to_vec()),
+            "{key:?} with {mods:?}",
+        );
+    }
+}
+
+#[test]
+fn legacy_keypad_begin_is_ss3_under_decckm() {
+    let bytes = encode(
+        &named(NamedKey::Begin),
+        None,
+        Modifiers::empty(),
+        true,
+        KittyKbdFlags::empty(),
+        ModifyOtherKeys::Off,
+        /* application_cursor = */ true,
+        false,
+        false,
+        KeyLocation::Numpad,
+    );
+    assert_eq!(bytes, Some(b"\x1bOE".to_vec()));
+}
+
+#[test]
+fn modifier_and_lock_keys_are_reported_under_report_all_only() {
+    for flags in [
+        KittyKbdFlags::empty(),
+        KittyKbdFlags::DISAMBIGUATE,
+        KittyKbdFlags::DISAMBIGUATE | KittyKbdFlags::REPORT_EVENT_TYPES,
+    ] {
+        for key in [
+            NamedKey::Shift,
+            NamedKey::CapsLock,
+            NamedKey::IsoLevel3Shift,
+        ] {
+            assert_eq!(
+                at(
+                    &named(key),
+                    None,
+                    Modifiers::empty(),
+                    KeyEventKind::Press,
+                    flags,
+                    KeyLocation::Left,
+                ),
+                None,
+                "{key:?} under {flags:?}",
+            );
+        }
+    }
+}
+
+/// Kitty spec "Modifiers": a modifier key's press sets its own bit,
+/// whichever side it is on.
+#[test]
+fn a_modifier_key_press_sets_its_own_bit() {
+    for (key, location, expected) in [
+        (NamedKey::Shift, KeyLocation::Left, "\x1b[57441;2u"),
+        (NamedKey::Control, KeyLocation::Left, "\x1b[57442;5u"),
+        (NamedKey::Alt, KeyLocation::Left, "\x1b[57443;3u"),
+        (NamedKey::Super, KeyLocation::Left, "\x1b[57444;9u"),
+        (NamedKey::Hyper, KeyLocation::Left, "\x1b[57445;17u"),
+        (NamedKey::Meta, KeyLocation::Left, "\x1b[57446;33u"),
+        (NamedKey::Shift, KeyLocation::Right, "\x1b[57447;2u"),
+        (NamedKey::Control, KeyLocation::Right, "\x1b[57448;5u"),
+        (NamedKey::Alt, KeyLocation::Right, "\x1b[57449;3u"),
+        (NamedKey::Super, KeyLocation::Right, "\x1b[57450;9u"),
+        (NamedKey::Hyper, KeyLocation::Right, "\x1b[57451;17u"),
+        (NamedKey::Meta, KeyLocation::Right, "\x1b[57452;33u"),
+        (NamedKey::IsoLevel3Shift, KeyLocation::Right, "\x1b[57453u"),
+        (
+            NamedKey::IsoLevel5Shift,
+            KeyLocation::Standard,
+            "\x1b[57454u",
+        ),
+        (NamedKey::CapsLock, KeyLocation::Standard, "\x1b[57358u"),
+        (NamedKey::ScrollLock, KeyLocation::Standard, "\x1b[57359u"),
+        (NamedKey::NumLock, KeyLocation::Numpad, "\x1b[57360u"),
+    ] {
+        assert_eq!(
+            at(
+                &named(key),
+                None,
+                Modifiers::empty(),
+                KeyEventKind::Press,
+                REPORT_ALL,
+                location,
+            ),
+            Some(expected.as_bytes().to_vec()),
+            "{key:?} at {location:?}",
+        );
+    }
+}
+
+/// The release reports the bits the front-end sends: Ctrl stays set
+/// while the other Control key is held, and Hyper, which the front-end
+/// cannot report, is clear.
+#[test]
+fn a_modifier_key_release_keeps_the_reported_bits() {
+    let release = |key, mods, location| {
+        at(
+            &named(key),
+            None,
+            mods,
+            KeyEventKind::Release,
+            REPORT_ALL_EVENTS,
+            location,
+        )
+    };
+    assert_eq!(
+        release(NamedKey::Control, Modifiers::CTRL, KeyLocation::Left),
+        Some(b"\x1b[57442;5:3u".to_vec())
+    );
+    assert_eq!(
+        release(NamedKey::Control, Modifiers::empty(), KeyLocation::Right),
+        Some(b"\x1b[57448;1:3u".to_vec())
+    );
+    assert_eq!(
+        release(NamedKey::Hyper, Modifiers::empty(), KeyLocation::Left),
+        Some(b"\x1b[57445;1:3u".to_vec())
+    );
+}
+
+#[test]
+fn keypad_keys_without_text_take_their_own_codes_under_disambiguate() {
+    for (key, text, expected) in [
+        (named(NamedKey::End), None, "\x1b[57424u"),
+        (named(NamedKey::ArrowDown), None, "\x1b[57420u"),
+        (named(NamedKey::PageDown), None, "\x1b[57422u"),
+        (named(NamedKey::ArrowLeft), None, "\x1b[57417u"),
+        (named(NamedKey::ArrowRight), None, "\x1b[57418u"),
+        (named(NamedKey::Home), None, "\x1b[57423u"),
+        (named(NamedKey::ArrowUp), None, "\x1b[57419u"),
+        (named(NamedKey::PageUp), None, "\x1b[57421u"),
+        (named(NamedKey::Insert), None, "\x1b[57425u"),
+        (named(NamedKey::Delete), None, "\x1b[57426u"),
+        (named(NamedKey::Enter), Some("\r"), "\x1b[57414u"),
+        (named(NamedKey::Begin), None, "\x1b[E"),
+    ] {
+        assert_eq!(
+            at(
+                &key,
+                text,
+                Modifiers::empty(),
+                KeyEventKind::Press,
+                KittyKbdFlags::DISAMBIGUATE,
+                KeyLocation::Numpad,
+            ),
+            Some(expected.as_bytes().to_vec()),
+            "{key:?}",
+        );
+    }
+}
+
+#[test]
+fn a_keypad_key_typing_text_sends_it_under_disambiguate_unless_ctrl_escapes_it() {
+    let kp = |mods| {
+        at(
+            &lit("1"),
+            Some("1"),
+            mods,
+            KeyEventKind::Press,
+            KittyKbdFlags::DISAMBIGUATE,
+            KeyLocation::Numpad,
+        )
+    };
+    assert_eq!(kp(Modifiers::empty()), Some(b"1".to_vec()));
+    assert_eq!(kp(Modifiers::CTRL), Some(b"\x1b[57400;5u".to_vec()));
+}
+
+#[test]
+fn report_all_escapes_every_keypad_key_by_its_own_code() {
+    for (s, expected) in [
+        ("0", "\x1b[57399u"),
+        ("9", "\x1b[57408u"),
+        (".", "\x1b[57409u"),
+        ("/", "\x1b[57410u"),
+        ("*", "\x1b[57411u"),
+        ("-", "\x1b[57412u"),
+        ("+", "\x1b[57413u"),
+        ("=", "\x1b[57415u"),
+        (",", "\x1b[57416u"),
+    ] {
+        assert_eq!(
+            at(
+                &lit(s),
+                Some(s),
+                Modifiers::empty(),
+                KeyEventKind::Press,
+                REPORT_ALL,
+                KeyLocation::Numpad,
+            ),
+            Some(expected.as_bytes().to_vec()),
+            "{s}",
+        );
+    }
+}
+
+/// Kitty spec "Legacy functional keys": "All keypad keys are reported as
+/// their equivalent non-keypad keys."
+#[test]
+fn legacy_keypad_keys_are_their_non_keypad_keys() {
+    for (key, text, expected) in [
+        (named(NamedKey::End), None, b"\x1b[F".as_slice()),
+        (named(NamedKey::Enter), Some("\r"), b"\r".as_slice()),
+        (lit("1"), Some("1"), b"1".as_slice()),
+    ] {
+        assert_eq!(
+            at(
+                &key,
+                text,
+                Modifiers::empty(),
+                KeyEventKind::Press,
+                KittyKbdFlags::empty(),
+                KeyLocation::Numpad,
+            ),
+            Some(expected.to_vec()),
+            "{key:?}",
+        );
+    }
 }

@@ -284,6 +284,7 @@ impl fmt::Display for Chord {
             KeyCode::Named(NamedKey::ArrowLeft) => f.write_str("left"),
             KeyCode::Named(NamedKey::ArrowRight) => f.write_str("right"),
             KeyCode::Named(NamedKey::F(n)) => write!(f, "f{n}"),
+            KeyCode::Named(named) => write!(f, "{named:?}"),
         }
     }
 }

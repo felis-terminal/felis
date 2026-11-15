@@ -109,8 +109,18 @@ impl TryFrom<v1::InputMouseEvent> for messages::MouseEvent {
 }
 
 const fn named_key_to_wire(named: messages::NamedKey) -> v1::key_id::Key {
+    match named_key_enum_to_wire(named) {
+        Ok(wire) => v1::key_id::Key::Named(wire as i32),
+        Err(f) => v1::key_id::Key::Function(f.get() as u32),
+    }
+}
+
+/// An F-key is the `Err`: it travels as `KeyId.function`.
+pub(crate) const fn named_key_enum_to_wire(
+    named: messages::NamedKey,
+) -> Result<v1::NamedKey, messages::FKey> {
     use messages::NamedKey as N;
-    let wire = match named {
+    Ok(match named {
         N::Enter => v1::NamedKey::Enter,
         N::Tab => v1::NamedKey::Tab,
         N::Escape => v1::NamedKey::Escape,
@@ -126,9 +136,35 @@ const fn named_key_to_wire(named: messages::NamedKey) -> v1::key_id::Key {
         N::ArrowDown => v1::NamedKey::ArrowDown,
         N::ArrowLeft => v1::NamedKey::ArrowLeft,
         N::ArrowRight => v1::NamedKey::ArrowRight,
-        N::F(f) => return v1::key_id::Key::Function(f.get() as u32),
-    };
-    v1::key_id::Key::Named(wire as i32)
+        N::CapsLock => v1::NamedKey::CapsLock,
+        N::ScrollLock => v1::NamedKey::ScrollLock,
+        N::NumLock => v1::NamedKey::NumLock,
+        N::PrintScreen => v1::NamedKey::PrintScreen,
+        N::Pause => v1::NamedKey::Pause,
+        N::Menu => v1::NamedKey::Menu,
+        N::Begin => v1::NamedKey::Begin,
+        N::MediaPlay => v1::NamedKey::MediaPlay,
+        N::MediaPause => v1::NamedKey::MediaPause,
+        N::MediaPlayPause => v1::NamedKey::MediaPlayPause,
+        N::MediaStop => v1::NamedKey::MediaStop,
+        N::MediaFastForward => v1::NamedKey::MediaFastForward,
+        N::MediaRewind => v1::NamedKey::MediaRewind,
+        N::MediaTrackNext => v1::NamedKey::MediaTrackNext,
+        N::MediaTrackPrevious => v1::NamedKey::MediaTrackPrevious,
+        N::MediaRecord => v1::NamedKey::MediaRecord,
+        N::VolumeDown => v1::NamedKey::VolumeDown,
+        N::VolumeUp => v1::NamedKey::VolumeUp,
+        N::VolumeMute => v1::NamedKey::VolumeMute,
+        N::Shift => v1::NamedKey::Shift,
+        N::Control => v1::NamedKey::Control,
+        N::Alt => v1::NamedKey::Alt,
+        N::Super => v1::NamedKey::Super,
+        N::Hyper => v1::NamedKey::Hyper,
+        N::Meta => v1::NamedKey::Meta,
+        N::IsoLevel3Shift => v1::NamedKey::IsoLevel3Shift,
+        N::IsoLevel5Shift => v1::NamedKey::IsoLevel5Shift,
+        N::F(f) => return Err(f),
+    })
 }
 
 const fn named_key_from_wire(wire: v1::NamedKey) -> Result<messages::NamedKey, WireError> {
@@ -150,6 +186,33 @@ const fn named_key_from_wire(wire: v1::NamedKey) -> Result<messages::NamedKey, W
         v1::NamedKey::ArrowDown => N::ArrowDown,
         v1::NamedKey::ArrowLeft => N::ArrowLeft,
         v1::NamedKey::ArrowRight => N::ArrowRight,
+        v1::NamedKey::CapsLock => N::CapsLock,
+        v1::NamedKey::ScrollLock => N::ScrollLock,
+        v1::NamedKey::NumLock => N::NumLock,
+        v1::NamedKey::PrintScreen => N::PrintScreen,
+        v1::NamedKey::Pause => N::Pause,
+        v1::NamedKey::Menu => N::Menu,
+        v1::NamedKey::Begin => N::Begin,
+        v1::NamedKey::MediaPlay => N::MediaPlay,
+        v1::NamedKey::MediaPause => N::MediaPause,
+        v1::NamedKey::MediaPlayPause => N::MediaPlayPause,
+        v1::NamedKey::MediaStop => N::MediaStop,
+        v1::NamedKey::MediaFastForward => N::MediaFastForward,
+        v1::NamedKey::MediaRewind => N::MediaRewind,
+        v1::NamedKey::MediaTrackNext => N::MediaTrackNext,
+        v1::NamedKey::MediaTrackPrevious => N::MediaTrackPrevious,
+        v1::NamedKey::MediaRecord => N::MediaRecord,
+        v1::NamedKey::VolumeDown => N::VolumeDown,
+        v1::NamedKey::VolumeUp => N::VolumeUp,
+        v1::NamedKey::VolumeMute => N::VolumeMute,
+        v1::NamedKey::Shift => N::Shift,
+        v1::NamedKey::Control => N::Control,
+        v1::NamedKey::Alt => N::Alt,
+        v1::NamedKey::Super => N::Super,
+        v1::NamedKey::Hyper => N::Hyper,
+        v1::NamedKey::Meta => N::Meta,
+        v1::NamedKey::IsoLevel3Shift => N::IsoLevel3Shift,
+        v1::NamedKey::IsoLevel5Shift => N::IsoLevel5Shift,
     })
 }
 

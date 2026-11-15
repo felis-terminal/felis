@@ -184,12 +184,14 @@ plain_enum!(KeyLocationJson, KeyLocation, Standard, Left, Right, Numpad);
 
 macro_rules! named_key {
     ($($variant:ident),+ $(,)?) => {
-        impl From<NamedKey> for NamedKeyJson {
-            fn from(key: NamedKey) -> Self {
-                match key {
+        impl NamedKeyJson {
+            /// `None` for a key version 1 does not name.
+            const fn from_named(key: NamedKey) -> Option<Self> {
+                Some(match key {
                     $(NamedKey::$variant => Self::$variant,)+
                     NamedKey::F(index) => Self::F { index: index.get() },
-                }
+                    _ => return None,
+                })
             }
         }
 
@@ -217,8 +219,10 @@ named_key!(
 impl From<Key> for KeyJson {
     fn from(key: Key) -> Self {
         match key {
-            Key::Named(named) => Self::Named {
-                named: named.into(),
+            // What a front-end that cannot name the key sends.
+            Key::Named(named) => match NamedKeyJson::from_named(named) {
+                Some(named) => Self::Named { named },
+                None => Self::Other,
             },
             Key::Character(text) => Self::Character { text },
             Key::Other => Self::Other,
@@ -396,6 +400,17 @@ mod tests {
             unshifted: None,
             base_layout: None,
         }
+    }
+
+    #[test]
+    fn a_key_the_format_does_not_name_is_written_as_other() {
+        assert_eq!(KeyJson::from(Key::Named(NamedKey::Menu)), KeyJson::Other);
+        assert_eq!(
+            KeyJson::from(Key::Named(NamedKey::Enter)),
+            KeyJson::Named {
+                named: NamedKeyJson::Enter
+            }
+        );
     }
 
     #[test]

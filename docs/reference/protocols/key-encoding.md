@@ -18,7 +18,12 @@ Legacy (xterm) mode is the default: it applies whenever no Kitty keyboard flag i
 session until a program pushes flags. It encodes:
 
 - xterm-style for arrow / function keys, modifier-encoded with CSI `;n` parameters, except that F3 with a modifier is
-  `CSI 13 ; n ~`, since `CSI 1 ; n R` reads as a cursor position report; F13 and above send nothing,
+  `CSI 13 ; n ~`, since `CSI 1 ; n R` reads as a cursor position report, Menu as `CSI 29 ; n ~` (xterm's F16), and the
+  keypad's middle key with Num Lock off as `CSI 1 ; n E` (`SS3 E` under DECCKM),
+- the functional keys with no legacy encoding (F13–F35, Print Screen, Pause, the media and volume keys) in their
+  [Kitty forms](#kitty-key-events), `CSI number ; n u`, as kitty sends them; modifier and lock keys send nothing,
+- keypad keys as the keys they are equivalent to: the digits and operators as their text with Num Lock on, and the
+  navigation keys, keypad Enter included, as their main-block counterparts,
 - backspace as DEL (`0x7F`), and Ctrl+Backspace as BS (`0x08`),
 - Ctrl with a key whose produced character (Shift already applied) is one of those below as its C0 byte:
 
@@ -78,8 +83,10 @@ With bit 1 (disambiguate) or bit 8 (report all keys as escapes) active, a key th
   without the unshifted key it is reported for an ASCII letter only. `base` is what the same physical key types on the
   PC-101 US layout, when the front-end reports it and it differs from `keycode`, after an empty `shifted` when there is
   none: Ctrl+С on a Russian layout is `1089::99`, Ctrl+Shift+С `1089:1057:99`.
-- `modifiers`: shift `1`, alt `2`, ctrl `4`, super `8`; the hyper, meta, caps-lock, and num-lock bits are never set. The
-  parameter and everything after it are omitted when no modifier is held, the event is a press, and no text follows.
+- `modifiers`: shift `1`, alt `2`, ctrl `4`, super `8`, hyper `16`, meta `32`. The hyper and meta bits are set only by
+  the press of a Hyper or Meta key itself, and the caps-lock and num-lock bits never, since the window system reports
+  neither state. The parameter and everything after it are omitted when no modifier is held, the event is a press, and
+  no text follows.
 - `event`: `2` for an auto-repeat, `3` for a release, omitted for a press. Both are sent only while bit 2 (event types)
   is active; without it a repeat is reported as a press, and a release is not reported at all. A key that is not sent as
   an escape sequence (typed text, and Enter, Tab and Backspace without modifiers) reports no release, and its repeat is
@@ -87,12 +94,13 @@ With bit 1 (disambiguate) or bit 8 (report all keys as escapes) active, a key th
   there too. win32-input-mode reports both edges through `Kd` and always sets `Rc` to `1`, since each repeat arrives as
   its own event.
 - `text`: the codepoints of the OS-composed text, colon-separated, present only for presses while bit 16 (associated
-  text) is active, and left out when the text contains a control code.
+  text) is active, and left out when the text contains a control code or Ctrl turns the key into a control byte (the
+  "Legacy ctrl mapping" table: Ctrl+a, Ctrl+[, Ctrl+2, Ctrl+Space).
 
 Bit 1 escapes Enter, Tab, Backspace, Space, and any key producing a single character when Ctrl, Alt, or Super is held,
-Ctrl+C included, and Escape even unmodified; an unmodified key keeps its legacy bytes. Bit 8 escapes every key.
-Shift+Enter, Shift+Backspace, and Shift+Space are escaped under bit 1 although shift alone would not require it,
-matching Kitty; Shift+Tab stays `CSI Z`.
+Ctrl+C included, and Escape even unmodified; an unmodified key keeps its legacy bytes. Bit 8 escapes every key, and
+reports the modifier and lock keys besides. Shift+Enter, Shift+Backspace, and Shift+Space are escaped under bit 1
+although shift alone would not require it, matching Kitty; Shift+Tab stays `CSI Z`.
 
 With bit 1, bit 2, or bit 8 active, arrows, Home, End, the editing cluster, and function keys take the functional forms
 of the Kitty spec, never `SS3` and whatever DECCKM says:
@@ -104,8 +112,31 @@ of the Kitty spec, never `SS3` and whatever DECCKM says:
 | Insert, Delete, Page Up, Page Down | `CSI {2 3 5 6} ; m ~`                    |
 | F3, F5–F12                         | `CSI {13 15 17 18 19 20 21 23 24} ; m ~` |
 | F13–F35                            | `CSI {57376–57398} ; m u`                |
+| Keypad middle key, Num Lock off    | `CSI 1 ; m E`                            |
+| Print Screen, Pause, Menu          | `CSI {57361 57362 57363} ; m u`          |
+| Media play, pause, play/pause      | `CSI {57428 57429 57430} ; m u`          |
+| Media stop, fast forward, rewind   | `CSI {57432 57433 57434} ; m u`          |
+| Media next, previous, record       | `CSI {57435 57436 57437} ; m u`          |
+| Volume down, up, mute              | `CSI {57438 57439 57440} ; m u`          |
 
 `m` is `1+modifiers[:event]`; an unmodified press drops it, and with it the `1` before a letter final.
+
+With bit 1 or bit 8 active, a keypad key takes its own code, as `CSI number ; m u`, when it types no text or is held
+with Ctrl, Alt or Super; bit 8 gives every keypad key its own code. A digit or operator that types its text unmodified
+under bit 1 sends the text. Without either bit, a keypad key is sent as the key it is equivalent to.
+
+| Keypad key                                           | Number           |
+| ---------------------------------------------------- | ---------------- |
+| `0`–`9`                                              | `57399`–`57408`  |
+| `.`, `/`, `*`, `-`, `+`, Enter, `=`, `,`             | `57409`–`57416`  |
+| Left, Right, Up, Down, Page Up, Page Down, Home, End | `57417`–`57424`  |
+| Insert, Delete                                       | `57425`, `57426` |
+
+Bit 8 reports the modifier and lock keys as `CSI number ; m u`, by side: left Shift, Control, Alt, Super, Hyper and Meta
+are `57441` to `57446`, the right ones `57447` to `57452`, AltGr (ISO level 3 shift) `57453`, ISO level 5 shift `57454`,
+and Caps Lock, Scroll Lock and Num Lock `57358` to `57360`. A modifier key's press sets its own bit, and its release
+reports the modifiers still held, so releasing one of two held Control keys keeps ctrl set and releasing the other
+clears it. A lock key's press sets no lock bit.
 
 ### xterm `modifyOtherKeys`
 
@@ -139,19 +170,19 @@ of the Kitty / legacy forms:
 CSI Vk ; Sc ; Uc ; Kd ; Cs ; Rc _
 ```
 
-| Field | Meaning                     | Source                                                                                             |
-| ----- | --------------------------- | -------------------------------------------------------------------------------------------------- |
-| `Vk`  | Windows virtual-key code    | named key → fixed `VK_*`; single ASCII alphanumeric → its `VK_` (= uppercase byte); otherwise `0`  |
-| `Sc`  | scan code                   | always `0`: a layout scan code needs the physical key, and ConPTY / PSReadLine key off `Vk` + `Uc` |
-| `Uc`  | UTF-16 code unit            | the OS-composed text, or the control character for Enter / Tab / Backspace / Escape / Space        |
-| `Kd`  | key down (`1`) / up (`0`)   | both edges are reported                                                                            |
-| `Cs`  | `dwControlKeyState` bitmask | Shift `0x10`, Ctrl `LEFT_CTRL 0x08`, Alt `LEFT_ALT 0x02`                                           |
-| `Rc`  | repeat count                | always `1` (each auto-repeat is a separate event)                                                  |
+| Field | Meaning                     | Source                                                                                                                                    |
+| ----- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `Vk`  | Windows virtual-key code    | named key → fixed `VK_*`, none for modifier, lock and media keys; single ASCII alphanumeric → its `VK_` (= uppercase byte); otherwise `0` |
+| `Sc`  | scan code                   | always `0`: a layout scan code needs the physical key, and ConPTY / PSReadLine key off `Vk` + `Uc`                                        |
+| `Uc`  | UTF-16 code unit            | the OS-composed text, or the control character for Enter / Tab / Backspace / Escape / Space                                               |
+| `Kd`  | key down (`1`) / up (`0`)   | both edges are reported                                                                                                                   |
+| `Cs`  | `dwControlKeyState` bitmask | Shift `0x10`, Ctrl `LEFT_CTRL 0x08`, Alt `LEFT_ALT 0x02`                                                                                  |
+| `Rc`  | repeat count                | always `1` (each auto-repeat is a separate event)                                                                                         |
 
-A key with neither a `Vk` nor a `Uc` (a bare modifier or dead key) emits nothing. The mode is a per-session flag driven
-by the running program, and the daemon encodes keys against it like the other keyboard modes, so a client on any OS
-attached to a Windows daemon sends win32-input records. The `Sc` / `ENHANCED_KEY` limitation is argued in
-[input.md](../../explanation/input.md).
+A key with neither a `Vk` nor a `Uc` (a modifier, lock or media key, or a dead key) emits nothing. The mode is a
+per-session flag driven by the running program, and the daemon encodes keys against it like the other keyboard modes, so
+a client on any OS attached to a Windows daemon sends win32-input records. The `Sc` / `ENHANCED_KEY` limitation is
+argued in [input.md](../../explanation/input.md).
 
 ## Modifier convention
 

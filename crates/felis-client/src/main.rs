@@ -1462,7 +1462,7 @@ struct App {
     backdrop: Backdrop,
     macos_option_as_alt: bool,
     key_presses: option_compose::KeyPresses,
-    level_shifts: input::LevelShifts,
+    held_modifiers: input::HeldModifiers,
     /// Sub-row residue from touchpad `PixelDelta` events; without it every
     /// pixel event collapses to ±1 row, so slow gestures lose sub-row
     /// resolution and fast flicks cap at one row.
@@ -1644,7 +1644,7 @@ impl App {
             backdrop: window_cfg.backdrop,
             macos_option_as_alt: window_cfg.macos_option_as_alt,
             key_presses: option_compose::KeyPresses::for_platform(window_cfg.macos_option_as_alt),
-            level_shifts: input::LevelShifts::default(),
+            held_modifiers: input::HeldModifiers::default(),
             scroll_pixel_accum_y: 0.0,
             last_wheel_at: None,
             wheel_zoom_latched: false,

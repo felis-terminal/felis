@@ -370,7 +370,7 @@ impl App {
                 if !focused {
                     self.modifiers = Modifiers::empty();
                     self.key_presses.clear();
-                    self.level_shifts.clear();
+                    self.held_modifiers.clear();
                     self.update_mouse_cursor_icon();
                 }
                 self.redraw.request();
@@ -498,24 +498,28 @@ impl App {
     /// `None` drops the event (see `option_compose::KeyPresses::resolve`).
     fn key_press(&mut self, event: &KeyEvent) -> Option<KeyPress> {
         let kind = input::event_kind(event.state, event.repeat);
-        self.level_shifts
-            .track(event.physical_key, &event.logical_key, event.state);
+        let mods = self.held_modifiers.track(
+            event.physical_key,
+            &input::pressed_key(&event.logical_key, event.physical_key),
+            kind,
+            self.modifiers,
+        );
         let stroke = self.key_presses.resolve(
             event.physical_key,
             kind,
             &event.logical_key,
             event.text.as_deref(),
             option_compose::text_with_all_modifiers(event),
-            self.modifiers,
+            mods,
         )?;
         let character = matches!(stroke.key, winit::keyboard::Key::Character(_));
         Some(KeyPress {
-            key: input::pressed_key(&stroke.key),
+            key: input::pressed_key(&stroke.key, event.physical_key),
             unshifted: input::unshifted(
                 &input::key_without_modifiers(event),
                 stroke.mods,
                 stroke.composed,
-                &self.level_shifts,
+                &self.held_modifiers,
             )
             .filter(|_| character),
             base_layout: winit_keys::base_layout(event.physical_key).filter(|_| character),

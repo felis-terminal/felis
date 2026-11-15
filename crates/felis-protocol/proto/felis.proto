@@ -471,7 +471,8 @@ enum PromptJump {
 }
 
 // A named key felis bridges, F-keys excepted: an F-key is KeyId.function,
-// which carries its index.
+// which carries its index. A modifier key's side is its KeyLocation,
+// and BEGIN is the keypad's middle key with Num Lock off.
 enum NamedKey {
   NAMED_KEY_UNSPECIFIED = 0;
   NAMED_KEY_ENTER = 1;
@@ -489,10 +490,38 @@ enum NamedKey {
   NAMED_KEY_ARROW_DOWN = 13;
   NAMED_KEY_ARROW_LEFT = 14;
   NAMED_KEY_ARROW_RIGHT = 15;
+  NAMED_KEY_CAPS_LOCK = 16 [(felis.v1.value_since) = 5];
+  NAMED_KEY_SCROLL_LOCK = 17 [(felis.v1.value_since) = 5];
+  NAMED_KEY_NUM_LOCK = 18 [(felis.v1.value_since) = 5];
+  NAMED_KEY_PRINT_SCREEN = 19 [(felis.v1.value_since) = 5];
+  NAMED_KEY_PAUSE = 20 [(felis.v1.value_since) = 5];
+  NAMED_KEY_MENU = 21 [(felis.v1.value_since) = 5];
+  NAMED_KEY_BEGIN = 22 [(felis.v1.value_since) = 5];
+  NAMED_KEY_MEDIA_PLAY = 23 [(felis.v1.value_since) = 5];
+  NAMED_KEY_MEDIA_PAUSE = 24 [(felis.v1.value_since) = 5];
+  NAMED_KEY_MEDIA_PLAY_PAUSE = 25 [(felis.v1.value_since) = 5];
+  NAMED_KEY_MEDIA_STOP = 26 [(felis.v1.value_since) = 5];
+  NAMED_KEY_MEDIA_FAST_FORWARD = 27 [(felis.v1.value_since) = 5];
+  NAMED_KEY_MEDIA_REWIND = 28 [(felis.v1.value_since) = 5];
+  NAMED_KEY_MEDIA_TRACK_NEXT = 29 [(felis.v1.value_since) = 5];
+  NAMED_KEY_MEDIA_TRACK_PREVIOUS = 30 [(felis.v1.value_since) = 5];
+  NAMED_KEY_MEDIA_RECORD = 31 [(felis.v1.value_since) = 5];
+  NAMED_KEY_VOLUME_DOWN = 32 [(felis.v1.value_since) = 5];
+  NAMED_KEY_VOLUME_UP = 33 [(felis.v1.value_since) = 5];
+  NAMED_KEY_VOLUME_MUTE = 34 [(felis.v1.value_since) = 5];
+  NAMED_KEY_SHIFT = 35 [(felis.v1.value_since) = 5];
+  NAMED_KEY_CONTROL = 36 [(felis.v1.value_since) = 5];
+  NAMED_KEY_ALT = 37 [(felis.v1.value_since) = 5];
+  NAMED_KEY_SUPER = 38 [(felis.v1.value_since) = 5];
+  NAMED_KEY_HYPER = 39 [(felis.v1.value_since) = 5];
+  NAMED_KEY_META = 40 [(felis.v1.value_since) = 5];
+  NAMED_KEY_ISO_LEVEL3_SHIFT = 41 [(felis.v1.value_since) = 5];
+  NAMED_KEY_ISO_LEVEL5_SHIFT = 42 [(felis.v1.value_since) = 5];
 }
 
-// Where on the keyboard the key sits. Only NUMPAD changes the encoding
-// (DECKPAM).
+// Where on the keyboard the key sits. NUMPAD selects the keypad
+// encodings (DECKPAM, the Kitty keypad codes); LEFT and RIGHT name a
+// modifier key's side.
 enum KeyLocation {
   KEY_LOCATION_UNSPECIFIED = 0;
   KEY_LOCATION_STANDARD = 1;
