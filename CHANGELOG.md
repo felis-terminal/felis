@@ -26,6 +26,10 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   the Kitty text sizing protocol specifies, instead of erasing the character. Writing into its top row still erases it.
 - **Rendering**: on macOS and Wayland, a translucent window (`window.opacity` below `1.0`) shows its background at the
   configured color and opacity instead of lighter: a light theme at `0.8` drew about 25 levels too light.
+- **Grid**: text is split into cells as the Kitty text sizing protocol specifies. Each maximal subpart of ill-formed
+  UTF-8 becomes one U+FFFD, including a sequence cut short by ASCII or a control, which used to vanish. C1 controls,
+  U+FDD0..U+FDEF and the U+xFFFE / U+xFFFF noncharacters are discarded instead of taking a cell. A lone regional
+  indicator takes two cells, and U+FE0E after a wide emoji narrows it to one cell.
 
 ## [0.5.1] - 2026-11-15
 

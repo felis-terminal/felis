@@ -89,6 +89,11 @@ def outputs(ucd):
                     "`Grapheme_Cluster_Break=Extend` from `GraphemeBreakProperty.txt`.",
                     parse(gcb, "Extend"),
                 ),
+                table(
+                    "EMOJI_PRESENTATION",
+                    "`Emoji_Presentation` from `emoji-data.txt`.",
+                    parse(emoji, "Emoji_Presentation"),
+                ),
             ],
         ),
         REPO / "crates/felis-shaping/src/presentation/tables.rs": module(

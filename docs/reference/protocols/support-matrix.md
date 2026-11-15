@@ -243,6 +243,7 @@ Detail: [kitty-text-sizing.md](kitty-text-sizing.md).
 | vertical / horizontal alignment                 | ✅                                                                                 |
 | character exceeding screen or region dims       | ✅ discarded per character; others moved to fit (REQ-406)                          |
 | resize-then-restore round-trip                  | ✅ deterministic while every run fits the intermediate width (REQ-407)             |
+| splitting text into cells, variation selectors  | ✅ ([kitty-text-sizing.md](kitty-text-sizing.md#splitting-text-into-cells))        |
 | legacy `CSI Pn:…:Pn t` sizing form              | 🚫 (OSC 66 only)                                                                   |
 
 ## Kitty keyboard

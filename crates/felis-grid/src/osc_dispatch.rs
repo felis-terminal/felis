@@ -98,7 +98,10 @@ impl Grid {
         let mut cluster = String::new();
         let mut zwj_armed = false;
         let mut after_base = self.pending_bidi.after_base;
-        for c in text.chars() {
+        for c in text
+            .chars()
+            .filter(|&c| !crate::width::is_discarded_scalar(c))
+        {
             let width = self.screen.grapheme_width(Grapheme::Char(c));
             let armed = std::mem::take(&mut zwj_armed);
             let continues = continues_cluster(

@@ -187,7 +187,12 @@ The rectangle checksum query, DECRQCRA, shares this bounds model; its reply is s
 
 ## Charset handling
 
-- Input is treated as UTF-8 only. Bytes that do not form valid UTF-8 are replaced with U+FFFD on the grid.
+- Input is treated as UTF-8 only. Each maximal subpart of an ill-formed sequence becomes one U+FFFD on the grid,
+  including a sequence cut short by printable ASCII, a control, or an escape sequence (REQ-206).
+- Decoded code points that the Kitty text sizing protocol's splitting algorithm calls invalid are discarded: controls (a
+  C1 control reaches the decoder UTF-8-encoded, such as `C2 85`), U+FDD0..U+FDEF, and U+xFFFE / U+xFFFF in every plane.
+  A zero-width code point with no character before it on the line is discarded too, except a bidi override, which is
+  held for the next character (REQ-909).
 - C1 controls are recognized in their 7-bit `ESC <byte>` forms only (IND, NEL, RI, HTS, …). 8-bit C1 single bytes
   (`0x80–0x9F`) are never interpreted as controls: they participate in UTF-8 decoding (REQ-208).
 - Single shifts SS2 / SS3 (`ESC N` / `ESC O`) are consumed by the parser as two-byte escapes and do not switch charsets.

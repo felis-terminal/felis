@@ -163,8 +163,9 @@ specialized over a `Sink` trait so the compiler inlines call sites a function po
 block, and the print fast path batches contiguous same-SGR runs into one grid mutation, stamping a packed pen template
 per cell and flushing at an SGR change or row boundary. Rejected: a hand-rolled DFA layout beyond the Williams diagram
 (the diagram is correct; reinventing it would be cosmetic), and a bytewise in-DFA UTF-8 decoder (more parser states;
-felis instead buffers the ≤ 3-byte tail across PTY reads, simpler and bounded). Malformed sequences are dropped and
-resynced, never repaired by heuristic inference.
+felis instead buffers the ≤ 3-byte tail across PTY reads, simpler and bounded). Each maximal subpart of a malformed
+sequence becomes one U+FFFD and the decoder resyncs on the byte that ended it, never repairing it by heuristic
+inference.
 
 ## PTY abstraction
 

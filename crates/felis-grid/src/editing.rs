@@ -33,7 +33,7 @@ pub(crate) fn ends_in_pictographic_joiner(cluster: &str) -> bool {
 }
 
 /// Regional indicators (U+1F1E6..=U+1F1FF) pair into a flag (UAX#29
-/// GB12/GB13) but are width-1 alone; see
+/// GB12/GB13), so the second of a pair folds although it is wide; see
 /// [`Grid::prev_is_lone_regional_indicator`].
 pub(crate) const fn is_regional_indicator(c: char) -> bool {
     matches!(c, '\u{1F1E6}'..='\u{1F1FF}')
@@ -318,6 +318,11 @@ impl Grid {
     /// `false` when `g` wrote no cell of its own: it folded into a
     /// cluster, waits as a pending bidi override, or was dropped.
     pub(crate) fn put_grapheme(&mut self, g: Grapheme) -> bool {
+        if let Grapheme::Char(c) = g
+            && crate::width::is_discarded_scalar(c)
+        {
+            return false;
+        }
         // Valid only for the single print right after a ZWJ fold;
         // taking it also clears a stale arm.
         let zwj_armed = std::mem::take(&mut self.zwj_pending);
@@ -515,6 +520,9 @@ impl Grid {
         // when it was placed, as kitty leaves a multicell cell on VS16.
         if !sized {
             self.widen_cluster_if_needed(row, owner_col);
+            if mark == '\u{FE0E}' {
+                self.narrow_cluster_if_needed(row, owner_col);
+            }
         }
         if mark == '\u{200D}' {
             self.zwj_pending = true;
@@ -703,6 +711,37 @@ impl Grid {
             } else {
                 self.screen.cursor.col = next_col + 1;
             }
+        }
+    }
+
+    /// VS15 turns a two-cell emoji into a one-cell glyph, so the cell
+    /// gives back its `Spacer` and a cursor parked after it steps back,
+    /// as kitty's `draw_combining_char` does.
+    fn narrow_cluster_if_needed(&mut self, row: u16, owner_col: u16) {
+        let owner_idx = self.screen.idx(row, owner_col);
+        if self
+            .screen
+            .grapheme_width(self.screen.cells[owner_idx].grapheme)
+            != 1
+        {
+            return;
+        }
+        let next_col = owner_col + 1;
+        if next_col >= self.screen.cols
+            || !matches!(
+                self.screen.cells[self.screen.idx(row, next_col)].grapheme,
+                Grapheme::Spacer
+            )
+        {
+            return;
+        }
+        let next_idx = self.screen.idx(row, next_col);
+        self.screen.cells[next_idx] = Cell::default();
+        self.screen.damage.mark(row.into());
+        if self.screen.cursor.col == next_col + 1 {
+            self.screen.cursor.col = next_col;
+        } else if self.screen.cursor.pending_wrap && self.screen.cursor.col == next_col {
+            self.screen.cursor.pending_wrap = false;
         }
     }
 

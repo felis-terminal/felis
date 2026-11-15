@@ -1,4 +1,5 @@
-//! The UAX#29 grapheme-break properties GB11 reads, generated from the
+//! The UAX#29 grapheme-break properties GB11 reads, and the emoji
+//! presentation property the VS15 rule reads, generated from the
 //! UCD of the version unicode-width encodes, which unicode-width does
 //! not expose. The `unicode-segmentation` cross-checks in the tests
 //! catch a version skew.
@@ -7,7 +8,7 @@ use std::cmp::Ordering;
 
 mod tables;
 
-use tables::{EXTEND, EXTENDED_PICTOGRAPHIC};
+use tables::{EMOJI_PRESENTATION, EXTEND, EXTENDED_PICTOGRAPHIC};
 
 fn in_ranges(ranges: &[(char, char)], c: char) -> bool {
     ranges
@@ -29,6 +30,10 @@ pub(crate) fn is_extended_pictographic(c: char) -> bool {
 
 pub(crate) fn is_grapheme_extend(c: char) -> bool {
     in_ranges(EXTEND, c)
+}
+
+pub(crate) fn is_emoji_presentation(c: char) -> bool {
+    in_ranges(EMOJI_PRESENTATION, c)
 }
 
 #[cfg(test)]

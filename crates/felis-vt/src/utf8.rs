@@ -1,5 +1,6 @@
-//! UTF-8 boundary buffering above the byte-level DFA. Invalid sequences
-//! emit the Unicode replacement character per WHATWG.
+//! UTF-8 boundary buffering above the byte-level DFA. Each maximal
+//! subpart of an ill-formed sequence (Unicode ch. 3, "U+FFFD
+//! Substitution of Maximal Subparts") emits one replacement character.
 
 use std::str;
 
@@ -38,7 +39,16 @@ impl Decoder {
         self.needed = 0;
     }
 
-    /// Emits `'\u{FFFD}'` on a malformed sequence.
+    /// Drops a held sequence, reporting whether there was one: a caller
+    /// that ends the text there owes it a `'\u{FFFD}'`.
+    pub const fn flush(&mut self) -> bool {
+        let pending = self.is_pending();
+        self.reset();
+        pending
+    }
+
+    /// Emits `'\u{FFFD}'` for each maximal subpart of a malformed
+    /// sequence, then decodes the byte that ended it afresh.
     pub fn push<F: FnMut(char)>(&mut self, byte: u8, mut on_char: F) {
         if self.len == 0 && byte < 0x80 {
             on_char(byte as char);
@@ -58,7 +68,12 @@ impl Decoder {
             self.len = 1;
             return;
         }
-        if byte & 0xC0 != 0x80 {
+        let accepted = if self.len == 1 {
+            second_byte_range(self.buf[0])
+        } else {
+            0x80..=0xBF
+        };
+        if !accepted.contains(&byte) {
             on_char('\u{FFFD}');
             self.reset();
             self.push(byte, on_char);
@@ -77,6 +92,19 @@ impl Decoder {
             }
             self.reset();
         }
+    }
+}
+
+/// Unicode Table 3-7: the lead bytes whose second byte is narrower than
+/// `80..=BF` are the ones that would otherwise encode an overlong form,
+/// a surrogate, or a scalar past U+10FFFF.
+const fn second_byte_range(lead: u8) -> std::ops::RangeInclusive<u8> {
+    match lead {
+        0xE0 => 0xA0..=0xBF,
+        0xED => 0x80..=0x9F,
+        0xF0 => 0x90..=0xBF,
+        0xF4 => 0x80..=0x8F,
+        _ => 0x80..=0xBF,
     }
 }
 
@@ -138,6 +166,28 @@ mod tests {
         // 0x80 is the boundary of the ASCII fast path: a stray continuation
         // byte must decode to U+FFFD, not be waved through as U+0080.
         assert_eq!(collect(&[0x80]), "\u{FFFD}");
+    }
+
+    #[test]
+    fn each_maximal_subpart_becomes_one_replacement() {
+        for (bytes, expected) in [
+            (&b"a\xffb\xe2\x82b"[..], "a\u{FFFD}b\u{FFFD}b"),
+            (b"\xe0\x80\x80", "\u{FFFD}\u{FFFD}\u{FFFD}"),
+            (b"\xed\xa0\x80", "\u{FFFD}\u{FFFD}\u{FFFD}"),
+            (b"\xf4\x90\x80\x80", "\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}"),
+            (b"\xf0\x9f\x98", "\u{FFFD}"),
+            (b"\xf0\x9f\x98\x80", "\u{1F600}"),
+        ] {
+            let mut dec = Decoder::new();
+            let mut out = String::new();
+            for b in bytes {
+                dec.push(*b, |c| out.push(c));
+            }
+            if dec.flush() {
+                out.push('\u{FFFD}');
+            }
+            assert_eq!(out, expected, "{bytes:02x?}");
+        }
     }
 
     #[test]
