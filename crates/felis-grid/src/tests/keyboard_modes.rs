@@ -179,3 +179,47 @@ fn kitty_kbd_push_evicts_oldest_when_stack_is_full() {
         ((KITTY_KBD_STACK_LIMIT + 1) & 0x1F) as u8
     );
 }
+
+#[test]
+fn alternate_screen_starts_from_its_own_empty_kitty_kbd_stack() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(2, 2);
+    drive(&mut p, &mut g, b"\x1b[>1u\x1b[?1049h");
+    assert_eq!(g.kitty_kbd_flags(), KittyKbdFlags::empty());
+    assert_eq!(g.kitty_kbd_stack_depth(), 0);
+}
+
+#[test]
+fn kitty_kbd_changes_on_the_alternate_screen_stay_there() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(2, 2);
+    drive(&mut p, &mut g, b"\x1b[>1u\x1b[?1049h\x1b[>2u\x1b[>4u");
+    assert_eq!(g.kitty_kbd_flags().bits(), 4);
+    drive(&mut p, &mut g, b"\x1b[?1049l");
+    assert_eq!(g.kitty_kbd_flags(), KittyKbdFlags::DISAMBIGUATE);
+    assert_eq!(g.kitty_kbd_stack_depth(), 1);
+    drive(&mut p, &mut g, b"\x1b[?1049h");
+    assert_eq!(g.kitty_kbd_flags().bits(), 4);
+}
+
+#[test]
+fn switching_screens_reports_the_newly_active_kitty_kbd_flags() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(2, 2);
+    drive(&mut p, &mut g, b"\x1b[>1u");
+    g.take_kitty_kbd_dirty();
+    drive(&mut p, &mut g, b"\x1b[?1049h");
+    assert_eq!(g.take_kitty_kbd_dirty(), Some(KittyKbdFlags::empty()));
+    drive(&mut p, &mut g, b"\x1b[?1049l");
+    assert_eq!(g.take_kitty_kbd_dirty(), Some(KittyKbdFlags::DISAMBIGUATE));
+}
+
+#[test]
+fn ris_reports_the_kitty_kbd_flags_it_clears() {
+    let mut p = Parser::new();
+    let mut g = Grid::new(2, 2);
+    drive(&mut p, &mut g, b"\x1b[>1u");
+    g.take_kitty_kbd_dirty();
+    drive(&mut p, &mut g, b"\x1bc");
+    assert_eq!(g.take_kitty_kbd_dirty(), Some(KittyKbdFlags::empty()));
+}

@@ -30,6 +30,16 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   UTF-8 becomes one U+FFFD, including a sequence cut short by ASCII or a control, which used to vanish. C1 controls,
   U+FDD0..U+FDEF and the U+xFFFE / U+xFFFF noncharacters are discarded instead of taking a cell. A lone regional
   indicator takes two cells, and U+FE0E after a wide emoji narrows it to one cell.
+- **Keyboard**: the main and alternate screens keep separate Kitty keyboard flag stacks, so an editor's flags no longer
+  leak into the shell it returns to, and a program on the alternate screen starts from legacy encoding.
+- **Keyboard**: legacy encoding follows the Kitty spec's text-key rules: Ctrl+Alt with a key Ctrl leaves alone sends
+  `ESC` and the key (Ctrl+Alt+0 is `ESC 0`), and Ctrl+Shift+letter and Super combinations, Super+Enter included, are
+  sent as `CSI u` (Ctrl+Shift+A is `CSI 97;6u` instead of `0x01`); Shift+Alt+Tab is `ESC CSI Z`.
+- **Keyboard**: F3 with a modifier is `CSI 13;n~`, never `CSI 1;nR`, which reads as a cursor position report.
+- **Keyboard**: under the Kitty disambiguate, event-type, or report-all flags, F1–F4, arrows, Home and End take their
+  `CSI` forms whatever the cursor-key mode, F13–F35 send their Kitty codes, and function and cursor keys report repeats
+  and releases (`CSI 15;1:3~`). Associated text carries no control codes (Enter is `CSI 13u`), and Ctrl with a non-ASCII
+  key such as Russian Ctrl+С is a key event (`CSI 1089;5u`) rather than the typed letter.
 
 ## [0.5.1] - 2026-11-15
 

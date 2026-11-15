@@ -33,7 +33,7 @@ session is decided by the byte stream the daemon writes to the PTY.
 felis implements the **Kitty keyboard protocol**, which is unambiguous about modifiers, function keys, and alternate /
 shift-printed forms. The flag stack starts empty, so a session encodes legacy xterm until a program pushes flags. The
 mode is driven by the running program, not by config: a program pushes / pops Kitty keyboard flags at runtime, which
-felis tracks on a per-session flag stack.
+felis tracks on a flag stack per screen.
 
 A keystroke crosses the wire as the facts a keyboard delivers, not as bytes: `InputMsg::Key` carries the logical key,
 the OS-composed text, the modifiers, press / repeat / release, and the key location. The daemon encodes it against the

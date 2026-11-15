@@ -180,7 +180,7 @@ fn ctrl_space_and_backspace_emit_xterm_c0() {
         (
             NamedKey::Space,
             Modifiers::CONTROL | Modifiers::SUPER,
-            &b" "[..],
+            &b"\x1b[32;13u"[..],
         ),
     ] {
         let bytes =
@@ -341,36 +341,77 @@ fn alt_named_keys_meta_prefix_their_bare_body() {
 }
 
 #[test]
-fn alt_named_keys_super_held_skips_meta_prefix() {
-    let mods = Modifiers::ALT | Modifiers::SUPER;
-    assert_eq!(
-        encode_no_app_cursor(
-            &Key::Named(NamedKey::Space),
-            None,
-            mods,
-            true,
-            KittyKbdFlags::empty()
-        )
-        .as_deref(),
-        Some(&b" "[..]),
-        "Super must short-circuit Space meta-prefix"
-    );
+fn legacy_c0_keys_outside_the_c0_table_are_csi_u() {
+    let all_three = Modifiers::CONTROL | Modifiers::ALT | Modifiers::SHIFT;
+    for (named, mods, expected) in [
+        (NamedKey::Enter, Modifiers::SUPER, "\x1b[13;9u"),
+        (NamedKey::Escape, Modifiers::SUPER, "\x1b[27;9u"),
+        (
+            NamedKey::Space,
+            Modifiers::ALT | Modifiers::SUPER,
+            "\x1b[32;11u",
+        ),
+        (
+            NamedKey::Tab,
+            Modifiers::SHIFT | Modifiers::SUPER,
+            "\x1b[9;10u",
+        ),
+        (NamedKey::Backspace, all_three, "\x1b[127;8u"),
+    ] {
+        let bytes =
+            encode_no_app_cursor(&Key::Named(named), None, mods, true, KittyKbdFlags::empty());
+        assert_eq!(
+            bytes,
+            Some(expected.as_bytes().to_vec()),
+            "{mods:?}+{named:?}"
+        );
+    }
 }
 
 #[test]
-fn shift_tab_takes_priority_over_alt_meta_prefix() {
-    let mods = Modifiers::ALT | Modifiers::SHIFT;
-    assert_eq!(
-        encode_no_app_cursor(
-            &Key::Named(NamedKey::Tab),
-            None,
-            mods,
+fn alternate_keys_ride_on_a_legacy_csi_u_press() {
+    let flags = KittyKbdFlags::REPORT_EVENT_TYPES | KittyKbdFlags::REPORT_ALTERNATE_KEYS;
+    let bytes = kitty(
+        &lit("A"),
+        Some("A"),
+        Modifiers::CONTROL | Modifiers::SHIFT,
+        KeyEventKind::Press,
+        flags,
+        false,
+    );
+    assert_eq!(bytes, Some(b"\x1b[97:65;6u".to_vec()));
+}
+
+#[test]
+fn legacy_super_with_a_non_ascii_key_is_csi_u() {
+    for text in [Some("с"), None] {
+        let bytes = encode_no_app_cursor(
+            &lit("с"),
+            text,
+            Modifiers::SUPER,
             true,
-            KittyKbdFlags::empty()
-        )
-        .as_deref(),
-        Some(&b"\x1b[Z"[..]),
-        "Shift-Tab path must outrank the Alt meta-prefix"
+            KittyKbdFlags::empty(),
+        );
+        assert_eq!(bytes, Some(b"\x1b[1089;9u".to_vec()), "text {text:?}");
+    }
+}
+
+#[test]
+fn event_types_alone_report_releases_of_legacy_csi_u_keys_only() {
+    let flags = KittyKbdFlags::REPORT_EVENT_TYPES;
+    let release = |key: &Key, mods| kitty(key, None, mods, KeyEventKind::Release, flags, false);
+    assert_eq!(
+        release(&lit("A"), Modifiers::CONTROL | Modifiers::SHIFT),
+        Some(b"\x1b[97;6:3u".to_vec())
+    );
+    assert_eq!(
+        release(&lit("a"), Modifiers::SUPER),
+        Some(b"\x1b[97;9:3u".to_vec())
+    );
+    assert_eq!(release(&lit("a"), Modifiers::CONTROL), None);
+    assert_eq!(
+        release(&Key::Named(NamedKey::Escape), Modifiers::empty()),
+        None
     );
 }
 
@@ -395,14 +436,10 @@ fn unmodified_named_keys_keep_their_bare_byte() {
 }
 
 #[test]
-fn alt_with_super_falls_through_to_text() {
+fn legacy_alt_with_super_is_csi_u() {
     let mods = Modifiers::ALT | Modifiers::SUPER;
     let bytes = encode_no_app_cursor(&lit("a"), Some("a"), mods, true, KittyKbdFlags::empty());
-    assert_eq!(
-        bytes,
-        Some(b"a".to_vec()),
-        "Super present must short-circuit the meta-prefix path"
-    );
+    assert_eq!(bytes, Some(b"\x1b[97;11u".to_vec()));
 }
 
 #[test]
@@ -721,25 +758,19 @@ fn kitty_flags_supersede_application_keypad() {
 }
 
 #[test]
-fn xterm_mod_param_truth_table() {
-    assert_eq!(xterm_mod_param(Modifiers::empty()), None);
-    assert_eq!(xterm_mod_param(Modifiers::SHIFT), Some(2));
-    assert_eq!(xterm_mod_param(Modifiers::ALT), Some(3));
-    assert_eq!(xterm_mod_param(Modifiers::SHIFT | Modifiers::ALT), Some(4));
-    assert_eq!(xterm_mod_param(Modifiers::CONTROL), Some(5));
+fn mod_bits_truth_table() {
+    assert_eq!(mod_bits(Modifiers::empty()), 0);
+    assert_eq!(mod_bits(Modifiers::SHIFT), 1);
+    assert_eq!(mod_bits(Modifiers::ALT), 2);
+    assert_eq!(mod_bits(Modifiers::SHIFT | Modifiers::ALT), 3);
+    assert_eq!(mod_bits(Modifiers::CONTROL), 4);
+    assert_eq!(mod_bits(Modifiers::CONTROL | Modifiers::SHIFT), 5);
+    assert_eq!(mod_bits(Modifiers::CONTROL | Modifiers::ALT), 6);
     assert_eq!(
-        xterm_mod_param(Modifiers::CONTROL | Modifiers::SHIFT),
-        Some(6)
+        mod_bits(Modifiers::CONTROL | Modifiers::ALT | Modifiers::SHIFT),
+        7
     );
-    assert_eq!(
-        xterm_mod_param(Modifiers::CONTROL | Modifiers::ALT),
-        Some(7)
-    );
-    assert_eq!(
-        xterm_mod_param(Modifiers::CONTROL | Modifiers::ALT | Modifiers::SHIFT),
-        Some(8)
-    );
-    assert_eq!(xterm_mod_param(Modifiers::SUPER), Some(9));
+    assert_eq!(mod_bits(Modifiers::SUPER), 8);
 }
 
 #[test]
@@ -1399,6 +1430,332 @@ fn mok_release_events_produce_nothing() {
     assert_eq!(bytes, None);
 }
 
+fn kitty(
+    key: &Key,
+    text: Option<&str>,
+    mods: Modifiers,
+    kind: KeyEventKind,
+    flags: KittyKbdFlags,
+    application_cursor: bool,
+) -> Option<Vec<u8>> {
+    super::encode(
+        key,
+        text,
+        mods,
+        kind,
+        flags,
+        ModifyOtherKeys::Off,
+        application_cursor,
+        /* application_keypad = */ false,
+        /* win32_input_mode = */ false,
+        KeyLocation::Standard,
+    )
+}
+
+fn f(n: u8) -> Key {
+    Key::Named(NamedKey::F(FKey::lit(n)))
+}
+
+#[test]
+fn legacy_ctrl_alt_with_a_key_ctrl_leaves_untouched_sends_esc_and_the_key() {
+    for s in ["0", "1", "9", "`", "-", "=", ";", "'", ",", "."] {
+        let bytes = encode_no_app_cursor(
+            &lit(s),
+            Some(s),
+            Modifiers::CONTROL | Modifiers::ALT,
+            true,
+            KittyKbdFlags::empty(),
+        );
+        assert_eq!(bytes, Some(format!("\x1b{s}").into_bytes()), "Ctrl+Alt+{s}");
+    }
+}
+
+#[test]
+fn legacy_ctrl_tilde_maps_to_rs() {
+    let bytes = encode_no_app_cursor(
+        &lit("~"),
+        Some("~"),
+        Modifiers::CONTROL | Modifiers::SHIFT,
+        true,
+        KittyKbdFlags::empty(),
+    );
+    assert_eq!(bytes, Some(vec![0x1e]));
+}
+
+#[test]
+fn legacy_modifier_combinations_outside_the_text_key_table_are_csi_u() {
+    let ctrl_shift = Modifiers::CONTROL | Modifiers::SHIFT;
+    for (s, mods, expected) in [
+        ("A", ctrl_shift, "\x1b[97;6u"),
+        ("I", ctrl_shift, "\x1b[105;6u"),
+        ("a", Modifiers::SUPER, "\x1b[97;9u"),
+        ("3", Modifiers::SUPER, "\x1b[51;9u"),
+        (";", Modifiers::SUPER, "\x1b[59;9u"),
+        ("i", Modifiers::CONTROL | Modifiers::SUPER, "\x1b[105;13u"),
+        ("A", ctrl_shift | Modifiers::ALT, "\x1b[97;8u"),
+    ] {
+        let bytes = encode_no_app_cursor(&lit(s), Some(s), mods, true, KittyKbdFlags::empty());
+        assert_eq!(bytes, Some(expected.as_bytes().to_vec()), "{mods:?}+{s}");
+    }
+}
+
+#[test]
+fn legacy_shift_on_a_symbol_is_already_in_the_shifted_character() {
+    for (s, mods, expected) in [
+        ("#", Modifiers::CONTROL | Modifiers::SHIFT, &b"#"[..]),
+        ("?", Modifiers::CONTROL | Modifiers::SHIFT, &[0x7f][..]),
+        (
+            "#",
+            Modifiers::CONTROL | Modifiers::SHIFT | Modifiers::ALT,
+            &b"\x1b#"[..],
+        ),
+        ("A", Modifiers::SHIFT | Modifiers::ALT, &b"\x1bA"[..]),
+    ] {
+        let bytes = encode_no_app_cursor(&lit(s), Some(s), mods, true, KittyKbdFlags::empty());
+        assert_eq!(bytes.as_deref(), Some(expected), "{mods:?}+{s}");
+    }
+}
+
+#[test]
+fn legacy_shift_alt_tab_meta_prefixes_csi_z() {
+    let bytes = encode_no_app_cursor(
+        &Key::Named(NamedKey::Tab),
+        None,
+        Modifiers::SHIFT | Modifiers::ALT,
+        true,
+        KittyKbdFlags::empty(),
+    );
+    assert_eq!(bytes, Some(b"\x1b\x1b[Z".to_vec()));
+}
+
+#[test]
+fn modified_f3_is_csi_13_tilde_never_a_cursor_position_report() {
+    for flags in [KittyKbdFlags::empty(), KittyKbdFlags::DISAMBIGUATE] {
+        for (mods, expected) in [
+            (Modifiers::SHIFT, "\x1b[13;2~"),
+            (Modifiers::ALT, "\x1b[13;3~"),
+            (Modifiers::CONTROL, "\x1b[13;5~"),
+        ] {
+            let bytes = encode_no_app_cursor(&f(3), None, mods, true, flags);
+            assert_eq!(
+                bytes,
+                Some(expected.as_bytes().to_vec()),
+                "{flags:?} {mods:?}"
+            );
+        }
+    }
+    let bare = encode_no_app_cursor(
+        &f(3),
+        None,
+        Modifiers::empty(),
+        true,
+        KittyKbdFlags::empty(),
+    );
+    assert_eq!(bare, Some(b"\x1bOR".to_vec()));
+}
+
+#[test]
+fn disambiguate_sends_functional_keys_in_csi_form_only() {
+    for application_cursor in [false, true] {
+        for (key, expected) in [
+            (f(1), "\x1b[P"),
+            (f(2), "\x1b[Q"),
+            (f(3), "\x1b[13~"),
+            (f(4), "\x1b[S"),
+            (Key::Named(NamedKey::Home), "\x1b[H"),
+            (Key::Named(NamedKey::End), "\x1b[F"),
+            (Key::Named(NamedKey::ArrowUp), "\x1b[A"),
+            (Key::Named(NamedKey::PageUp), "\x1b[5~"),
+        ] {
+            let bytes = kitty(
+                &key,
+                None,
+                Modifiers::empty(),
+                KeyEventKind::Press,
+                KittyKbdFlags::DISAMBIGUATE,
+                application_cursor,
+            );
+            assert_eq!(
+                bytes,
+                Some(expected.as_bytes().to_vec()),
+                "{key:?} DECCKM={application_cursor}"
+            );
+        }
+    }
+}
+
+#[test]
+fn f13_and_above_take_their_functional_codes_under_kitty_flags_only() {
+    let under_flags = |key: &Key, mods| {
+        kitty(
+            key,
+            None,
+            mods,
+            KeyEventKind::Press,
+            KittyKbdFlags::DISAMBIGUATE,
+            false,
+        )
+    };
+    assert_eq!(
+        under_flags(&f(13), Modifiers::empty()),
+        Some(b"\x1b[57376u".to_vec())
+    );
+    assert_eq!(
+        under_flags(&f(35), Modifiers::SHIFT),
+        Some(b"\x1b[57398;2u".to_vec())
+    );
+    let legacy = encode_no_app_cursor(
+        &f(13),
+        None,
+        Modifiers::empty(),
+        true,
+        KittyKbdFlags::empty(),
+    );
+    assert_eq!(legacy, None);
+}
+
+#[test]
+fn functional_keys_report_repeat_and_release_under_event_types() {
+    let flags = KittyKbdFlags::DISAMBIGUATE | KittyKbdFlags::REPORT_EVENT_TYPES;
+    for (key, mods, kind, expected) in [
+        (
+            f(5),
+            Modifiers::empty(),
+            KeyEventKind::Release,
+            "\x1b[15;1:3~",
+        ),
+        (
+            f(5),
+            Modifiers::empty(),
+            KeyEventKind::Repeat,
+            "\x1b[15;1:2~",
+        ),
+        (
+            f(1),
+            Modifiers::empty(),
+            KeyEventKind::Release,
+            "\x1b[1;1:3P",
+        ),
+        (
+            Key::Named(NamedKey::ArrowUp),
+            Modifiers::empty(),
+            KeyEventKind::Release,
+            "\x1b[1;1:3A",
+        ),
+        (
+            Key::Named(NamedKey::Insert),
+            Modifiers::SHIFT,
+            KeyEventKind::Release,
+            "\x1b[2;2:3~",
+        ),
+    ] {
+        let bytes = kitty(&key, None, mods, kind, flags, false);
+        assert_eq!(
+            bytes,
+            Some(expected.as_bytes().to_vec()),
+            "{key:?} {kind:?}"
+        );
+    }
+}
+
+#[test]
+fn event_types_without_disambiguate_still_tag_functional_keys() {
+    let bytes = kitty(
+        &f(5),
+        None,
+        Modifiers::empty(),
+        KeyEventKind::Release,
+        KittyKbdFlags::REPORT_EVENT_TYPES,
+        false,
+    );
+    assert_eq!(bytes, Some(b"\x1b[15;1:3~".to_vec()));
+}
+
+#[test]
+fn text_keys_report_no_repeat_or_release_without_report_all_keys() {
+    let flags = KittyKbdFlags::DISAMBIGUATE | KittyKbdFlags::REPORT_EVENT_TYPES;
+    let release = kitty(
+        &lit("a"),
+        Some("a"),
+        Modifiers::empty(),
+        KeyEventKind::Release,
+        flags,
+        false,
+    );
+    assert_eq!(release, None);
+    let repeat = kitty(
+        &lit("a"),
+        Some("a"),
+        Modifiers::empty(),
+        KeyEventKind::Repeat,
+        flags,
+        false,
+    );
+    assert_eq!(repeat, Some(b"a".to_vec()));
+}
+
+#[test]
+fn associated_text_that_is_a_control_code_is_left_out() {
+    let flags = KittyKbdFlags::REPORT_ALL_AS_ESCAPES | KittyKbdFlags::REPORT_ASSOCIATED_TEXT;
+    for (key, text, expected) in [
+        (Key::Named(NamedKey::Enter), "\r", "\x1b[13u"),
+        (Key::Named(NamedKey::Tab), "\t", "\x1b[9u"),
+        (Key::Named(NamedKey::Backspace), "\x7f", "\x1b[127u"),
+        (Key::Named(NamedKey::Escape), "\x1b", "\x1b[27u"),
+    ] {
+        let bytes = kitty(
+            &key,
+            Some(text),
+            Modifiers::empty(),
+            KeyEventKind::Press,
+            flags,
+            false,
+        );
+        assert_eq!(bytes, Some(expected.as_bytes().to_vec()), "{key:?}");
+    }
+    let ctrl_a = kitty(
+        &lit("a"),
+        Some("\u{1}"),
+        Modifiers::CONTROL,
+        KeyEventKind::Press,
+        flags,
+        false,
+    );
+    assert_eq!(ctrl_a, Some(b"\x1b[97;5u".to_vec()));
+}
+
+#[test]
+fn disambiguate_reports_a_non_ascii_key_held_with_ctrl_by_its_lowercase_codepoint() {
+    let flags = KittyKbdFlags::DISAMBIGUATE;
+    let ctrl = kitty(
+        &lit("с"),
+        Some("с"),
+        Modifiers::CONTROL,
+        KeyEventKind::Press,
+        flags,
+        false,
+    );
+    assert_eq!(ctrl, Some(b"\x1b[1089;5u".to_vec()));
+    let ctrl_shift = kitty(
+        &lit("С"),
+        Some("С"),
+        Modifiers::CONTROL | Modifiers::SHIFT,
+        KeyEventKind::Press,
+        flags,
+        false,
+    );
+    assert_eq!(ctrl_shift, Some(b"\x1b[1089;6u".to_vec()));
+    let plain = kitty(
+        &lit("с"),
+        Some("с"),
+        Modifiers::empty(),
+        KeyEventKind::Press,
+        flags,
+        false,
+    );
+    assert_eq!(plain, Some("с".as_bytes().to_vec()));
+}
+
 /// A string of at most `cap` UTF-8 bytes, which is what admission
 /// lets through for a character or its composed text.
 fn capped_utf8(cap: usize) -> impl proptest::strategy::Strategy<Value = String> {
@@ -1641,7 +1998,7 @@ proptest::proptest! {
         );
         proptest::prop_assert_eq!(under_decckm.as_deref(), Some(&modified[..]));
 
-        let m = xterm_mod_param(mods).expect("a held modifier has an xterm parameter");
+        let m = mod_bits(mods) + 1;
         let final_byte = *bare.last().expect("a non-empty encoding");
         let leading = if final_byte == b'~' {
             String::from_utf8(bare[2..bare.len() - 1].to_vec()).expect("digits")
@@ -1757,12 +2114,9 @@ proptest::proptest! {
         let key = Key::Character(s.clone());
         let bytes = encode_no_app_cursor(&key, Some(s.as_str()), mods, true, KittyKbdFlags::empty())
             .expect("printable ASCII always encodes under Alt");
-        let body_resolves = if ctrl {
-            legacy_ctrl_byte(&s).is_some()
+        if ctrl && shift && byte.is_ascii_alphabetic() {
+            proptest::prop_assert!(bytes.starts_with(b"\x1b["), "Ctrl+Shift+Alt+letter is CSI u");
         } else {
-            single_ascii(&s).is_some()
-        };
-        if body_resolves {
             proptest::prop_assert_eq!(
                 bytes[0], 0x1b,
                 "Alt+ASCII byte={} mods={:?} must meta-prefix", byte, mods
@@ -1772,18 +2126,22 @@ proptest::proptest! {
     }
 
     #[test]
-    fn alt_with_super_never_meta_prefixes(
-        byte in 0x61_u8..=0x7a_u8, // 'a'..='z'
+    fn legacy_super_with_a_letter_is_csi_u_with_the_lowercase_code(
+        byte in 0x41_u8..=0x5a_u8, // 'A'..='Z'
+        shift in proptest::bool::ANY,
+        alt in proptest::bool::ANY,
+        ctrl in proptest::bool::ANY,
+        lowercase in proptest::bool::ANY,
     ) {
-        let s = std::str::from_utf8(&[byte]).unwrap().to_owned();
-        let mods = Modifiers::ALT | Modifiers::SUPER;
-        let key = Key::Character(s.clone());
-        let bytes = encode_no_app_cursor(&key, Some(s.as_str()), mods, true, KittyKbdFlags::empty())
-            .expect("ASCII letter always encodes");
-        proptest::prop_assert_ne!(
-            bytes[0], 0x1b,
-            "Super+Alt+{} must not meta-prefix", char::from(byte)
-        );
+        let c = if lowercase { byte.to_ascii_lowercase() } else { byte };
+        let s = char::from(c).to_string();
+        let mut mods = Modifiers::SUPER;
+        if shift { mods |= Modifiers::SHIFT; }
+        if alt { mods |= Modifiers::ALT; }
+        if ctrl { mods |= Modifiers::CONTROL; }
+        let bytes = encode_no_app_cursor(&lit(&s), Some(&s), mods, true, KittyKbdFlags::empty());
+        let expected = format!("\x1b[{};{}u", byte.to_ascii_lowercase(), mod_bits(mods) + 1);
+        proptest::prop_assert_eq!(bytes, Some(expected.into_bytes()));
     }
 
     #[test]
@@ -1801,7 +2159,7 @@ proptest::proptest! {
         let mut mods = Modifiers::ALT;
         if shift { mods |= Modifiers::SHIFT; }
         if ctrl { mods |= Modifiers::CONTROL; }
-        if matches!(key, NamedKey::Tab) && shift {
+        if (matches!(key, NamedKey::Tab) || ctrl) && shift {
             return Ok(());
         }
         let bytes = encode_no_app_cursor(&Key::Named(key), None, mods, true, KittyKbdFlags::empty())

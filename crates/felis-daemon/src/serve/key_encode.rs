@@ -37,22 +37,30 @@ pub(crate) fn encode(
     }
     let kitty_disambiguate = kitty_kbd_flags.contains(KittyKbdFlags::DISAMBIGUATE);
     let kitty_all_as_escapes = kitty_kbd_flags.contains(KittyKbdFlags::REPORT_ALL_AS_ESCAPES);
+    let kitty_event_types = kitty_kbd_flags.contains(KittyKbdFlags::REPORT_EVENT_TYPES);
     // Bit 3 (all-as-escapes) implies bit 0 (disambiguate).
     let kitty_csi_u_on = kitty_disambiguate || kitty_all_as_escapes;
+    if !is_press && !kitty_event_types {
+        return None;
+    }
     // A repeat is reported as its own event type only while bit 2 is
     // active; the Kitty spec has no way to say "repeat" without it, so
     // it reports as a press, which is what every other encoding does.
     let event = match kind {
         KeyEventKind::Release => EVENT_RELEASE,
-        KeyEventKind::Repeat if kitty_kbd_flags.contains(KittyKbdFlags::REPORT_EVENT_TYPES) => {
-            EVENT_REPEAT
-        }
+        KeyEventKind::Repeat if kitty_event_types => EVENT_REPEAT,
         KeyEventKind::Press | KeyEventKind::Repeat => EVENT_PRESS,
     };
+    if (kitty_csi_u_on || kitty_event_types)
+        && let Key::Named(named) = key
+        && let Some((number, final_byte)) = kitty_functional(*named)
+    {
+        return Some(csi_functional(number, final_byte, mods, event));
+    }
     // Associated text and alternate keycodes ride on presses only.
     let kitty_text = if is_press && kitty_kbd_flags.contains(KittyKbdFlags::REPORT_ASSOCIATED_TEXT)
     {
-        text
+        text.filter(|t| !t.chars().any(char::is_control))
     } else {
         None
     };
@@ -61,17 +69,15 @@ pub(crate) fn encode(
     } else {
         None
     };
-    if !is_press {
-        let event_types_on = kitty_kbd_flags.contains(KittyKbdFlags::REPORT_EVENT_TYPES);
-        if !event_types_on || !kitty_csi_u_on {
-            return None;
-        }
-        let keycode = kitty_encoded_keycode(key, mods, kitty_all_as_escapes)?;
-        return Some(kitty_kbd_csi_u(keycode, None, mods, event, None));
-    }
     if kitty_csi_u_on && let Some(keycode) = kitty_encoded_keycode(key, mods, kitty_all_as_escapes)
     {
         return Some(kitty_kbd_csi_u(keycode, kitty_alt, mods, event, kitty_text));
+    }
+    // Keys sent as legacy bytes have no event field to carry a release
+    // or a repeat (Kitty spec "Event types").
+    if !is_press {
+        return legacy_csi_u_keycode(key, mods)
+            .map(|keycode| kitty_kbd_csi_u(keycode, None, mods, event, None));
     }
     // xterm modifyOtherKeys (REQ-506), superseded by any Kitty flag.
     // Unlike the Kitty path it never escapes a bare key, so plain Escape
@@ -97,37 +103,64 @@ pub(crate) fn encode(
     {
         return Some(vec![0x1b, b'O', final_byte]);
     }
+    if let Some(keycode) = legacy_csi_u_keycode(key, mods) {
+        return Some(kitty_kbd_csi_u(keycode, kitty_alt, mods, event, None));
+    }
     if let Key::Named(named) = key
         && let Some(bytes) = encode_named(*named, mods, application_cursor)
     {
         return Some(bytes);
     }
-    // metaSendsEscape: bash readline binds Alt+B / Alt+F / Alt+. against
-    // it. Non-ASCII text falls through to the passthrough rather than
-    // fabricating a meta form.
-    if mods.alt_key()
-        && !mods.super_key()
+    // Non-ASCII text falls through to the passthrough rather than
+    // fabricating a meta or control form.
+    if (mods.control_key() || mods.alt_key())
         && let Key::Character(s) = key
+        && let Some(c) = single_ascii(s).filter(u8::is_ascii_graphic)
     {
-        let body: Option<u8> = if mods.control_key() {
-            legacy_ctrl_byte(s)
-        } else {
-            single_ascii(s)
-        };
-        if let Some(byte) = body {
-            return Some(vec![0x1b, byte]);
-        }
-    }
-    if mods.control_key()
-        && !mods.alt_key()
-        && !mods.super_key()
-        && let Key::Character(s) = key
-        && let Some(byte) = legacy_ctrl_byte(s)
-    {
-        return Some(vec![byte]);
+        return Some(legacy_text_key(c, mods));
     }
     text.filter(|s| !s.is_empty())
         .map(|s| s.as_bytes().to_vec())
+}
+
+/// A modifier combination the legacy tables have no bytes for, sent as
+/// `CSI u` (Kitty spec "Legacy key event encoding"). A text key already
+/// carries Shift in its logical character, so Shift counts only with
+/// Ctrl on a letter, where the C0 byte would hide it.
+fn legacy_csi_u_keycode(key: &Key, mods: Modifiers) -> Option<u32> {
+    match key {
+        Key::Named(named) => {
+            let keycode = match named {
+                NamedKey::Escape => 27,
+                named => legacy_kitty_keycode(*named)?,
+            };
+            let all_three = mods.control_key() && mods.alt_key() && mods.shift_key();
+            (mods.super_key() || all_three).then_some(keycode)
+        }
+        Key::Character(s) if mods.super_key() => character_keycode(s),
+        Key::Character(s) => {
+            let c = single_ascii(s).filter(u8::is_ascii_graphic)?;
+            let shift_unconsumed =
+                mods.shift_key() && mods.control_key() && c.is_ascii_alphabetic();
+            shift_unconsumed.then_some(u32::from(c.to_ascii_lowercase()))
+        }
+        Key::Other => None,
+    }
+}
+
+/// Kitty spec "Legacy text keys", for the combinations
+/// [`legacy_csi_u_keycode`] leaves to it.
+fn legacy_text_key(c: u8, mods: Modifiers) -> Vec<u8> {
+    let body = if mods.control_key() {
+        legacy_ctrl_byte(c)
+    } else {
+        c
+    };
+    if mods.alt_key() {
+        vec![0x1b, body]
+    } else {
+        vec![body]
+    }
 }
 
 /// `CSI Vk ; Sc ; Uc ; Kd ; Cs ; Rc _`. `Sc` is always `0`: a scan code
@@ -302,19 +335,7 @@ fn kitty_kbd_csi_u(
     event_type: u8,
     text: Option<&str>,
 ) -> Vec<u8> {
-    let mut mod_bits: u32 = 0;
-    if mods.shift_key() {
-        mod_bits |= 1;
-    }
-    if mods.alt_key() {
-        mod_bits |= 2;
-    }
-    if mods.control_key() {
-        mod_bits |= 4;
-    }
-    if mods.super_key() {
-        mod_bits |= 8;
-    }
+    let mod_bits = mod_bits(mods);
     let text = text.filter(|s| !s.is_empty());
     let has_text = text.is_some();
     let need_mod = mod_bits != 0 || event_type != EVENT_PRESS || has_text;
@@ -387,12 +408,23 @@ fn kitty_encoded_keycode(key: &Key, mods: Modifiers, force_all: bool) -> Option<
     if !any_mod && !force_all {
         return None;
     }
-    if let Key::Character(s) = key
-        && let Some(cp) = single_ascii_lower(s)
-    {
-        return Some(u32::from(cp));
+    let Key::Character(s) = key else { return None };
+    character_keycode(s)
+}
+
+/// A single-character key's code, lowercased where that stays one
+/// character.
+fn character_keycode(s: &str) -> Option<u32> {
+    let mut chars = s.chars();
+    let c = chars.next()?;
+    if chars.next().is_some() {
+        return None;
     }
-    None
+    let mut lower = c.to_lowercase();
+    Some(match (lower.next(), lower.next()) {
+        (Some(l), None) => u32::from(l),
+        _ => u32::from(c),
+    })
 }
 
 /// Separate from [`kitty_encoded_keycode`]: modifyOtherKeys never
@@ -433,9 +465,8 @@ fn modify_other_keys_keycode(key: &Key, mods: Modifiers, level2: bool) -> Option
     Some(cp)
 }
 
-/// xterm's `1 + bits` modifier param; `None` when no modifier is held
-/// so the bare legacy sequence goes out.
-const fn xterm_mod_param(mods: Modifiers) -> Option<u32> {
+/// The `1 + bits` modifier parameter minus its `1`.
+const fn mod_bits(mods: Modifiers) -> u32 {
     let mut bits: u32 = 0;
     if mods.shift_key() {
         bits |= 1;
@@ -449,46 +480,69 @@ const fn xterm_mod_param(mods: Modifiers) -> Option<u32> {
     if mods.super_key() {
         bits |= 8;
     }
-    if bits == 0 { None } else { Some(bits + 1) }
+    bits
 }
 
-const fn xterm_csi_letter(named: NamedKey) -> Option<u8> {
-    match named {
-        NamedKey::ArrowUp => Some(b'A'),
-        NamedKey::ArrowDown => Some(b'B'),
-        NamedKey::ArrowRight => Some(b'C'),
-        NamedKey::ArrowLeft => Some(b'D'),
-        NamedKey::End => Some(b'F'),
-        NamedKey::Home => Some(b'H'),
-        _ => None,
-    }
-}
-
-/// The gaps at 16 and 22 are xterm's: VT220 reserved them for "Help" and
-/// "Do".
-const fn xterm_csi_tilde_num(named: NamedKey) -> Option<u8> {
-    match named {
-        NamedKey::Insert => Some(2),
-        NamedKey::Delete => Some(3),
-        NamedKey::PageUp => Some(5),
-        NamedKey::PageDown => Some(6),
+/// The Kitty spec's "Functional key definitions" form of a named key
+/// that has no legacy byte: `(number, final)`. F3 is `13 ~` because
+/// `CSI 1 ; Pm R` reads as a cursor position report.
+fn kitty_functional(named: NamedKey) -> Option<(u32, u8)> {
+    Some(match named {
+        NamedKey::ArrowUp => (1, b'A'),
+        NamedKey::ArrowDown => (1, b'B'),
+        NamedKey::ArrowRight => (1, b'C'),
+        NamedKey::ArrowLeft => (1, b'D'),
+        NamedKey::End => (1, b'F'),
+        NamedKey::Home => (1, b'H'),
+        NamedKey::Insert => (2, b'~'),
+        NamedKey::Delete => (3, b'~'),
+        NamedKey::PageUp => (5, b'~'),
+        NamedKey::PageDown => (6, b'~'),
         NamedKey::F(k) => match k.get() {
-            5 => Some(15),
-            6 => Some(17),
-            7 => Some(18),
-            8 => Some(19),
-            9 => Some(20),
-            10 => Some(21),
-            11 => Some(23),
-            12 => Some(24),
-            _ => None,
+            1 => (1, b'P'),
+            2 => (1, b'Q'),
+            3 => (13, b'~'),
+            4 => (1, b'S'),
+            5 => (15, b'~'),
+            6 => (17, b'~'),
+            7 => (18, b'~'),
+            8 => (19, b'~'),
+            9 => (20, b'~'),
+            10 => (21, b'~'),
+            11 => (23, b'~'),
+            12 => (24, b'~'),
+            n => (57363 + u32::from(n), b'u'),
         },
-        _ => None,
-    }
+        _ => return None,
+    })
 }
 
-/// F1-F4 are SS3 bare: terminfo's `kf1`-`kf4` expect `ESC O <L>`.
-const fn xterm_ss3_final(named: NamedKey) -> Option<u8> {
+/// `CSI number ; 1+modifiers[:event] final`, dropping the parameters a
+/// press without modifiers does not need, and the number too when it is
+/// the default `1`.
+fn csi_functional(number: u32, final_byte: u8, mods: Modifiers, event_type: u8) -> Vec<u8> {
+    let bits = mod_bits(mods);
+    let params = bits != 0 || event_type != EVENT_PRESS;
+    let mut out = Vec::with_capacity(12);
+    out.extend_from_slice(b"\x1b[");
+    if number != 1 || params {
+        out.extend_from_slice(number.to_string().as_bytes());
+    }
+    if params {
+        out.push(b';');
+        out.extend_from_slice((bits + 1).to_string().as_bytes());
+        if event_type != EVENT_PRESS {
+            out.push(b':');
+            out.extend_from_slice(event_type.to_string().as_bytes());
+        }
+    }
+    out.push(final_byte);
+    out
+}
+
+/// The unmodified SS3 forms terminfo's `kf1`-`kf4` and, under DECCKM,
+/// `kcuu1` and friends expect; any modifier moves them onto CSI.
+fn legacy_ss3_final(named: NamedKey, application_cursor: bool) -> Option<u8> {
     match named {
         NamedKey::F(k) => match k.get() {
             1 => Some(b'P'),
@@ -497,68 +551,43 @@ const fn xterm_ss3_final(named: NamedKey) -> Option<u8> {
             4 => Some(b'S'),
             _ => None,
         },
+        NamedKey::ArrowUp
+        | NamedKey::ArrowDown
+        | NamedKey::ArrowRight
+        | NamedKey::ArrowLeft
+        | NamedKey::End
+        | NamedKey::Home
+            if application_cursor =>
+        {
+            kitty_functional(named).map(|(_, final_byte)| final_byte)
+        }
         _ => None,
     }
 }
 
-/// xterm's modifyCursorKeys shape; modifiers force the SS3 family onto
-/// CSI too.
-fn csi_modified_letter(letter: u8, m: u32) -> Vec<u8> {
-    let mut out = Vec::with_capacity(8);
-    out.extend_from_slice(b"\x1b[1;");
-    out.extend_from_slice(m.to_string().as_bytes());
-    out.push(letter);
-    out
-}
-
-fn xterm_ss3_letter_seq(letter: u8, mods: Modifiers) -> Vec<u8> {
-    xterm_mod_param(mods).map_or_else(
-        || vec![0x1b, b'O', letter],
-        |m| csi_modified_letter(letter, m),
-    )
-}
-
-/// Under DECCKM the bare form is SS3, which vim / less / emacs read out
-/// of terminfo's `kcuu1`; the modified form stays CSI regardless, as in
-/// xterm.
-fn xterm_letter_seq(letter: u8, mods: Modifiers, application_cursor: bool) -> Vec<u8> {
-    xterm_mod_param(mods).map_or_else(
-        || {
-            let intro = if application_cursor { b'O' } else { b'[' };
-            vec![0x1b, intro, letter]
-        },
-        |m| csi_modified_letter(letter, m),
-    )
-}
-
-fn xterm_tilde_seq(num: u8, mods: Modifiers) -> Vec<u8> {
-    let mut out = Vec::with_capacity(8);
-    out.extend_from_slice(b"\x1b[");
-    out.extend_from_slice(num.to_string().as_bytes());
-    if let Some(m) = xterm_mod_param(mods) {
-        out.push(b';');
-        out.extend_from_slice(m.to_string().as_bytes());
-    }
-    out.push(b'~');
-    out
-}
-
 fn encode_named(named: NamedKey, mods: Modifiers, application_cursor: bool) -> Option<Vec<u8>> {
-    // DECCKM swings only the letter-final family, as in xterm's table.
-    if let Some(letter) = xterm_csi_letter(named) {
-        return Some(xterm_letter_seq(letter, mods, application_cursor));
+    if mod_bits(mods) == 0
+        && let Some(final_byte) = legacy_ss3_final(named, application_cursor)
+    {
+        return Some(vec![0x1b, b'O', final_byte]);
     }
-    if let Some(num) = xterm_csi_tilde_num(named) {
-        return Some(xterm_tilde_seq(num, mods));
+    // Legacy mode leaves F13 and above unsent: the Kitty spec lets a
+    // terminal ignore functional keys that have no legacy encoding.
+    if let Some((number, final_byte)) = kitty_functional(named)
+        && final_byte != b'u'
+    {
+        return Some(csi_functional(number, final_byte, mods, EVENT_PRESS));
     }
-    if let Some(letter) = xterm_ss3_final(named) {
-        return Some(xterm_ss3_letter_seq(letter, mods));
-    }
+    let alt_prefix = mods.alt_key();
     // `CSI Z` is its own escape, not `\t` with a meta prefix.
     if matches!(named, NamedKey::Tab) && mods.shift_key() {
-        return Some(b"\x1b[Z".to_vec());
+        return Some(if alt_prefix {
+            b"\x1b\x1b[Z".to_vec()
+        } else {
+            b"\x1b[Z".to_vec()
+        });
     }
-    let ctrl = mods.control_key() && !mods.super_key();
+    let ctrl = mods.control_key();
     let bare: Vec<u8> = match named {
         NamedKey::Enter => b"\r".to_vec(),
         NamedKey::Backspace if ctrl => vec![0x08],
@@ -569,7 +598,7 @@ fn encode_named(named: NamedKey, mods: Modifiers, application_cursor: bool) -> O
         NamedKey::Space => b" ".to_vec(),
         _ => return None,
     };
-    if mods.alt_key() && !mods.super_key() {
+    if alt_prefix {
         let mut out = Vec::with_capacity(bare.len() + 1);
         out.push(0x1b);
         out.extend_from_slice(&bare);
@@ -598,18 +627,20 @@ fn ctrl_byte(s: &str) -> Option<u8> {
     }
 }
 
-/// Not folded into [`ctrl_byte`]: `modifyOtherKeys` level 1 reads that
-/// as "has a legacy byte" and escapes Ctrl+digit / Ctrl+punctuation.
-fn legacy_ctrl_byte(s: &str) -> Option<u8> {
-    match s {
-        "2" => Some(0x00),
-        "3" => Some(0x1b),
-        "4" => Some(0x1c),
-        "5" => Some(0x1d),
-        "6" => Some(0x1e),
-        "7" | "/" => Some(0x1f),
-        "8" | "?" => Some(0x7f),
-        _ => ctrl_byte(s),
+/// The Kitty spec's "Legacy ctrl mapping of ASCII keys": a key the table
+/// has no row for is left untouched. Not folded into [`ctrl_byte`]:
+/// `modifyOtherKeys` level 1 reads that as "has a legacy byte" and
+/// escapes Ctrl+digit / Ctrl+punctuation.
+fn legacy_ctrl_byte(c: u8) -> u8 {
+    match c {
+        b'2' => 0x00,
+        b'3' => 0x1b,
+        b'4' => 0x1c,
+        b'5' => 0x1d,
+        b'6' | b'~' => 0x1e,
+        b'7' | b'/' => 0x1f,
+        b'8' | b'?' => 0x7f,
+        _ => ctrl_byte(char::from(c).encode_utf8(&mut [0; 4])).unwrap_or(c),
     }
 }
 
