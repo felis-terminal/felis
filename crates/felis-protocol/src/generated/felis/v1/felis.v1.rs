@@ -891,6 +891,19 @@ pub struct InputKeyEvent {
     pub kind: i32,
     #[prost(enumeration="KeyLocation", tag="5")]
     pub location: i32,
+    /// The character key's code with no modifier applied, as a Unicode
+    /// scalar (anything else is a decode refusal): `3` for Shift+3 on a US
+    /// layout, where `key` is `#`. Absent where the front-end cannot tell,
+    /// and may be absent where it is `key` lowercased; the daemon then
+    /// lowercases `key`.
+    #[prost(uint32, optional, tag="6")]
+    pub unshifted: ::core::option::Option<u32>,
+    /// What the same physical key types unmodified on the PC-101 US layout,
+    /// as a Unicode scalar (anything else is a decode refusal): `c` for the
+    /// key that types `с` on a Russian layout. Absent where the front-end
+    /// cannot tell, or the key has no text on that layout.
+    #[prost(uint32, optional, tag="7")]
+    pub base_layout: ::core::option::Option<u32>,
 }
 /// Window resize: drives SIGWINCH. Carries GridDims rather than loose
 /// row/col/pixel fields: GridDims is the one geometry vocabulary.
@@ -3025,7 +3038,7 @@ pub struct SearchMatch {
 // below and asserts the Rust values equal them, so editing one here
 // without the other fails the build; prose-check: ignore):
 //    PROTOCOL_MAJOR = 1
-//    PROTOCOL_MINOR = 4
+//    PROTOCOL_MINOR = 5
 //
 // Kind or arm: a frame kind is a *surface*, so a message addressing a
 // surface no existing kind owns earns a kind, as does one whose

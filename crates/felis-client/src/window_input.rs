@@ -53,6 +53,8 @@ pub(crate) struct KeyPress {
     pub(crate) mods: Modifiers,
     pub(crate) kind: KeyEventKind,
     pub(crate) location: KeyLocation,
+    pub(crate) unshifted: Option<char>,
+    pub(crate) base_layout: Option<char>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +87,8 @@ impl KeyPress {
             mods: self.mods,
             kind: self.kind,
             location: self.location,
+            unshifted: self.unshifted,
+            base_layout: self.base_layout,
         }
     }
 }

@@ -192,6 +192,8 @@ impl From<&messages::KeyEvent> for v1::InputKeyEvent {
             mods: u32::from(e.mods.bits()),
             kind: key_event_kind_to_i32(e.kind),
             location: key_location_to_i32(e.location),
+            unshifted: e.unshifted.map(u32::from),
+            base_layout: e.base_layout.map(u32::from),
         }
     }
 }
@@ -208,8 +210,15 @@ impl TryFrom<v1::InputKeyEvent> for messages::KeyEvent {
             mods: KeyMods::from_bits_truncate(e.mods.to_le_bytes()[0]),
             kind: key_event_kind_from_i32(e.kind)?,
             location: key_location_from_i32(e.location)?,
+            unshifted: scalar("InputKeyEvent.unshifted", e.unshifted)?,
+            base_layout: scalar("InputKeyEvent.base_layout", e.base_layout)?,
         })
     }
+}
+
+fn scalar(field: &'static str, raw: Option<u32>) -> Result<Option<char>, WireError> {
+    raw.map(|n| char::from_u32(n).ok_or(WireError::MalformedField(field)))
+        .transpose()
 }
 
 impl From<&messages::InputMsg> for v1::InputMsg {
@@ -330,10 +339,34 @@ mod tests {
             mods: 0,
             kind: v1::KeyEventKind::Press as i32,
             location: v1::KeyLocation::Standard as i32,
+            unshifted: None,
+            base_layout: None,
         };
         assert!(matches!(
             messages::KeyEvent::try_from(event),
             Err(WireError::MissingField("InputKeyEvent.key"))
         ));
+    }
+
+    #[test]
+    fn an_alternate_key_that_is_not_a_unicode_scalar_is_rejected() {
+        let event = |unshifted, base_layout| v1::InputKeyEvent {
+            key: Some(key_id(v1::key_id::Key::Character("a".into()))),
+            text: None,
+            mods: 0,
+            kind: v1::KeyEventKind::Press as i32,
+            location: v1::KeyLocation::Standard as i32,
+            unshifted,
+            base_layout,
+        };
+        for (raw, field) in [
+            (event(Some(0xD800), None), "InputKeyEvent.unshifted"),
+            (event(None, Some(0x11_0000)), "InputKeyEvent.base_layout"),
+        ] {
+            assert!(
+                matches!(messages::KeyEvent::try_from(raw), Err(WireError::MalformedField(f)) if f == field),
+                "{field}"
+            );
+        }
     }
 }

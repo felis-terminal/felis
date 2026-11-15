@@ -477,6 +477,8 @@ mod tests {
                 mods: KeyMods::empty(),
                 kind: KeyEventKind::Press,
                 location: KeyLocation::Standard,
+                unshifted: None,
+                base_layout: None,
             }),
         ] {
             assert_eq!(seals_key(&msg), &[CoalesceKey::Viewport], "{msg:?}");

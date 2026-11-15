@@ -53,7 +53,7 @@ import "google/protobuf/timestamp.proto";
 // below and asserts the Rust values equal them, so editing one here
 // without the other fails the build; prose-check: ignore):
 //   PROTOCOL_MAJOR = 1
-//   PROTOCOL_MINOR = 4
+//   PROTOCOL_MINOR = 5
 //
 // Kind or arm: a frame kind is a *surface*, so a message addressing a
 // surface no existing kind owns earns a kind, as does one whose
@@ -1188,6 +1188,23 @@ message InputKeyEvent {
   uint32 mods = 3;
   KeyEventKind kind = 4;
   KeyLocation location = 5;
+  // The character key's code with no modifier applied, as a Unicode
+  // scalar (anything else is a decode refusal): `3` for Shift+3 on a US
+  // layout, where `key` is `#`. Absent where the front-end cannot tell,
+  // and may be absent where it is `key` lowercased; the daemon then
+  // lowercases `key`.
+  optional uint32 unshifted = 6 [(felis.v1.field_since) = {
+    minor: 5
+    skippable: true
+  }];
+  // What the same physical key types unmodified on the PC-101 US layout,
+  // as a Unicode scalar (anything else is a decode refusal): `c` for the
+  // key that types `с` on a Russian layout. Absent where the front-end
+  // cannot tell, or the key has no text on that layout.
+  optional uint32 base_layout = 7 [(felis.v1.field_since) = {
+    minor: 5
+    skippable: true
+  }];
 }
 
 // Window resize: drives SIGWINCH. Carries GridDims rather than loose

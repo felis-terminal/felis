@@ -4,10 +4,13 @@
 //! (docs/explanation/architecture/overview.md
 //! "Workspace: the crate-boundary decision record").
 
+use std::collections::HashSet;
+
+use felis_client_core::Modifiers;
 use felis_protocol::messages::{Key, KeyEvent, KeyEventKind, KeyLocation};
-use winit::event::ElementState;
+use winit::event::{ElementState, KeyEvent as WinitKeyEvent};
 use winit::keyboard::{
-    Key as WinitKey, KeyLocation as WinitKeyLocation, NamedKey as WinitNamedKey,
+    Key as WinitKey, KeyLocation as WinitKeyLocation, NamedKey as WinitNamedKey, PhysicalKey,
 };
 
 use crate::window_input::PressedKey;
@@ -49,6 +52,80 @@ pub(crate) fn pressed_key(key: &WinitKey) -> PressedKey {
         WinitKey::Character(s) => PressedKey::Character(s.as_str().to_owned()),
         _ => PressedKey::Other,
     }
+}
+
+/// The `AltGr` keys held. Under one, a key types a level Shift alone does
+/// not reach, so the unshifted key would name a different character
+/// than the one typed.
+#[derive(Debug, Default)]
+pub(crate) struct LevelShifts(HashSet<PhysicalKey>);
+
+impl LevelShifts {
+    pub(crate) fn track(&mut self, physical: PhysicalKey, key: &WinitKey, state: ElementState) {
+        if *key != WinitKey::Named(WinitNamedKey::AltGraph) {
+            return;
+        }
+        match state {
+            ElementState::Pressed => self.0.insert(physical),
+            ElementState::Released => self.0.remove(&physical),
+        };
+    }
+
+    /// Focus loss: the releases of keys still held go to another window.
+    pub(crate) fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    fn any(&self) -> bool {
+        !self.0.is_empty()
+    }
+}
+
+/// The key a character keystroke names with no modifier applied, sent
+/// only where it can differ from the key lowercased: while Shift is held
+/// and neither an `AltGr` key nor Option composition chose the character.
+pub(crate) fn unshifted(
+    without_modifiers: &WinitKey,
+    mods: Modifiers,
+    composed: bool,
+    level_shifts: &LevelShifts,
+) -> Option<char> {
+    if !mods.shift_key() || composed || level_shifts.any() {
+        return None;
+    }
+    let WinitKey::Character(s) = without_modifiers else {
+        return None;
+    };
+    let mut chars = s.chars();
+    let c = chars.next()?;
+    chars.next().is_none().then_some(c)
+}
+
+#[cfg(any(
+    target_os = "windows",
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+))]
+pub(crate) fn key_without_modifiers(event: &WinitKeyEvent) -> WinitKey {
+    use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+    event.key_without_modifiers()
+}
+
+#[cfg(not(any(
+    target_os = "windows",
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+)))]
+pub(crate) const fn key_without_modifiers(_: &WinitKeyEvent) -> WinitKey {
+    WinitKey::Unidentified(winit::keyboard::NativeKey::Unidentified)
 }
 
 pub(crate) const fn location(loc: WinitKeyLocation) -> KeyLocation {
@@ -114,12 +191,36 @@ mod tests {
             mods: Modifiers::CONTROL,
             kind: KeyEventKind::Press,
             location: location(WinitKeyLocation::Numpad),
+            unshifted: Some('3'),
+            base_layout: Some('3'),
         }
         .to_wire();
         assert_eq!(event.key, Key::Character("a".into()));
         assert_eq!(event.text.as_deref(), Some("a"));
         assert!(event.mods.control_key());
         assert_eq!(event.location, KeyLocation::Numpad);
+        assert_eq!((event.unshifted, event.base_layout), (Some('3'), Some('3')));
+    }
+
+    #[test]
+    fn the_unshifted_key_rides_only_on_a_shifted_keystroke() {
+        let three = WinitKey::Character("3".into());
+        let none = LevelShifts::default();
+        assert_eq!(unshifted(&three, Modifiers::SHIFT, false, &none), Some('3'));
+        assert_eq!(unshifted(&three, Modifiers::CONTROL, false, &none), None);
+    }
+
+    #[test]
+    fn no_unshifted_key_rides_on_a_composed_or_altgr_keystroke() {
+        let l = WinitKey::Character("l".into());
+        let mut altgr = LevelShifts::default();
+        let right_alt = PhysicalKey::Code(winit::keyboard::KeyCode::AltRight);
+        let altgr_key = WinitKey::Named(WinitNamedKey::AltGraph);
+        assert_eq!(unshifted(&l, Modifiers::SHIFT, true, &altgr), None);
+        altgr.track(right_alt, &altgr_key, ElementState::Pressed);
+        assert_eq!(unshifted(&l, Modifiers::SHIFT, false, &altgr), None);
+        altgr.track(right_alt, &altgr_key, ElementState::Released);
+        assert_eq!(unshifted(&l, Modifiers::SHIFT, false, &altgr), Some('l'));
     }
 
     /// A bare modifier must reach the wire as `Other` so the daemon
@@ -144,6 +245,8 @@ mod tests {
             mods: Modifiers::empty(),
             kind,
             location: KeyLocation::Standard,
+            unshifted: None,
+            base_layout: None,
         }
         .to_wire()
     }

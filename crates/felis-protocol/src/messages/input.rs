@@ -179,6 +179,13 @@ pub struct KeyEvent {
     pub mods: KeyMods,
     pub kind: KeyEventKind,
     pub location: KeyLocation,
+    /// A [`Key::Character`]'s key with no modifier applied, Shift
+    /// included, where the front-end knows it; it may be left out where
+    /// it is the key itself lowercased.
+    pub unshifted: Option<char>,
+    /// What the same physical key types unmodified on the PC-101 US
+    /// layout, where the front-end knows it.
+    pub base_layout: Option<char>,
 }
 
 /// Mouse button reported by the client. Wheel events report as button +
@@ -454,6 +461,8 @@ pub(crate) mod tests {
                 mods: KeyMods::empty(),
                 kind: KeyEventKind::Press,
                 location: KeyLocation::Standard,
+                unshifted: None,
+                base_layout: None,
             }),
             InputMsg::Key(KeyEvent {
                 key: Key::Named(NamedKey::F(FKey::lit(35))),
@@ -461,6 +470,8 @@ pub(crate) mod tests {
                 mods: KeyMods::all(),
                 kind: KeyEventKind::Release,
                 location: KeyLocation::Right,
+                unshifted: None,
+                base_layout: None,
             }),
             InputMsg::Key(KeyEvent {
                 key: Key::Character("\u{e9}".into()),
@@ -468,6 +479,26 @@ pub(crate) mod tests {
                 mods: KeyMods::ALT | KeyMods::SUPER,
                 kind: KeyEventKind::Repeat,
                 location: KeyLocation::Numpad,
+                unshifted: None,
+                base_layout: None,
+            }),
+            InputMsg::Key(KeyEvent {
+                key: Key::Character("\u{2116}".into()),
+                text: Some("\u{2116}".into()),
+                mods: KeyMods::CTRL | KeyMods::SHIFT,
+                kind: KeyEventKind::Press,
+                location: KeyLocation::Standard,
+                unshifted: Some('3'),
+                base_layout: Some('3'),
+            }),
+            InputMsg::Key(KeyEvent {
+                key: Key::Character("\u{10ffff}".into()),
+                text: None,
+                mods: KeyMods::SHIFT,
+                kind: KeyEventKind::Release,
+                location: KeyLocation::Standard,
+                unshifted: Some('\u{10ffff}'),
+                base_layout: Some('\0'),
             }),
             // An empty text is not an absent one: the round trip must
             // keep them apart, so the wire field is `optional`.
@@ -477,6 +508,8 @@ pub(crate) mod tests {
                 mods: KeyMods::CTRL,
                 kind: KeyEventKind::Press,
                 location: KeyLocation::Left,
+                unshifted: None,
+                base_layout: None,
             }),
             InputMsg::ViewportStep { rows: 1 },
             InputMsg::ViewportStep { rows: -1 },

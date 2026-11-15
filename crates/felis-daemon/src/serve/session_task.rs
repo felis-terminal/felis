@@ -1831,6 +1831,10 @@ fn encode_key(core: &ParseCore, event: &KeyEvent) -> Option<Vec<u8>> {
         modes.application_keypad,
         modes.win32_input_mode,
         event.location,
+        key_encode::Alternates {
+            unshifted: event.unshifted,
+            base_layout: event.base_layout,
+        },
     )
 }
 

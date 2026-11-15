@@ -26,6 +26,8 @@ fn press(key: PressedKey, text: Option<&str>, mods: Modifiers) -> KeyPress {
         mods,
         kind: felis_protocol::messages::KeyEventKind::Press,
         location: felis_protocol::messages::KeyLocation::Standard,
+        unshifted: None,
+        base_layout: None,
     }
 }
 

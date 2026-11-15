@@ -15,6 +15,9 @@ pub(crate) struct Keystroke {
     pub(crate) key: Key,
     pub(crate) text: Option<String>,
     pub(crate) mods: Modifiers,
+    /// The key is a character the OS composed from Option, not the one
+    /// the physical key types.
+    pub(crate) composed: bool,
 }
 
 /// The press a held key started, keyed by its physical key so repeats and
@@ -44,6 +47,7 @@ impl Held {
             key: self.key.clone(),
             text,
             mods,
+            composed: self.composed,
         }
     }
 }
@@ -89,6 +93,7 @@ impl KeyPresses {
                 key: key.clone(),
                 text: text.map(str::to_owned),
                 mods,
+                composed: false,
             });
         }
         if kind == KeyEventKind::Release {
@@ -107,6 +112,7 @@ impl KeyPresses {
                     key: key.clone(),
                     text: text.map(str::to_owned),
                     mods,
+                    composed: false,
                 }
             });
         }
@@ -190,6 +196,14 @@ mod tests {
             key,
             text: text.map(str::to_owned),
             mods,
+            composed: false,
+        }
+    }
+
+    fn composed(key: Key, text: Option<&str>, mods: Modifiers) -> Keystroke {
+        Keystroke {
+            composed: true,
+            ..stroke(key, text, mods)
         }
     }
 
@@ -238,7 +252,7 @@ mod tests {
             Some("@"),
             ALT,
         );
-        assert_eq!(got, Some(stroke(ch("@"), Some("@"), Modifiers::empty())));
+        assert_eq!(got, Some(composed(ch("@"), Some("@"), Modifiers::empty())));
     }
 
     #[test]
@@ -265,7 +279,10 @@ mod tests {
             Some(NBSP),
             ALT,
         );
-        assert_eq!(got, Some(stroke(ch(NBSP), Some(NBSP), Modifiers::empty())));
+        assert_eq!(
+            got,
+            Some(composed(ch(NBSP), Some(NBSP), Modifiers::empty()))
+        );
     }
 
     #[test]
@@ -402,7 +419,10 @@ mod tests {
             Some(NBSP),
             ALT,
         );
-        assert_eq!(got, Some(stroke(ch(NBSP), Some(NBSP), Modifiers::empty())));
+        assert_eq!(
+            got,
+            Some(composed(ch(NBSP), Some(NBSP), Modifiers::empty()))
+        );
     }
 
     #[test]
@@ -441,7 +461,7 @@ mod tests {
             ALT,
         );
         let got = release(&mut presses, KeyCode::KeyL, &ch("l"), Modifiers::empty());
-        assert_eq!(got, Some(stroke(ch("@"), None, Modifiers::empty())));
+        assert_eq!(got, Some(composed(ch("@"), None, Modifiers::empty())));
     }
 
     #[test]
@@ -456,7 +476,7 @@ mod tests {
             ALT,
         );
         let got = release(&mut presses, KeyCode::KeyL, &ch("@"), ALT);
-        assert_eq!(got, Some(stroke(ch("@"), None, Modifiers::empty())));
+        assert_eq!(got, Some(composed(ch("@"), None, Modifiers::empty())));
     }
 
     #[test]

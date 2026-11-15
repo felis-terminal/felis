@@ -36,11 +36,12 @@ mode is driven by the running program, not by config: a program pushes / pops Ki
 felis tracks on a flag stack per screen.
 
 A keystroke crosses the wire as the facts a keyboard delivers, not as bytes: `InputMsg::Key` carries the logical key,
-the OS-composed text, the modifiers, press / repeat / release, and the key location. The daemon encodes it against the
-flag stack and mode snapshot it has already parsed, under the same lock a mouse event is encoded under. The encoder is
-platform-free and lives in the daemon; each front-end only has to name the key (the GUI client binds `winit`; a
-browser-hosted front-end would bind `KeyboardEvent`), so every front-end shares one encoding policy without linking an
-encoder.
+the OS-composed text, the modifiers, press / repeat / release, the key location, and, where the front-end can tell, the
+key with no modifier applied and the key the same physical key is on the US layout, which only a front-end that sees the
+active layout can name. The daemon encodes it against the flag stack and mode snapshot it has already parsed, under the
+same lock a mouse event is encoded under. The encoder is platform-free and lives in the daemon; each front-end only has
+to name the key (the GUI client binds `winit`; a browser-hosted front-end would bind `KeyboardEvent`), so every
+front-end shares one encoding policy without linking an encoder.
 
 The alternative, the client encoding from modes the daemon mirrors to it, loses a race it cannot win. Mode changes reach
 the client as grid frames, and a producer can enable a keyboard mode and then read input in the window before that frame
@@ -56,6 +57,12 @@ the client sees whether the OS composed a character from Option. The encoder can
 character it emits `ESC` and the character, as meta requires, so leaving the decision to it would send German Option+L
 as `ESC @`. Composing is the default because a layout that puts `@` or `{` behind Option has no other way to type it,
 and Terminal.app, iTerm2, kitty and Alacritty compose by default as well; Option as meta for readline is the opt-in.
+
+Legacy Ctrl+Shift departs from the Kitty spec's text-key algorithm in one place. The algorithm sends any Ctrl+Shift
+combination as `CSI u`, but on a US layout `Ctrl+_` (readline's undo), `Ctrl+^` (Vim's alternate file) and `Ctrl+@` need
+Shift, and every legacy program reads them as C0 bytes, so a shifted character the ctrl table maps keeps its byte, as in
+kitty and xterm. Only a shifted character the table has no row for, which Ctrl would send unchanged and so lose the
+Ctrl, becomes `CSI u`.
 
 Literal bytes keep their own message. `InputMsg::KeyBytes` carries what a caller means byte for byte:
 `sessions send --raw`, the `send_string` action, and a committed IME string. A paste has its own arm, because the daemon

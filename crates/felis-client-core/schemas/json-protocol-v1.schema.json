@@ -1884,6 +1884,15 @@
     },
     "KeyEventJson": {
       "properties": {
+        "base_layout": {
+          "description": "What the physical key types on the PC-101 US layout\n(`felis.proto` `InputKeyEvent.base_layout`), which a browser\nview can derive from `KeyboardEvent.code`; absent when unknown.",
+          "maxLength": 1,
+          "minLength": 1,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "key": {
           "$ref": "#/$defs/KeyJson"
         },
@@ -1901,6 +1910,15 @@
           "type": "integer"
         },
         "text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unshifted": {
+          "description": "A `character` key's key with no modifier applied\n(`felis.proto` `InputKeyEvent.unshifted`); absent when unknown.",
+          "maxLength": 1,
+          "minLength": 1,
           "type": [
             "string",
             "null"

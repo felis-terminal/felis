@@ -36,6 +36,7 @@ fn encode(
         application_keypad,
         win32_input_mode,
         key_location,
+        Alternates::default(),
     )
 }
 
@@ -1449,6 +1450,7 @@ fn kitty(
         /* application_keypad = */ false,
         /* win32_input_mode = */ false,
         KeyLocation::Standard,
+        Alternates::default(),
     )
 }
 
@@ -1813,6 +1815,8 @@ proptest::proptest! {
         application_keypad in proptest::bool::ANY,
         win32_input_mode in proptest::bool::ANY,
         location_idx in 0_usize..4,
+        unshifted in proptest::option::of(proptest::char::any()),
+        base_layout in proptest::option::of(proptest::char::any()),
     ) {
         let named = every_named_key();
         let key = match key_idx {
@@ -1847,6 +1851,10 @@ proptest::proptest! {
             application_keypad,
             win32_input_mode,
             location,
+            Alternates {
+                unshifted,
+                base_layout,
+            },
         );
         let len = encoded.as_ref().map_or(0, Vec::len);
         proptest::prop_assert!(
@@ -2400,4 +2408,192 @@ fn win32_input_supersedes_kitty_flags() {
         KeyLocation::Standard,
     );
     assert_eq!(out.as_deref(), Some(&b"\x1b[65;0;97;1;0;1_"[..]));
+}
+
+const CTRL_SHIFT: Modifiers = Modifiers::CTRL.union(Modifiers::SHIFT);
+const DISAMBIGUATE_ALTERNATES: KittyKbdFlags =
+    KittyKbdFlags::DISAMBIGUATE.union(KittyKbdFlags::REPORT_ALTERNATE_KEYS);
+
+/// A press of the character key `s` under `flags`, reported with its
+/// unshifted and base layout keys.
+fn press_with_alternates(
+    s: &str,
+    mods: Modifiers,
+    flags: KittyKbdFlags,
+    unshifted: Option<char>,
+    base_layout: Option<char>,
+) -> Option<Vec<u8>> {
+    super::encode(
+        &lit(s),
+        Some(s),
+        mods,
+        KeyEventKind::Press,
+        flags,
+        ModifyOtherKeys::Off,
+        /* application_cursor = */ false,
+        /* application_keypad = */ false,
+        /* win32_input_mode = */ false,
+        KeyLocation::Standard,
+        Alternates {
+            unshifted,
+            base_layout,
+        },
+    )
+}
+
+#[test]
+fn disambiguate_reports_a_shifted_symbol_by_its_unshifted_key() {
+    for (s, unshifted, mods, expected) in [
+        ("#", '3', CTRL_SHIFT, "\x1b[51;6u"),
+        (":", ';', CTRL_SHIFT, "\x1b[59;6u"),
+        ("#", '3', Modifiers::SHIFT | Modifiers::ALT, "\x1b[51;4u"),
+        ("{", '[', Modifiers::SHIFT | Modifiers::ALT, "\x1b[91;4u"),
+        ("A", 'a', CTRL_SHIFT, "\x1b[97;6u"),
+    ] {
+        assert_eq!(
+            press_with_alternates(s, mods, KittyKbdFlags::DISAMBIGUATE, Some(unshifted), None),
+            Some(expected.as_bytes().to_vec()),
+            "{s} with {mods:?}",
+        );
+    }
+}
+
+#[test]
+fn alternate_keys_report_the_shifted_key_after_the_unshifted_one() {
+    for (s, unshifted, expected) in [
+        ("#", '3', "\x1b[51:35;6u"),
+        (":", ';', "\x1b[59:58;6u"),
+        ("+", '=', "\x1b[61:43;6u"),
+        ("?", '/', "\x1b[47:63;6u"),
+    ] {
+        assert_eq!(
+            press_with_alternates(
+                s,
+                CTRL_SHIFT,
+                DISAMBIGUATE_ALTERNATES,
+                Some(unshifted),
+                None
+            ),
+            Some(expected.as_bytes().to_vec()),
+            "{s}",
+        );
+    }
+}
+
+#[test]
+fn alternate_keys_report_the_base_layout_key_after_an_empty_shifted_field() {
+    for (s, mods, unshifted, base, expected) in [
+        ("с", Modifiers::CTRL, None, 'c', "\x1b[1089::99;5u"),
+        ("х", Modifiers::CTRL, None, '[', "\x1b[1093::91;5u"),
+        ("С", CTRL_SHIFT, Some('с'), 'c', "\x1b[1089:1057:99;6u"),
+        ("№", CTRL_SHIFT, Some('3'), '3', "\x1b[51:8470;6u"),
+        ("c", Modifiers::CTRL, None, 'c', "\x1b[99;5u"),
+    ] {
+        assert_eq!(
+            press_with_alternates(s, mods, DISAMBIGUATE_ALTERNATES, unshifted, Some(base)),
+            Some(expected.as_bytes().to_vec()),
+            "{s} with {mods:?}",
+        );
+    }
+}
+
+#[test]
+fn the_base_layout_key_needs_the_alternate_keys_flag() {
+    assert_eq!(
+        press_with_alternates(
+            "с",
+            Modifiers::CTRL,
+            KittyKbdFlags::DISAMBIGUATE,
+            None,
+            Some('c')
+        ),
+        Some(b"\x1b[1089;5u".to_vec()),
+    );
+}
+
+#[test]
+fn legacy_ctrl_shift_with_a_symbol_the_ctrl_table_lacks_is_csi_u_by_its_unshifted_key() {
+    for (s, unshifted, expected) in [
+        ("#", '3', b"\x1b[51;6u".as_slice()),
+        (":", ';', b"\x1b[59;6u".as_slice()),
+        ("+", '=', b"\x1b[61;6u".as_slice()),
+    ] {
+        assert_eq!(
+            press_with_alternates(s, CTRL_SHIFT, KittyKbdFlags::empty(), Some(unshifted), None),
+            Some(expected.to_vec()),
+            "{s}",
+        );
+    }
+}
+
+/// `Ctrl+_` is readline's undo and `Ctrl+@` Emacs's set-mark; on a US
+/// layout both need Shift, and the ctrl table maps the shifted symbol.
+#[test]
+fn legacy_ctrl_shift_with_a_symbol_the_ctrl_table_maps_keeps_its_c0_byte() {
+    for (s, unshifted, expected) in [
+        ("_", '-', 0x1f),
+        ("?", '/', 0x7f),
+        ("@", '2', 0x00),
+        ("^", '6', 0x1e),
+        ("~", '`', 0x1e),
+    ] {
+        assert_eq!(
+            press_with_alternates(s, CTRL_SHIFT, KittyKbdFlags::empty(), Some(unshifted), None),
+            Some(vec![expected]),
+            "{s}",
+        );
+    }
+}
+
+#[test]
+fn legacy_ctrl_or_alt_on_another_layout_uses_the_base_layout_key() {
+    for (mods, expected) in [
+        (Modifiers::CTRL, b"\x03".as_slice()),
+        (Modifiers::ALT, b"\x1bc".as_slice()),
+        (Modifiers::CTRL | Modifiers::ALT, b"\x1b\x03".as_slice()),
+    ] {
+        assert_eq!(
+            press_with_alternates("с", mods, KittyKbdFlags::empty(), None, Some('c')),
+            Some(expected.to_vec()),
+            "{mods:?}",
+        );
+    }
+}
+
+#[test]
+fn legacy_ctrl_shift_on_another_layout_keeps_the_typed_text() {
+    assert_eq!(
+        press_with_alternates(
+            "С",
+            CTRL_SHIFT,
+            KittyKbdFlags::empty(),
+            Some('с'),
+            Some('c')
+        ),
+        Some("С".as_bytes().to_vec()),
+    );
+}
+
+#[test]
+fn a_release_reports_the_unshifted_key_code_without_alternates() {
+    let flags = KittyKbdFlags::DISAMBIGUATE
+        | KittyKbdFlags::REPORT_EVENT_TYPES
+        | KittyKbdFlags::REPORT_ALTERNATE_KEYS;
+    let release = super::encode(
+        &lit("#"),
+        None,
+        CTRL_SHIFT,
+        KeyEventKind::Release,
+        flags,
+        ModifyOtherKeys::Off,
+        false,
+        false,
+        false,
+        KeyLocation::Standard,
+        Alternates {
+            unshifted: Some('3'),
+            base_layout: Some('3'),
+        },
+    );
+    assert_eq!(release, Some(b"\x1b[51;6:3u".to_vec()));
 }

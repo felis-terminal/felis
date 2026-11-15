@@ -85,6 +85,8 @@ fn a_key_reserves_the_worst_case_report_and_refuses_an_oversized_one() {
             mods: KeyMods::empty(),
             kind: KeyEventKind::Press,
             location: KeyLocation::Standard,
+            unshifted: None,
+            base_layout: None,
         })
     };
 
@@ -297,6 +299,8 @@ async fn a_key_parked_on_a_full_budget_holds_back_the_fence_behind_it() {
             mods: KeyMods::empty(),
             kind: KeyEventKind::Press,
             location: KeyLocation::Standard,
+            unshifted: None,
+            base_layout: None,
         }),
     )
     .await;
