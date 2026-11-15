@@ -88,6 +88,15 @@ fn run_drain(
             return Drained::Suspended(prepared);
         }
     }
+    // The text just parsed may have moved a placeholder cell a relative
+    // placement hangs off.
+    crate::graphics::settle_relatives(
+        &core.grid,
+        &mut session.images,
+        &mut session.placements,
+        &mut session.image_events,
+        (session.cell_pixel_w, session.cell_pixel_h),
+    );
     Drained::Done(written)
 }
 
@@ -154,6 +163,16 @@ fn replay_effects(
     // invert. Query responses flow even with zero subscribers so programs do not hang.
     let mut effects = effects.into_iter();
     while let Some(effect) = effects.next() {
+        let moves_placements = matches!(
+            effect,
+            PtyEffect::ImagesCleared(_)
+                | PtyEffect::ScrolledIntoScrollback(_)
+                | PtyEffect::AltScreenScrolled(_)
+                | PtyEffect::RegionScrolled { .. }
+                | PtyEffect::HardReset
+                | PtyEffect::PrimaryReflowed(_)
+                | PtyEffect::ScreenSwitch(_)
+        );
         match effect {
             PtyEffect::ImagesCleared(scope) => crate::graphics::clear_images(
                 &mut session.images,
@@ -297,6 +316,15 @@ fn replay_effects(
             PtyEffect::CommandOutput { text, omitted } => session
                 .command_outputs
                 .push(GridMsg::CommandOutput { text, omitted }),
+        }
+        if moves_placements {
+            crate::graphics::settle_relatives(
+                &core.grid,
+                &mut session.images,
+                &mut session.placements,
+                &mut session.image_events,
+                (session.cell_pixel_w, session.cell_pixel_h),
+            );
         }
     }
     None
@@ -1350,7 +1378,7 @@ pub(crate) fn compose_image_rehydrate(
         crate::graphics::image_sync_messages(images, id, &mut msgs);
         out.extend(msgs.into_iter().map(OutEvent::Image));
     }
-    for p in placements.iter() {
+    for p in placements.iter().filter(|p| p.is_shown()) {
         out.push(OutEvent::Image(ImageMsg::Placement {
             image_id: p.image_id,
             placement_id: p.placement_id,

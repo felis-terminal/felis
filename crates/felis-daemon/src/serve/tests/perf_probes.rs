@@ -228,6 +228,7 @@ async fn time_to_first_frame_under_simulated_slow_link() {
         quiet: 0,
         anonymous: false,
         serial: 0,
+        parent: None,
     });
     let session_task::SessionLifecycle { id: session_id, .. } = session_task::spawn_owned(
         &pool,

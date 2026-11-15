@@ -1,8 +1,8 @@
 //! Feature queries (`a=q` with `e=<action>`): which keys and values felis
 //! honors for an action. The key order and the per-action key sets follow
 //! kitty's `supported_keys_for_query` (`kitty/graphics.c`), minus what
-//! felis does not implement: `f=8`/`f=16`, `N=`, the placement's `X=`/`Y=`
-//! cell offsets, and relative placements (`P=`, `Q=`, `H=`, `V=`).
+//! felis does not implement: `f=8`/`f=16`, `N=`, and the placement's
+//! `X=`/`Y=` cell offsets.
 
 use felis_grid::kitty_graphics::CompleteCommand;
 
@@ -94,6 +94,9 @@ impl Keys<'_> {
         self.one(b'C');
         self.one(b'U');
         self.int(b'z');
+        self.uint(b"PQ");
+        self.int(b'H');
+        self.int(b'V');
     }
 
     fn flag(&mut self, key: u8, allowed: &[u8]) {

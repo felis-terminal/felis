@@ -4279,6 +4279,13 @@ impl SessionTask {
                 &mut self.session.image_events,
             );
         }
+        crate::graphics::settle_relatives(
+            &core.grid,
+            &mut self.session.images,
+            &mut self.session.placements,
+            &mut self.session.image_events,
+            (self.session.cell_pixel_w, self.session.cell_pixel_h),
+        );
         // Before the replay is composed: the reflow's damage is that
         // replay, and leaving it armed would make the caller's own
         // fan-out re-arm every subscriber for a second one.

@@ -32,6 +32,7 @@ async fn scroll_into_scrollback_retains_placement_and_emits_shift() {
         quiet: 0,
         anonymous: false,
         serial: 0,
+        parent: None,
     });
 
     let rows = usize::from(session.lock_core().grid.rows());
@@ -104,6 +105,7 @@ async fn a_region_scroll_moves_the_placements_inside_the_region() {
             quiet: 0,
             anonymous: false,
             serial: 0,
+            parent: None,
         });
     }
     {
@@ -177,6 +179,7 @@ async fn rehydrate_replays_persisted_images_and_placements() {
         quiet: 0,
         anonymous: false,
         serial: 0,
+        parent: None,
     });
     let session_task::SessionLifecycle { id: session_id, .. } = session_task::spawn_owned(
         &pool,

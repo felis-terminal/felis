@@ -335,3 +335,71 @@ async fn a_frame_edit_reaches_only_an_opted_in_window_at_the_region_minor_as_a_r
         "a window that did not opt in gets the whole frame"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reflow_moves_a_relative_placement_with_its_parent_and_ships_it() {
+    let mut task = SessionTask::for_tests(session_with("read _x"));
+    let (_sub, mut rx) = attach_sub(&mut task, false);
+    let wide = sized_cells(&task, (8, 16));
+    let line = "x".repeat(usize::from(wide.cols) + 10);
+    write_to_grid(&task, format!("\x1b[2J\x1b[H{line}\r\n").as_bytes());
+    write_to_grid(&task, b"\x1b_Ga=T,f=24,s=1,v=1,i=1,p=1,C=1,q=2;AAAA\x1b\\");
+    write_to_grid(
+        &task,
+        b"\x1b_Ga=T,f=24,s=1,v=1,i=2,p=1,P=1,V=1,q=2;AAAA\x1b\\",
+    );
+    task.drain_effects().expect("effects drain");
+    let anchor = |task: &SessionTask, id: u32| {
+        task.session
+            .placements
+            .for_image(felis_protocol::ImageId(id))
+            .next()
+            .expect("placement recorded")
+            .anchor
+            .row
+    };
+    assert_eq!((anchor(&task, 1), anchor(&task, 2)), (3, 4));
+    drain_events(&mut rx);
+
+    task.apply_size(PtySize {
+        cols: wide.cols / 2,
+        ..wide
+    });
+    let parent = anchor(&task, 1);
+    assert!(parent > 3, "the re-wrapped line pushed the parent down");
+    assert_eq!(anchor(&task, 2), parent + 1);
+    assert!(
+        drain_events(&mut rx).iter().any(|ev| matches!(
+            ev,
+            OutEvent::Image(ImageMsg::Placement {
+                image_id: felis_protocol::ImageId(2),
+                anchor_row,
+                ..
+            }) if *anchor_row == parent + 1
+        )),
+        "the resize itself ships the moved relative placement",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cell_delete_matches_a_relative_placement_where_text_written_with_it_moved_it() {
+    let mut task = SessionTask::for_tests(session_with("read _x"));
+    write_to_grid(&task, b"\x1b_Ga=t,f=24,s=1,v=1,i=5,q=2;AAAA\x1b\\");
+    write_to_grid(&task, b"\x1b_Ga=p,i=5,p=1,U=1,c=1,r=1,q=2\x1b\\");
+    write_to_grid(&task, b"\x1b_Ga=T,f=24,s=1,v=1,i=6,p=1,P=5,q=2;AAAA\x1b\\");
+    write_to_grid(&task, "\x1b[5;5H\x1b[38;5;5m\u{10EEEE}\x1b[39m".as_bytes());
+    task.drain_effects().expect("effects drain");
+    write_to_grid(
+        &task,
+        "\x1b[2;2H\x1b[38;5;5m\u{10EEEE}\x1b[39m\x1b[5;5H\x1b[2K\x1b_Ga=d,d=p,x=2,y=2\x1b\\"
+            .as_bytes(),
+    );
+    task.drain_effects().expect("effects drain");
+    assert_eq!(
+        task.session
+            .placements
+            .for_image(felis_protocol::ImageId(6))
+            .count(),
+        0,
+    );
+}

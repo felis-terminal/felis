@@ -44,6 +44,7 @@ pub(super) fn placement(image: u32, placement: Option<u32>, z: i32) -> Placement
         quiet: 0,
         anonymous: false,
         serial: 0,
+        parent: None,
     }
 }
 

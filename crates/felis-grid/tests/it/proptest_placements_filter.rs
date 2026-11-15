@@ -40,6 +40,7 @@ fn placement_strategy() -> impl Strategy<Value = Placement> {
                 quiet: 0,
                 anonymous: false,
                 serial: 0,
+                parent: None,
             },
         )
 }

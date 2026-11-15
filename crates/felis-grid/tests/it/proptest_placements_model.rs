@@ -146,6 +146,7 @@ const fn placement(image: u32, id: PlacementId, anonymous: bool, row: i32) -> Pl
         quiet: 0,
         anonymous,
         serial: 0,
+        parent: None,
     }
 }
 

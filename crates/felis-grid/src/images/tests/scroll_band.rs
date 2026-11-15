@@ -32,6 +32,7 @@ fn put_at(store: &ImageStore, image: u32, row: i32, requested: (u16, u16)) -> Pl
         quiet: 0,
         anonymous: false,
         serial: 0,
+        parent: None,
     }
 }
 

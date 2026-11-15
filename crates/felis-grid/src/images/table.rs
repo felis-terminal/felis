@@ -118,6 +118,11 @@ impl<T: Keyed, C: ImageChanges> Table<T, C> {
         self.by_seq.get(self.seq_of.get(&key)?)
     }
 
+    /// For rewrites that leave the key alone.
+    pub(super) fn get_mut(&mut self, key: Key) -> Option<&mut T> {
+        self.by_seq.get_mut(self.seq_of.get(&key)?)
+    }
+
     pub(super) fn contains(&self, key: Key) -> bool {
         self.seq_of.contains_key(&key)
     }

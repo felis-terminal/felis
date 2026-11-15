@@ -15,6 +15,7 @@ mod file_media;
 mod placements;
 mod queries;
 mod reassembly;
+mod relative;
 mod session_dispatch;
 mod shm;
 mod sizing;
@@ -130,6 +131,7 @@ fn seeded_placement(
         quiet: 0,
         anonymous: false,
         serial: 0,
+        parent: None,
     }
 }
 

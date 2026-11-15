@@ -16,6 +16,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
   `font_files` before the system's fonts instead of in place of them, so a client can bundle its own face while the
   system's fonts draw what that face lacks; `felis-shaping` exposes the same discovery as
   `FontStack::discover_files_first`. `FontFilesMode::Replace`, the default, keeps the files-only discovery.
+- **Graphics**: Kitty relative placements (`P=`, `Q=`, `H=`, `V=`) position an image off another placement, a Unicode
+  placeholder's included, follow it as it moves, and go with it. The feature query reports the keys.
 
 ### Fixed
 
