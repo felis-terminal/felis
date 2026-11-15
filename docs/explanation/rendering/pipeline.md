@@ -381,6 +381,10 @@ OS compositor does the blending, and felis adds no in-terminal blur of its own, 
 compositor and duplicating it there would fight the WM. It is decided at startup because the surface is: crossing the
 opaque↔translucent boundary needs a relaunch, not a live reload.
 
+Where the compositor takes premultiplied alpha, felis premultiplies the default background on its sRGB encoding, not in
+linear light like the rest of its color math: compositors blend the stored, encoded values, and a product taken in
+linear light encodes lighter than the configured color at that opacity.
+
 ### One backdrop key, per-OS materials
 
 The OS-native backdrop is one key, `window.backdrop`, whose materials are per-OS. The user's intent (frost the window)
