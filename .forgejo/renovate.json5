@@ -10,7 +10,7 @@
     schedule: ["before 3:00am on monday"],
   },
   automerge: true,
-  automergeStrategy: "squash",
+  automergeStrategy: "rebase-merge",
   rebaseWhen: "conflicted",
   prConcurrentLimit: 5,
   packageRules: [
