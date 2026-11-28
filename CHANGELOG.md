@@ -21,6 +21,8 @@ gate" requires, and what has landed on `main` since the last tag accrues under U
 
 ### Fixed
 
+- **Graphics**: a window that attaches while the program sends an image or scrolls one receives the image once and draws
+  it at its row, instead of receiving it twice or drawing it a scroll's height further up.
 - **Protocols**: `OSC 22 ; ?` pointer-shape queries are answered, `OSC 22 ; >` pushes every listed shape, and the main
   and alternate screens keep separate pointer-shape stacks, as the kitty pointer-shapes spec requires.
 - **Protocols**: the `OSC 99` capability reply advertises the `always` occasion (`o=always`).
