@@ -2080,9 +2080,10 @@ impl SessionTask {
             drop(req.reply.send(Err(SubscribeRefused::Exited)));
             return;
         }
-        // A scroll the effect queue still holds has already moved the
-        // cells the rehydrate snapshots; drained later it would fan to
-        // the fresh shadow too and double-apply.
+        // Whatever the drain applies to the state the rehydrate snapshots
+        // ships to the windows already attached before this one joins:
+        // shipped after, it would replay onto the fresh shadow, doubling
+        // an image or a placement shift.
         let mut out = Vec::new();
         let (stream, rows, cols) = {
             let shared = Arc::clone(&self.session.core);
@@ -2108,6 +2109,8 @@ impl SessionTask {
             };
             (stream, core.grid.rows(), core.grid.cols())
         };
+        // Not under the core lock: an eviction relocks it.
+        self.push_image_events();
         let id = SubscriberId(self.attachment_ids.mint());
         let sub = Subscriber {
             id,
@@ -2132,8 +2135,7 @@ impl SessionTask {
         if !alive {
             return;
         }
-        self.subs.push(sub);
-        self.attachments_dirty = true;
+        self.join(sub);
         // Not `recompute_presentation_now`: the attach must finish even
         // when the PTY is gone; the run loop owns the report.
         self.recompute_presentation();
@@ -2167,6 +2169,15 @@ impl SessionTask {
             }
             self.remove_sub(id);
         }
+    }
+
+    fn join(&mut self, sub: Subscriber) {
+        debug_assert!(
+            self.session.image_events.is_empty() && self.session.scroll_ops.is_empty(),
+            "a subscriber joins with deltas its rehydrate already holds"
+        );
+        self.subs.push(sub);
+        self.attachments_dirty = true;
     }
 
     fn sub_index(&self, id: SubscriberId) -> Option<usize> {

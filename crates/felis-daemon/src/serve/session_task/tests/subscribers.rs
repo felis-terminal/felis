@@ -1,5 +1,10 @@
 use super::*;
 
+use std::collections::HashMap;
+
+use felis_protocol::messages::ImageTarget;
+use felis_protocol::{ImageId, PlacementId};
+
 /// An `Ops` attach burst carries only the markers and the keyboard
 /// state; a window burst carries rows, meta, and the image store.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -751,4 +756,151 @@ async fn stats_report_the_deepest_subscriber_backlog() {
         "the sibling field is every outbox summed, not the deepest one"
     );
     assert_eq!(stats.max_subscriber_backlog, deep_now);
+}
+
+#[derive(Debug, Clone)]
+enum AttachStep {
+    Text(Vec<u8>),
+    SendImage,
+    DeleteImage(prop::sample::Index),
+    Drain,
+    Attach,
+    Detach(prop::sample::Index),
+}
+
+fn attach_step() -> impl Strategy<Value = AttachStep> {
+    prop_oneof![
+        2 => prop_oneof![
+            Just(b"ab".to_vec()),
+            (1usize..30).prop_map(|n| b"\r\n".repeat(n)),
+            (1u8..5).prop_map(|n| format!("\x1b[{n}S").into_bytes()),
+        ]
+        .prop_map(AttachStep::Text),
+        2 => Just(AttachStep::SendImage),
+        1 => any::<prop::sample::Index>().prop_map(AttachStep::DeleteImage),
+        2 => Just(AttachStep::Drain),
+        2 => Just(AttachStep::Attach),
+        1 => any::<prop::sample::Index>().prop_map(AttachStep::Detach),
+    ]
+}
+
+struct AttachedWindow {
+    id: SubscriberId,
+    rx: mpsc::UnboundedReceiver<OutEvent>,
+    images: felis_client_core::ImageShadow,
+    new_headers: HashMap<u32, usize>,
+}
+
+impl AttachedWindow {
+    fn absorb(&mut self) {
+        for ev in drain_events(&mut self.rx) {
+            let OutEvent::Image(msg) = ev else { continue };
+            if let ImageMsg::Header {
+                id,
+                target: ImageTarget::New { .. },
+            } = &msg
+            {
+                *self.new_headers.entry(id.0).or_default() += 1;
+            }
+            self.images
+                .apply(&msg)
+                .expect("the shadow admits every image message");
+        }
+    }
+}
+
+fn placement_keys(
+    placements: impl Iterator<Item = (ImageId, Option<PlacementId>, i32, u16)>,
+) -> Vec<(u32, Option<u32>, i32, u16)> {
+    let mut keys: Vec<_> = placements
+        .map(|(image, placement, row, col)| (image.0, placement.map(|p| p.0), row, col))
+        .collect();
+    keys.sort_unstable();
+    keys
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    /// Every window, however its attach interleaves with the program's
+    /// images and scrolls, ends each cycle holding the daemon's images
+    /// and placements, and is handed each image the program sent once.
+    /// Each send uses a fresh id: a program's retransmission under the
+    /// same id is a legitimate second header.
+    #[test]
+    fn every_window_mirrors_the_daemons_images_whenever_it_attached(
+        steps in prop::collection::vec(attach_step(), 1..32),
+    ) {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let _guard = rt.enter();
+        let mut task = SessionTask::for_tests(session_with("read _x"));
+        let mut windows: Vec<AttachedWindow> = Vec::new();
+        let mut sent: Vec<u32> = Vec::new();
+        for step in steps.iter().chain([&AttachStep::Drain]) {
+            match step {
+                AttachStep::Text(bytes) => write_to_grid(&task, bytes),
+                AttachStep::SendImage => {
+                    let id = u32::try_from(sent.len()).expect("few images") + 1;
+                    sent.push(id);
+                    write_to_grid(
+                        &task,
+                        format!("\x1b_Ga=T,f=24,i={id},s=1,v=1,q=2;/wAA\x1b\\").as_bytes(),
+                    );
+                }
+                AttachStep::DeleteImage(pick) => {
+                    if !sent.is_empty() {
+                        let id = sent[pick.index(sent.len())];
+                        write_to_grid(&task, format!("\x1b_Ga=d,d=I,i={id},q=2\x1b\\").as_bytes());
+                    }
+                }
+                AttachStep::Attach => {
+                    let (id, rx) =
+                        subscribe_admitted(&mut task, ConnectionMode::Window, false, IfExited::Land);
+                    windows.push(AttachedWindow {
+                        id,
+                        rx,
+                        images: felis_client_core::ImageShadow::new(),
+                        new_headers: HashMap::new(),
+                    });
+                }
+                AttachStep::Detach(pick) => {
+                    if !windows.is_empty() {
+                        let window = windows.remove(pick.index(windows.len()));
+                        task.remove_sub(window.id);
+                    }
+                }
+                AttachStep::Drain => {
+                    task.drain_and_fan().expect("effects drain");
+                    prop_assert!(task.decode.is_none(), "a decode is still in flight");
+                    let daemon = placement_keys(
+                        task.session
+                            .placements
+                            .iter()
+                            .map(|p| (p.image_id, p.placement_id, p.anchor.row, p.anchor.col)),
+                    );
+                    for window in &mut windows {
+                        window.absorb();
+                        let mirrored = placement_keys(window.images.placements().map(|p| {
+                            (p.image_id, p.placement_id, p.anchor_row, p.anchor_col)
+                        }));
+                        prop_assert_eq!(&mirrored, &daemon, "placements after {:?}", steps);
+                        for &id in &sent {
+                            prop_assert_eq!(
+                                window.images.image(ImageId(id)).is_some(),
+                                task.session.images.get(ImageId(id)).is_some(),
+                                "image {} after {:?}", id, steps
+                            );
+                        }
+                        for (&id, &count) in &window.new_headers {
+                            prop_assert!(count <= 1, "image {} handed over {} times after {:?}", id, count, steps);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
