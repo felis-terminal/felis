@@ -75,25 +75,32 @@ async fn the_roster_names_the_program_that_owns_the_terminal_now() {
     )
     .await;
 
-    wait_for_listed_foreground(&pool, "sh").await;
+    // Not "sh": macOS's `/bin/sh` re-execs the shell
+    // `/private/var/select/sh` names, so a roster built after that exec
+    // lists it as "bash".
+    wait_for_listed_foreground(&pool, "the shell", |name| name != "sleep").await;
     open_gate(&gate).await;
-    wait_for_listed_foreground(&pool, "sleep").await;
+    wait_for_listed_foreground(&pool, "sleep", |name| name == "sleep").await;
 }
 
 #[cfg(unix)]
-async fn wait_for_listed_foreground(pool: &Arc<Mutex<SessionPool>>, expect: &str) {
+async fn wait_for_listed_foreground(
+    pool: &Arc<Mutex<SessionPool>>,
+    expect: &str,
+    accepts: impl Fn(&str) -> bool,
+) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
         let seen = build_session_list(pool)
             .await
             .first()
             .and_then(|row| row.foreground.clone());
-        if seen.as_deref() == Some(expect) {
+        if seen.as_deref().is_some_and(&accepts) {
             return;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "the roster never reported {expect:?} as the foreground program (last: {seen:?})"
+            "the roster never reported {expect} as the foreground program (last: {seen:?})"
         );
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
